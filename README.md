@@ -1,2 +1,1 @@
-# financial-research-agent
-
+# Financial Research Agent
