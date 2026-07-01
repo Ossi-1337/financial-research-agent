@@ -20,7 +20,7 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
         "paths": settings.local_paths.to_dict(),
         "environment": settings.environment,
         "notes": [
-            "Milestone 02 foundation only.",
+            "Foundation health check only.",
             "No real LLM calls, financial data ingestion, database, or agents are configured yet.",
         ],
     }
