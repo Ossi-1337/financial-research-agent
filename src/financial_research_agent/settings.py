@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
@@ -10,6 +11,14 @@ DEFAULT_ENVIRONMENT = "local"
 DEFAULT_LLM_PROVIDER = "offline-test"
 DEFAULT_LLM_MODEL = "offline-test"
 DEFAULT_EMBEDDING_PROVIDER = "disabled"
+
+
+class ProviderTask(StrEnum):
+    CHAT = "chat"
+    TOOL_CALLING = "tool_calling"
+    STRUCTURED_OUTPUT = "structured_output"
+    STREAMING = "streaming"
+    EMBEDDINGS = "embeddings"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,12 +48,34 @@ class LocalPaths:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskProviderSelection:
+    provider: str
+    model: str | None
+    base_url: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "base_url": self.base_url,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderSettings:
     llm_provider: str = DEFAULT_LLM_PROVIDER
     llm_model: str = DEFAULT_LLM_MODEL
     llm_base_url: str | None = None
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
     embedding_model: str | None = None
+    chat_provider: str | None = None
+    chat_model: str | None = None
+    tool_calling_provider: str | None = None
+    tool_calling_model: str | None = None
+    structured_output_provider: str | None = None
+    structured_output_model: str | None = None
+    streaming_provider: str | None = None
+    streaming_model: str | None = None
 
     def to_dict(self) -> dict[str, str | None]:
         return {
@@ -53,7 +84,48 @@ class ProviderSettings:
             "llm_base_url": self.llm_base_url,
             "embedding_provider": self.embedding_provider,
             "embedding_model": self.embedding_model,
+            "chat_provider": self.chat_provider,
+            "chat_model": self.chat_model,
+            "tool_calling_provider": self.tool_calling_provider,
+            "tool_calling_model": self.tool_calling_model,
+            "structured_output_provider": self.structured_output_provider,
+            "structured_output_model": self.structured_output_model,
+            "streaming_provider": self.streaming_provider,
+            "streaming_model": self.streaming_model,
+            "task_defaults": {
+                task.value: self.selection_for_task(task).to_dict() for task in ProviderTask
+            },
         }
+
+    def selection_for_task(self, task: ProviderTask | str) -> TaskProviderSelection:
+        provider_task = ProviderTask(task)
+        if provider_task == ProviderTask.CHAT:
+            return self._llm_selection(self.chat_provider, self.chat_model)
+        if provider_task == ProviderTask.TOOL_CALLING:
+            return self._llm_selection(self.tool_calling_provider, self.tool_calling_model)
+        if provider_task == ProviderTask.STRUCTURED_OUTPUT:
+            return self._llm_selection(
+                self.structured_output_provider,
+                self.structured_output_model,
+            )
+        if provider_task == ProviderTask.STREAMING:
+            return self._llm_selection(self.streaming_provider, self.streaming_model)
+        return TaskProviderSelection(
+            provider=self.embedding_provider,
+            model=self.embedding_model,
+            base_url=None,
+        )
+
+    def _llm_selection(
+        self,
+        provider_override: str | None,
+        model_override: str | None,
+    ) -> TaskProviderSelection:
+        return TaskProviderSelection(
+            provider=provider_override or self.llm_provider,
+            model=model_override or self.llm_model,
+            base_url=self.llm_base_url,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +152,14 @@ class Settings:
                     DEFAULT_EMBEDDING_PROVIDER,
                 ),
                 embedding_model=_env_optional(env, "FRA_EMBEDDING_MODEL"),
+                chat_provider=_env_optional(env, "FRA_CHAT_PROVIDER"),
+                chat_model=_env_optional(env, "FRA_CHAT_MODEL"),
+                tool_calling_provider=_env_optional(env, "FRA_TOOL_CALLING_PROVIDER"),
+                tool_calling_model=_env_optional(env, "FRA_TOOL_CALLING_MODEL"),
+                structured_output_provider=_env_optional(env, "FRA_STRUCTURED_OUTPUT_PROVIDER"),
+                structured_output_model=_env_optional(env, "FRA_STRUCTURED_OUTPUT_MODEL"),
+                streaming_provider=_env_optional(env, "FRA_STREAMING_PROVIDER"),
+                streaming_model=_env_optional(env, "FRA_STREAMING_MODEL"),
             ),
         )
 
