@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: true
+  PYTHONUNBUFFERED: true
+  FRA_LOCAL_SMOKE_TEST: 0
+  FRA_OPENAI_SMOKE_TEST: 0
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      source: ${{ steps.filter.outputs.source }}
+      tests: ${{ steps.filter.outputs.tests }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+      config: ${{ steps.filter.outputs.config }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed areas
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            source:
+              - 'src/**'
+            tests:
+              - 'tests/**'
+            workflows:
+              - '.workflows/**'
+            config:
+              - 'pyproject.toml'
+              - '.env.example'
+              - '.gitattributes'
+              - '.gitignore'
+            docs:
+              - 'README.md'
+
+  format:
+    name: Format
+    needs: changes
+    if: >-
+      ${{
+        needs.changes.outputs.source == 'true' ||
+        needs.changes.outputs.tests == 'true' ||
+        needs.changes.outputs.workflows == 'true' ||
+        needs.changes.outputs.config == 'true'
+      }}
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.14-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify formatting
+        run: python -m ruff format --check .
+
+  lint:
+    name: Lint
+    needs: changes
+    if: >-
+      ${{
+        needs.changes.outputs.source == 'true' ||
+        needs.changes.outputs.tests == 'true' ||
+        needs.changes.outputs.workflows == 'true' ||
+        needs.changes.outputs.config == 'true'
+      }}
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.14-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run Ruff
+        run: python -m ruff check .
+
+  test:
+    name: Test
+    needs: changes
+    if: >-
+      ${{
+        needs.changes.outputs.source == 'true' ||
+        needs.changes.outputs.tests == 'true' ||
+        needs.changes.outputs.workflows == 'true' ||
+        needs.changes.outputs.config == 'true'
+      }}
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.14-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest
+
+  compile:
+    name: Compile
+    needs: changes
+    if: >-
+      ${{
+        needs.changes.outputs.source == 'true' ||
+        needs.changes.outputs.tests == 'true' ||
+        needs.changes.outputs.workflows == 'true' ||
+        needs.changes.outputs.config == 'true'
+      }}
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.14-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Compile source and tests
+        run: python -m compileall -q src tests
+
+  health:
+    name: Health CLI
+    needs: changes
+    if: >-
+      ${{
+        needs.changes.outputs.source == 'true' ||
+        needs.changes.outputs.tests == 'true' ||
+        needs.changes.outputs.workflows == 'true' ||
+        needs.changes.outputs.config == 'true'
+      }}
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.14-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run health check
+        run: python -m financial_research_agent --pretty
+
+  diff:
+    name: Diff check
+    needs: changes
+    if: >-
+      ${{
+        needs.changes.outputs.source == 'true' ||
+        needs.changes.outputs.tests == 'true' ||
+        needs.changes.outputs.workflows == 'true' ||
+        needs.changes.outputs.config == 'true' ||
+        needs.changes.outputs.docs == 'true'
+      }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check whitespace errors
+        run: git diff --check
