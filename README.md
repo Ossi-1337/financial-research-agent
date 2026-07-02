@@ -20,11 +20,12 @@ Implemented:
 - `openai` provider adapter for hosted OpenAI Chat Completions and embeddings.
 - Local endpoint health checks for reachability, selected model, available models, capabilities, and known limitations.
 - Deterministic tool registry and guarded tool-call loop for local function calling.
+- Agent prompt contracts, role definitions, and structured JSON output schemas.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
-- Agent orchestration.
+- Agent runtime and orchestration.
 - Live financial data tools or ingestion.
 - Database, vector search, RAG, or chat UI.
 
@@ -51,6 +52,13 @@ a guarded registry, basic JSON-schema argument validation, and a provider-neutra
 loop. Current built-in tools are limited to UTC time, simple ratio calculation, a company
 lookup stub, and injected in-memory evidence reads. They do not fetch live financial data,
 execute shell commands, browse the web, or use a database.
+
+## Agent Prompts
+
+The tracked `financial_research_agent.agents` package defines reusable prompt contracts
+for orchestrator, financial report, stock, news/macro, and synthesis roles. These contracts
+include allowed tool names and structured JSON output schemas. They do not run agents,
+call providers, fetch data, or produce investment recommendations.
 
 ## Local Inference
 

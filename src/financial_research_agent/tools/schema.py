@@ -75,6 +75,12 @@ def _validate_schema(schema: object, *, path: str) -> list[str]:
     if items is not None:
         errors.extend(_validate_schema(items, path=f"{path}.items"))
 
+    min_items = schema.get("minItems")
+    if min_items is not None and (
+        not isinstance(min_items, int) or isinstance(min_items, bool) or min_items < 0
+    ):
+        errors.append(f"{path}.minItems must be a non-negative integer")
+
     return errors
 
 
@@ -135,6 +141,9 @@ def _validate_object(schema: Mapping[str, Any], value: object, *, path: str) -> 
 def _validate_array(schema: Mapping[str, Any], value: object, *, path: str) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         return [f"{path} must be an array"]
+    min_items = schema.get("minItems")
+    if isinstance(min_items, int) and not isinstance(min_items, bool) and len(value) < min_items:
+        return [f"{path} must contain at least {min_items} items"]
     item_schema = schema.get("items")
     if not isinstance(item_schema, Mapping):
         return []
