@@ -13,6 +13,7 @@ DEFAULT_LLM_MODEL = "offline-test"
 DEFAULT_LLM_LOCAL_RUNTIME = "llama.cpp"
 DEFAULT_LLM_TIMEOUT_SECONDS = 30.0
 DEFAULT_EMBEDDING_PROVIDER = "disabled"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 
 class ProviderTask(StrEnum):
@@ -72,6 +73,10 @@ class ProviderSettings:
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
     embedding_model: str | None = None
+    openai_api_key: str | None = None
+    openai_base_url: str = DEFAULT_OPENAI_BASE_URL
+    openai_organization: str | None = None
+    openai_project: str | None = None
     chat_provider: str | None = None
     chat_model: str | None = None
     tool_calling_provider: str | None = None
@@ -83,6 +88,10 @@ class ProviderSettings:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "llm_local_runtime", _require_text(self.llm_local_runtime))
+        object.__setattr__(self, "openai_api_key", _optional_text(self.openai_api_key))
+        object.__setattr__(self, "openai_base_url", _require_text(self.openai_base_url))
+        object.__setattr__(self, "openai_organization", _optional_text(self.openai_organization))
+        object.__setattr__(self, "openai_project", _optional_text(self.openai_project))
         if self.llm_timeout_seconds <= 0:
             raise ValueError("llm_timeout_seconds must be positive")
 
@@ -95,6 +104,10 @@ class ProviderSettings:
             "llm_timeout_seconds": self.llm_timeout_seconds,
             "embedding_provider": self.embedding_provider,
             "embedding_model": self.embedding_model,
+            "openai_api_key_configured": self.openai_api_key is not None,
+            "openai_base_url": self.openai_base_url,
+            "openai_organization_configured": self.openai_organization is not None,
+            "openai_project_configured": self.openai_project is not None,
             "chat_provider": self.chat_provider,
             "chat_model": self.chat_model,
             "tool_calling_provider": self.tool_calling_provider,
@@ -173,6 +186,14 @@ class Settings:
                     DEFAULT_EMBEDDING_PROVIDER,
                 ),
                 embedding_model=_env_optional(env, "FRA_EMBEDDING_MODEL"),
+                openai_api_key=_env_optional_any(env, "FRA_OPENAI_API_KEY", "OPENAI_API_KEY"),
+                openai_base_url=_env_value(env, "FRA_OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
+                openai_organization=_env_optional_any(
+                    env,
+                    "FRA_OPENAI_ORGANIZATION",
+                    "OPENAI_ORG_ID",
+                ),
+                openai_project=_env_optional_any(env, "FRA_OPENAI_PROJECT", "OPENAI_PROJECT_ID"),
                 chat_provider=_env_optional(env, "FRA_CHAT_PROVIDER"),
                 chat_model=_env_optional(env, "FRA_CHAT_MODEL"),
                 tool_calling_provider=_env_optional(env, "FRA_TOOL_CALLING_PROVIDER"),
@@ -199,6 +220,14 @@ def _env_optional(environ: Mapping[str, str], name: str) -> str | None:
     return value.strip()
 
 
+def _env_optional_any(environ: Mapping[str, str], *names: str) -> str | None:
+    for name in names:
+        value = _env_optional(environ, name)
+        if value is not None:
+            return value
+    return None
+
+
 def _env_float_value(environ: Mapping[str, str], name: str, default: float) -> float:
     value = environ.get(name)
     if value is None or value.strip() == "":
@@ -217,6 +246,13 @@ def _require_text(value: str) -> str:
     if text == "":
         raise ValueError("value is required")
     return text
+
+
+def _optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
 
 
 def _normalize_path(value: str | Path) -> Path:

@@ -15,6 +15,8 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.provider.llm_local_runtime == "llama.cpp"
     assert settings.provider.llm_timeout_seconds == 30.0
     assert settings.provider.embedding_provider == "disabled"
+    assert settings.provider.openai_api_key is None
+    assert settings.provider.openai_base_url == "https://api.openai.com/v1"
     assert settings.provider.selection_for_task(ProviderTask.CHAT).provider == "offline-test"
     assert settings.provider.selection_for_task(ProviderTask.CHAT).model == "offline-test"
 
@@ -32,6 +34,10 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_LLM_TIMEOUT_SECONDS": "12.5",
             "FRA_EMBEDDING_PROVIDER": "local-openai",
             "FRA_EMBEDDING_MODEL": "nomic-embed-text",
+            "FRA_OPENAI_API_KEY": "test-key",
+            "FRA_OPENAI_BASE_URL": "https://api.openai.test/v1",
+            "FRA_OPENAI_ORGANIZATION": "org_123",
+            "FRA_OPENAI_PROJECT": "proj_123",
             "FRA_CHAT_PROVIDER": "online-chat",
             "FRA_CHAT_MODEL": "chat-model",
             "FRA_TOOL_CALLING_PROVIDER": "tool-provider",
@@ -53,6 +59,10 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.provider.llm_timeout_seconds == 12.5
     assert settings.provider.embedding_provider == "local-openai"
     assert settings.provider.embedding_model == "nomic-embed-text"
+    assert settings.provider.openai_api_key == "test-key"
+    assert settings.provider.openai_base_url == "https://api.openai.test/v1"
+    assert settings.provider.openai_organization == "org_123"
+    assert settings.provider.openai_project == "proj_123"
     assert settings.provider.selection_for_task("chat").provider == "online-chat"
     assert settings.provider.selection_for_task("chat").model == "chat-model"
     assert settings.provider.selection_for_task("tool_calling").provider == "tool-provider"
@@ -72,6 +82,7 @@ def test_blank_environment_values_fall_back_to_defaults() -> None:
             "FRA_LLM_PROVIDER": "",
             "FRA_LLM_BASE_URL": " ",
             "FRA_LLM_LOCAL_RUNTIME": " ",
+            "FRA_OPENAI_API_KEY": " ",
             "FRA_CHAT_PROVIDER": " ",
         }
     )
@@ -80,7 +91,22 @@ def test_blank_environment_values_fall_back_to_defaults() -> None:
     assert settings.provider.llm_provider == "offline-test"
     assert settings.provider.llm_base_url is None
     assert settings.provider.llm_local_runtime == "llama.cpp"
+    assert settings.provider.openai_api_key is None
     assert settings.provider.chat_provider is None
+
+
+def test_openai_settings_support_standard_openai_environment_aliases() -> None:
+    settings = Settings.from_env(
+        {
+            "OPENAI_API_KEY": "standard-key",
+            "OPENAI_ORG_ID": "org_standard",
+            "OPENAI_PROJECT_ID": "proj_standard",
+        }
+    )
+
+    assert settings.provider.openai_api_key == "standard-key"
+    assert settings.provider.openai_organization == "org_standard"
+    assert settings.provider.openai_project == "proj_standard"
 
 
 def test_invalid_timeout_setting_is_rejected() -> None:

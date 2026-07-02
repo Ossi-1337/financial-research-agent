@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from financial_research_agent.health import build_health_report
 from financial_research_agent.llm.local_openai import LocalEndpointHealth, LocalRuntime
+from financial_research_agent.llm.openai import OnlineProviderHealth
 from financial_research_agent.settings import Settings
 
 
@@ -49,3 +50,36 @@ def test_health_report_includes_local_endpoint_when_configured(monkeypatch) -> N
     assert report["status"] == "ok"
     assert report["local_endpoint"]["reachable"] is True
     assert report["local_endpoint"]["available_models"] == ["local-model"]
+
+
+def test_health_report_includes_openai_provider_when_configured(monkeypatch) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, _settings):
+            return cls()
+
+        async def check_health(self) -> OnlineProviderHealth:
+            return OnlineProviderHealth(
+                provider="openai",
+                base_url="https://api.openai.test/v1/",
+                model="gpt-5.5",
+                reachable=True,
+                authenticated=True,
+                status="ok",
+                available_models=("gpt-5.5",),
+            )
+
+    monkeypatch.setattr("financial_research_agent.health.OpenAIProvider", FakeProvider)
+    settings = Settings.from_env(
+        {
+            "FRA_LLM_PROVIDER": "openai",
+            "FRA_LLM_MODEL": "gpt-5.5",
+            "FRA_OPENAI_API_KEY": "test-key",
+        }
+    )
+
+    report = build_health_report(settings)
+
+    assert report["status"] == "ok"
+    assert report["online_provider"]["authenticated"] is True
+    assert report["online_provider"]["available_models"] == ["gpt-5.5"]

@@ -29,6 +29,12 @@ from financial_research_agent.llm.local_openai import (
     OpenAICompatibleLocalProvider,
 )
 from financial_research_agent.llm.offline import OfflineTestProvider
+from financial_research_agent.llm.openai import (
+    OnlineProviderHealth,
+    OpenAIModelProfile,
+    OpenAIProvider,
+    openai_model_profile,
+)
 from financial_research_agent.llm.registry import (
     ProviderRegistry,
     create_default_provider_registry,
@@ -49,7 +55,10 @@ __all__ = [
     "MessageRole",
     "ModelMetadata",
     "OfflineTestProvider",
+    "OnlineProviderHealth",
     "OpenAICompatibleLocalProvider",
+    "OpenAIModelProfile",
+    "OpenAIProvider",
     "ProviderCapability",
     "ProviderError",
     "ProviderErrorCode",
@@ -64,4 +73,5 @@ __all__ = [
     "ToolDefinition",
     "create_default_provider_registry",
     "create_offline_provider_registry",
+    "openai_model_profile",
 ]

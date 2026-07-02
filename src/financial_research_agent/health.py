@@ -6,6 +6,7 @@ from typing import Any
 
 from financial_research_agent import __version__
 from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
+from financial_research_agent.llm.openai import OpenAIProvider
 from financial_research_agent.settings import Settings
 
 
@@ -23,7 +24,10 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
         "environment": settings.environment,
         "notes": [
             "Foundation health check only.",
-            "LLM calls use offline-test by default and local-openai only when configured.",
+            (
+                "LLM calls use offline-test by default; local-openai or openai only run "
+                "when configured."
+            ),
             "No financial data ingestion, database, or agents are configured yet.",
         ],
     }
@@ -33,5 +37,12 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
         )
         report["local_endpoint"] = local_endpoint.to_dict()
         if not local_endpoint.reachable:
+            report["status"] = "degraded"
+    elif settings.provider.llm_provider == "openai":
+        online_provider = asyncio.run(
+            OpenAIProvider.from_settings(settings.provider).check_health()
+        )
+        report["online_provider"] = online_provider.to_dict()
+        if not online_provider.reachable or not online_provider.authenticated:
             report["status"] = "degraded"
     return report
