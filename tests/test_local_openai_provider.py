@@ -22,6 +22,7 @@ from financial_research_agent.llm import (
     ResponseFormatType,
     StreamEvent,
     StreamEventType,
+    ToolCall,
     ToolDefinition,
     create_default_provider_registry,
 )
@@ -84,6 +85,51 @@ def test_local_openai_provider_sends_and_parses_tool_calls() -> None:
     assert finish_reason == FinishReason.TOOL_CALLS
     assert tool_name == "company_lookup"
     assert arguments == {"query": "Novo Nordisk"}
+
+
+def test_local_openai_provider_serializes_assistant_tool_call_messages() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = _request_json(request)
+        assistant_message = payload["messages"][1]
+        tool_message = payload["messages"][2]
+        assert assistant_message["role"] == "assistant"
+        assert assistant_message["tool_calls"][0]["id"] == "call_1"
+        assert assistant_message["tool_calls"][0]["function"]["name"] == "company_lookup"
+        assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == {
+            "query": "Novo Nordisk"
+        }
+        assert tool_message["role"] == "tool"
+        assert tool_message["tool_call_id"] == "call_1"
+        return _chat_response(content="Done.")
+
+    async def scenario() -> str:
+        async with _provider(handler) as provider:
+            response = await provider.chat(
+                ChatRequest(
+                    messages=[
+                        ChatMessage(role=MessageRole.USER, content="Find Novo Nordisk."),
+                        ChatMessage(
+                            role=MessageRole.ASSISTANT,
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    id="call_1",
+                                    name="company_lookup",
+                                    arguments={"query": "Novo Nordisk"},
+                                )
+                            ],
+                        ),
+                        ChatMessage(
+                            role=MessageRole.TOOL,
+                            content='{"matches":[]}',
+                            tool_call_id="call_1",
+                        ),
+                    ]
+                )
+            )
+        return response.message.content
+
+    assert asyncio.run(scenario()) == "Done."
 
 
 def test_local_openai_provider_parses_structured_output() -> None:

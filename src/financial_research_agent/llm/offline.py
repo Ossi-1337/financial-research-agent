@@ -83,7 +83,11 @@ class OfflineTestProvider:
 
         content = _offline_content(request)
         return ChatResponse(
-            message=ChatMessage(role=MessageRole.ASSISTANT, content=content),
+            message=ChatMessage(
+                role=MessageRole.ASSISTANT,
+                content=content,
+                tool_calls=tool_calls,
+            ),
             provider=self.provider,
             model=selected_model,
             finish_reason=finish_reason,

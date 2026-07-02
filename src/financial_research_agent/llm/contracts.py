@@ -62,6 +62,7 @@ class ChatMessage:
     content: str
     name: str | None = None
     tool_call_id: str | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -69,6 +70,7 @@ class ChatMessage:
         object.__setattr__(self, "content", _string_value("content", self.content))
         object.__setattr__(self, "name", _optional_text(self.name))
         object.__setattr__(self, "tool_call_id", _optional_text(self.tool_call_id))
+        object.__setattr__(self, "tool_calls", _tool_call_tuple("tool_calls", self.tool_calls))
         object.__setattr__(self, "metadata", _text_mapping("metadata", self.metadata))
 
 

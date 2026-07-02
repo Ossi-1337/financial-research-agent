@@ -137,7 +137,11 @@ def chat_response_from_payload(
     )
 
     return ChatResponse(
-        message=ChatMessage(role=MessageRole.ASSISTANT, content=content),
+        message=ChatMessage(
+            role=MessageRole.ASSISTANT,
+            content=content,
+            tool_calls=tool_calls,
+        ),
         provider=provider,
         model=str(data.get("model") or model),
         finish_reason=finish_reason,
@@ -411,7 +415,20 @@ def _message_payload(message: ChatMessage) -> dict[str, Any]:
         payload["name"] = message.name
     if message.tool_call_id is not None:
         payload["tool_call_id"] = message.tool_call_id
+    if message.tool_calls:
+        payload["tool_calls"] = [_tool_call_payload(tool_call) for tool_call in message.tool_calls]
     return payload
+
+
+def _tool_call_payload(tool_call: ToolCall) -> dict[str, Any]:
+    return {
+        "id": tool_call.id,
+        "type": "function",
+        "function": {
+            "name": tool_call.name,
+            "arguments": json.dumps(mutable_json_value(tool_call.arguments), sort_keys=True),
+        },
+    }
 
 
 def _finish_reason_from_value(

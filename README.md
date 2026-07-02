@@ -3,7 +3,8 @@
 Financial Research Agent is a local-first AI agent system for company and stock research.
 The project is currently a Python foundation with provider-neutral LLM contracts,
 an offline test provider, an OpenAI-compatible local endpoint adapter, and an optional
-hosted OpenAI adapter. It does not ingest financial data yet.
+hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
+not ingest financial data yet.
 
 ## Status
 
@@ -18,12 +19,13 @@ Implemented:
 - `local-openai` provider adapter for OpenAI-compatible local endpoints.
 - `openai` provider adapter for hosted OpenAI Chat Completions and embeddings.
 - Local endpoint health checks for reachability, selected model, available models, capabilities, and known limitations.
+- Deterministic tool registry and guarded tool-call loop for local function calling.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent orchestration.
-- Financial data ingestion.
+- Live financial data tools or ingestion.
 - Database, vector search, RAG, or chat UI.
 
 ## Setup
@@ -41,6 +43,14 @@ python -m financial_research_agent --pretty
 ```
 
 The default provider is `offline-test`, so no API keys or local model server are required.
+
+## Tools
+
+The tracked `financial_research_agent.tools` package defines deterministic tool contracts,
+a guarded registry, basic JSON-schema argument validation, and a provider-neutral tool-call
+loop. Current built-in tools are limited to UTC time, simple ratio calculation, a company
+lookup stub, and injected in-memory evidence reads. They do not fetch live financial data,
+execute shell commands, browse the web, or use a database.
 
 ## Local Inference
 
