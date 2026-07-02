@@ -10,6 +10,8 @@ from typing import Self
 DEFAULT_ENVIRONMENT = "local"
 DEFAULT_LLM_PROVIDER = "offline-test"
 DEFAULT_LLM_MODEL = "offline-test"
+DEFAULT_LLM_LOCAL_RUNTIME = "llama.cpp"
+DEFAULT_LLM_TIMEOUT_SECONDS = 30.0
 DEFAULT_EMBEDDING_PROVIDER = "disabled"
 
 
@@ -66,6 +68,8 @@ class ProviderSettings:
     llm_provider: str = DEFAULT_LLM_PROVIDER
     llm_model: str = DEFAULT_LLM_MODEL
     llm_base_url: str | None = None
+    llm_local_runtime: str = DEFAULT_LLM_LOCAL_RUNTIME
+    llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER
     embedding_model: str | None = None
     chat_provider: str | None = None
@@ -77,11 +81,18 @@ class ProviderSettings:
     streaming_provider: str | None = None
     streaming_model: str | None = None
 
-    def to_dict(self) -> dict[str, str | None]:
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "llm_local_runtime", _require_text(self.llm_local_runtime))
+        if self.llm_timeout_seconds <= 0:
+            raise ValueError("llm_timeout_seconds must be positive")
+
+    def to_dict(self) -> dict[str, object]:
         return {
             "llm_provider": self.llm_provider,
             "llm_model": self.llm_model,
             "llm_base_url": self.llm_base_url,
+            "llm_local_runtime": self.llm_local_runtime,
+            "llm_timeout_seconds": self.llm_timeout_seconds,
             "embedding_provider": self.embedding_provider,
             "embedding_model": self.embedding_model,
             "chat_provider": self.chat_provider,
@@ -146,6 +157,16 @@ class Settings:
                 llm_provider=_env_value(env, "FRA_LLM_PROVIDER", DEFAULT_LLM_PROVIDER),
                 llm_model=_env_value(env, "FRA_LLM_MODEL", DEFAULT_LLM_MODEL),
                 llm_base_url=_env_optional(env, "FRA_LLM_BASE_URL"),
+                llm_local_runtime=_env_value(
+                    env,
+                    "FRA_LLM_LOCAL_RUNTIME",
+                    DEFAULT_LLM_LOCAL_RUNTIME,
+                ),
+                llm_timeout_seconds=_env_float_value(
+                    env,
+                    "FRA_LLM_TIMEOUT_SECONDS",
+                    DEFAULT_LLM_TIMEOUT_SECONDS,
+                ),
                 embedding_provider=_env_value(
                     env,
                     "FRA_EMBEDDING_PROVIDER",
@@ -176,6 +197,26 @@ def _env_optional(environ: Mapping[str, str], name: str) -> str | None:
     if value is None or value.strip() == "":
         return None
     return value.strip()
+
+
+def _env_float_value(environ: Mapping[str, str], name: str, default: float) -> float:
+    value = environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        result = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if result <= 0:
+        raise ValueError(f"{name} must be positive")
+    return result
+
+
+def _require_text(value: str) -> str:
+    text = value.strip()
+    if text == "":
+        raise ValueError("value is required")
+    return text
 
 
 def _normalize_path(value: str | Path) -> Path:

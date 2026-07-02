@@ -8,7 +8,9 @@ from financial_research_agent.llm.contracts import (
     ProviderError,
     ProviderErrorCode,
 )
+from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
 from financial_research_agent.llm.offline import OfflineTestProvider
+from financial_research_agent.settings import ProviderSettings
 
 
 class ProviderRegistry:
@@ -60,6 +62,15 @@ def create_offline_provider_registry() -> ProviderRegistry:
         .register_chat_provider(provider.provider, provider)
         .register_embedding_provider(provider.provider, provider)
     )
+
+
+def create_default_provider_registry(settings: ProviderSettings | None = None) -> ProviderRegistry:
+    registry = create_offline_provider_registry()
+    provider_settings = settings or ProviderSettings()
+    local_provider = OpenAICompatibleLocalProvider.from_settings(provider_settings)
+    return registry.register_chat_provider(
+        local_provider.provider, local_provider
+    ).register_embedding_provider(local_provider.provider, local_provider)
 
 
 def _normalize_name(name: str) -> str:

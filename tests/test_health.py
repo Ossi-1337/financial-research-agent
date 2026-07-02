@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from financial_research_agent.health import build_health_report
+from financial_research_agent.llm.local_openai import LocalEndpointHealth, LocalRuntime
 from financial_research_agent.settings import Settings
 
 
@@ -12,4 +13,39 @@ def test_health_report_has_no_external_requirements() -> None:
     assert report["status"] == "ok"
     assert report["provider"]["llm_provider"] == "offline-test"
     assert report["notes"][0] == "Foundation health check only."
-    assert "No real LLM calls" in report["notes"][1]
+    assert "offline-test by default" in report["notes"][1]
+
+
+def test_health_report_includes_local_endpoint_when_configured(monkeypatch) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, _settings):
+            return cls()
+
+        async def check_health(self) -> LocalEndpointHealth:
+            return LocalEndpointHealth(
+                provider="local-openai",
+                runtime=LocalRuntime.LLAMA_CPP,
+                base_url="http://127.0.0.1:8080/v1/",
+                model="local-model",
+                reachable=True,
+                status="ok",
+                available_models=("local-model",),
+            )
+
+    monkeypatch.setattr(
+        "financial_research_agent.health.OpenAICompatibleLocalProvider",
+        FakeProvider,
+    )
+    settings = Settings.from_env(
+        {
+            "FRA_LLM_PROVIDER": "local-openai",
+            "FRA_LLM_MODEL": "local-model",
+        }
+    )
+
+    report = build_health_report(settings)
+
+    assert report["status"] == "ok"
+    assert report["local_endpoint"]["reachable"] is True
+    assert report["local_endpoint"]["available_models"] == ["local-model"]

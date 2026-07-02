@@ -23,8 +23,17 @@ from financial_research_agent.llm.contracts import (
     ToolCall,
     ToolDefinition,
 )
+from financial_research_agent.llm.local_openai import (
+    LocalEndpointHealth,
+    LocalRuntime,
+    OpenAICompatibleLocalProvider,
+)
 from financial_research_agent.llm.offline import OfflineTestProvider
-from financial_research_agent.llm.registry import ProviderRegistry, create_offline_provider_registry
+from financial_research_agent.llm.registry import (
+    ProviderRegistry,
+    create_default_provider_registry,
+    create_offline_provider_registry,
+)
 
 __all__ = [
     "ChatMessage",
@@ -35,9 +44,12 @@ __all__ = [
     "EmbeddingRequest",
     "EmbeddingResponse",
     "FinishReason",
+    "LocalEndpointHealth",
+    "LocalRuntime",
     "MessageRole",
     "ModelMetadata",
     "OfflineTestProvider",
+    "OpenAICompatibleLocalProvider",
     "ProviderCapability",
     "ProviderError",
     "ProviderErrorCode",
@@ -50,5 +62,6 @@ __all__ = [
     "TokenUsage",
     "ToolCall",
     "ToolDefinition",
+    "create_default_provider_registry",
     "create_offline_provider_registry",
 ]
