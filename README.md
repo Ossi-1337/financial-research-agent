@@ -4,7 +4,7 @@ Financial Research Agent is a local-first AI agent system for company and stock 
 The project is currently a Python foundation with provider-neutral LLM contracts,
 an offline test provider, an OpenAI-compatible local endpoint adapter, and an optional
 hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
-not ingest financial data yet.
+not ingest financial data yet. A minimal local chat UI is available for direct LLM chat.
 
 ## Status
 
@@ -21,13 +21,14 @@ Implemented:
 - Local endpoint health checks for reachability, selected model, available models, capabilities, and known limitations.
 - Deterministic tool registry and guarded tool-call loop for local function calling.
 - Agent prompt contracts, role definitions, and structured JSON output schemas.
+- Local FastAPI chat UI with in-memory sessions and direct provider-backed responses.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
 - Live financial data tools or ingestion.
-- Database, vector search, RAG, or chat UI.
+- Persistent chat history, database, vector search, or RAG.
 
 ## Setup
 
@@ -44,6 +45,16 @@ python -m financial_research_agent --pretty
 ```
 
 The default provider is `offline-test`, so no API keys or local model server are required.
+
+## Run Chat UI
+
+```powershell
+python -m financial_research_agent serve --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000`. The UI uses the configured chat provider and model.
+Sessions are in memory only; restarting the server clears them. The chat endpoint does not
+use live financial data tools, RAG, or multi-agent orchestration yet.
 
 ## Tools
 

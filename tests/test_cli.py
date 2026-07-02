@@ -25,3 +25,21 @@ def test_default_command_is_health(capsys) -> None:
 
     assert exit_code == 0
     assert payload["status"] == "ok"
+
+
+def test_serve_command_starts_uvicorn(monkeypatch) -> None:
+    calls = {}
+
+    def fake_run(app, *, host, port):
+        calls["app"] = app
+        calls["host"] = host
+        calls["port"] = port
+
+    monkeypatch.setattr("financial_research_agent.cli.uvicorn.run", fake_run)
+
+    exit_code = main(["serve", "--host", "127.0.0.2", "--port", "8123"])
+
+    assert exit_code == 0
+    assert calls["app"].title == "Financial Research Agent"
+    assert calls["host"] == "127.0.0.2"
+    assert calls["port"] == 8123

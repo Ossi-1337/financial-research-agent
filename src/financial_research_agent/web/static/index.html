@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Financial Research Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Financial Research Agent</h1>
+          <p id="session-label" class="muted">Starting session</p>
+        </div>
+        <div id="provider-pill" class="provider-pill">offline-test</div>
+      </header>
+
+      <section class="chat-panel" aria-label="Chat">
+        <div id="error-banner" class="error-banner" role="alert" hidden></div>
+        <ol id="message-list" class="message-list"></ol>
+        <div id="loading-row" class="loading-row" hidden>Thinking...</div>
+        <form id="chat-form" class="composer">
+          <label class="sr-only" for="message-input">Message</label>
+          <textarea
+            id="message-input"
+            name="message"
+            rows="3"
+            maxlength="20000"
+            placeholder="Ask about a company or research topic"
+            required
+          ></textarea>
+          <button id="send-button" type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
