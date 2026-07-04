@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,6 +30,16 @@ from financial_research_agent.llm import (
     ProviderErrorCode,
 )
 from financial_research_agent.llm.registry import ProviderRegistry, create_offline_provider_registry
+from financial_research_agent.market_data import (
+    HistoricalPriceBar,
+    HistoricalPriceResult,
+    MarketDataError,
+    MarketDataErrorCode,
+    MarketDataSource,
+    MarketDataStore,
+    MarketSecurity,
+    calculate_price_metrics,
+)
 from financial_research_agent.settings import Settings
 from financial_research_agent.web import ChatSessionStore, create_app
 
@@ -271,12 +282,65 @@ def test_company_search_errors_map_to_http_status() -> None:
     assert response.json()["detail"]["code"] == "rate_limited"
 
 
+def test_market_data_fetch_endpoint_persists_history(tmp_path) -> None:
+    store = MarketDataStore(storage_path=tmp_path / "market_data_price_bars.json")
+    client = _client(market_data_provider=FakeMarketDataProvider(), market_data_store=store)
+
+    response = client.post(
+        "/api/market-data/history",
+        json={
+            "symbol": "NVO",
+            "security_id": "fixture:security:nvo",
+            "currency": "USD",
+            "exchange_mic": "XNYS",
+            "refresh": True,
+        },
+    )
+    stored = client.get("/api/market-data/history/NVO")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stored"] is False
+    assert payload["history"]["metrics"]["latest_close"] == "105"
+    assert stored.status_code == 200
+    assert stored.json()["stored"] is True
+    assert stored.json()["history"]["bars"][-1]["close"] == "105"
+
+
+def test_market_data_endpoint_uses_cached_history_without_refresh(tmp_path) -> None:
+    store = MarketDataStore(storage_path=tmp_path / "market_data_price_bars.json")
+    store.save_history(FakeMarketDataProvider.history())
+    client = _client(
+        market_data_provider=FailingMarketDataProvider(MarketDataErrorCode.AUTHENTICATION_FAILED),
+        market_data_store=store,
+    )
+
+    response = client.post("/api/market-data/history", json={"symbol": "NVO"})
+
+    assert response.status_code == 200
+    assert response.json()["stored"] is True
+
+
+def test_market_data_errors_map_to_http_status() -> None:
+    client = _client(
+        market_data_provider=FailingMarketDataProvider(MarketDataErrorCode.AUTHENTICATION_FAILED),
+        market_data_store=MarketDataStore(),
+    )
+
+    response = client.post("/api/market-data/history", json={"symbol": "NVO", "refresh": True})
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "authentication_failed"
+
+
 def _client(
     *,
     settings: Settings | None = None,
     registry: ProviderRegistry | None = None,
     use_default_store: bool = False,
     company_search_provider=None,
+    market_data_provider=None,
+    market_data_store=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -284,6 +348,8 @@ def _client(
             registry=registry or create_offline_provider_registry(),
             session_store=None if use_default_store else ChatSessionStore(),
             company_search_provider=company_search_provider or FakeCompanySearchProvider(),
+            market_data_provider=market_data_provider or FakeMarketDataProvider(),
+            market_data_store=market_data_store or MarketDataStore(),
         )
     )
 
@@ -358,3 +424,80 @@ class FailingCompanySearchProvider:
             provider="fake-company-search",
             retryable=True,
         )
+
+
+class FakeMarketDataProvider:
+    async def fetch_daily_prices(
+        self,
+        security: MarketSecurity,
+        *,
+        outputsize: str = "compact",
+    ) -> HistoricalPriceResult:
+        return self.history(security=security, warning=f"outputsize={outputsize}")
+
+    async def fetch_quote(self, security: MarketSecurity):
+        raise NotImplementedError
+
+    @staticmethod
+    def history(
+        *,
+        security: MarketSecurity | None = None,
+        warning: str = "test fixture",
+    ) -> HistoricalPriceResult:
+        selected_security = security or MarketSecurity(symbol="NVO")
+        bars = (
+            HistoricalPriceBar(
+                security=selected_security,
+                priced_at=datetime(2026, 7, 2, tzinfo=UTC).date(),
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=1000,
+            ),
+            HistoricalPriceBar(
+                security=selected_security,
+                priced_at=datetime(2026, 7, 3, tzinfo=UTC).date(),
+                open=Decimal("102"),
+                high=Decimal("106"),
+                low=Decimal("101"),
+                close=Decimal("105"),
+                volume=1200,
+            ),
+        )
+        source = MarketDataSource(
+            provider="alpha-vantage",
+            provider_status="test fixture",
+            source_url="https://example.invalid/market-data-fixture",
+            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
+            data_as_of=datetime(2026, 7, 3, tzinfo=UTC).date(),
+            attribution="test fixture",
+        )
+        return HistoricalPriceResult(
+            security=selected_security,
+            bars=bars,
+            source=source,
+            metrics=calculate_price_metrics(bars),
+            warnings=(warning,),
+        )
+
+
+class FailingMarketDataProvider:
+    def __init__(self, code: MarketDataErrorCode) -> None:
+        self.code = code
+
+    async def fetch_daily_prices(
+        self,
+        _security: MarketSecurity,
+        *,
+        outputsize: str = "compact",
+    ) -> HistoricalPriceResult:
+        raise MarketDataError(
+            code=self.code,
+            message=f"market data failed with outputsize {outputsize}",
+            provider="alpha-vantage",
+            retryable=True,
+        )
+
+    async def fetch_quote(self, security: MarketSecurity):
+        raise NotImplementedError

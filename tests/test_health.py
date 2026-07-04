@@ -13,6 +13,8 @@ def test_health_report_has_no_external_requirements() -> None:
 
     assert report["status"] == "ok"
     assert report["provider"]["llm_provider"] == "offline-test"
+    assert report["data_sources"]["market_data_provider"] == "alpha-vantage"
+    assert report["data_sources"]["alpha_vantage_api_key_configured"] is False
     assert report["notes"][0] == "Foundation health check only."
     assert "offline-test by default" in report["notes"][1]
 

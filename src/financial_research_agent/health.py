@@ -30,8 +30,8 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
                 "when configured."
             ),
             (
-                "SEC company ticker lookup is available for entity resolution; market data, "
-                "filings ingestion, database, and agents are not configured yet."
+                "SEC company ticker lookup and Alpha Vantage daily market data ingestion "
+                "are available; market data requires an explicit API key."
             ),
         ],
     }

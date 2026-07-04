@@ -51,6 +51,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_COMPANY_LOOKUP_PROVIDER": "sec",
             "FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS": "7",
             "FRA_SEC_USER_AGENT": "financial-research-agent-test/0.1 contact",
+            "FRA_MARKET_DATA_PROVIDER": "alpha-vantage",
+            "FRA_MARKET_DATA_CACHE_TTL_DAYS": "2",
+            "FRA_ALPHA_VANTAGE_API_KEY": "alpha-key",
         }
     )
 
@@ -83,6 +86,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.data_sources.company_lookup_provider == "sec"
     assert settings.data_sources.company_lookup_cache_ttl_days == 7
     assert settings.data_sources.sec_user_agent == "financial-research-agent-test/0.1 contact"
+    assert settings.data_sources.market_data_provider == "alpha-vantage"
+    assert settings.data_sources.market_data_cache_ttl_days == 2
+    assert settings.data_sources.alpha_vantage_api_key == "alpha-key"
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -151,6 +157,21 @@ def test_invalid_company_lookup_cache_ttl_is_rejected() -> None:
         assert "FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS must be positive" in str(exc)
     else:
         raise AssertionError("Expected invalid company lookup cache TTL to be rejected")
+
+
+def test_invalid_market_data_cache_ttl_is_rejected() -> None:
+    try:
+        Settings.from_env({"FRA_MARKET_DATA_CACHE_TTL_DAYS": "0"})
+    except ValueError as exc:
+        assert "FRA_MARKET_DATA_CACHE_TTL_DAYS must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid market data cache TTL to be rejected")
+
+
+def test_alpha_vantage_key_supports_standard_alias() -> None:
+    settings = Settings.from_env({"ALPHA_VANTAGE_API_KEY": "standard-alpha-key"})
+
+    assert settings.data_sources.alpha_vantage_api_key == "standard-alpha-key"
 
 
 def test_task_provider_settings_fall_back_to_global_llm_settings() -> None:

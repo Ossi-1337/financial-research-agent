@@ -19,6 +19,8 @@ DEFAULT_CHAT_HISTORY_SUMMARY_MAX_CHARS = 1200
 DEFAULT_COMPANY_LOOKUP_PROVIDER = "sec"
 DEFAULT_COMPANY_LOOKUP_CACHE_TTL_DAYS = 30
 DEFAULT_SEC_USER_AGENT = "financial-research-agent/0.1 local-research contact-not-configured"
+DEFAULT_MARKET_DATA_PROVIDER = "alpha-vantage"
+DEFAULT_MARKET_DATA_CACHE_TTL_DAYS = 1
 
 
 class ProviderTask(StrEnum):
@@ -180,6 +182,9 @@ class DataSourceSettings:
     company_lookup_provider: str = DEFAULT_COMPANY_LOOKUP_PROVIDER
     company_lookup_cache_ttl_days: int = DEFAULT_COMPANY_LOOKUP_CACHE_TTL_DAYS
     sec_user_agent: str = DEFAULT_SEC_USER_AGENT
+    market_data_provider: str = DEFAULT_MARKET_DATA_PROVIDER
+    market_data_cache_ttl_days: int = DEFAULT_MARKET_DATA_CACHE_TTL_DAYS
+    alpha_vantage_api_key: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -188,14 +193,23 @@ class DataSourceSettings:
             _require_text(self.company_lookup_provider),
         )
         object.__setattr__(self, "sec_user_agent", _require_text(self.sec_user_agent))
+        object.__setattr__(self, "market_data_provider", _require_text(self.market_data_provider))
+        object.__setattr__(
+            self, "alpha_vantage_api_key", _optional_text(self.alpha_vantage_api_key)
+        )
         if self.company_lookup_cache_ttl_days <= 0:
             raise ValueError("company_lookup_cache_ttl_days must be positive")
+        if self.market_data_cache_ttl_days <= 0:
+            raise ValueError("market_data_cache_ttl_days must be positive")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "company_lookup_provider": self.company_lookup_provider,
             "company_lookup_cache_ttl_days": self.company_lookup_cache_ttl_days,
             "sec_user_agent": self.sec_user_agent,
+            "market_data_provider": self.market_data_provider,
+            "market_data_cache_ttl_days": self.market_data_cache_ttl_days,
+            "alpha_vantage_api_key_configured": self.alpha_vantage_api_key is not None,
         }
 
 
@@ -276,6 +290,21 @@ class Settings:
                     DEFAULT_COMPANY_LOOKUP_CACHE_TTL_DAYS,
                 ),
                 sec_user_agent=_env_value(env, "FRA_SEC_USER_AGENT", DEFAULT_SEC_USER_AGENT),
+                market_data_provider=_env_value(
+                    env,
+                    "FRA_MARKET_DATA_PROVIDER",
+                    DEFAULT_MARKET_DATA_PROVIDER,
+                ),
+                market_data_cache_ttl_days=_env_int_value(
+                    env,
+                    "FRA_MARKET_DATA_CACHE_TTL_DAYS",
+                    DEFAULT_MARKET_DATA_CACHE_TTL_DAYS,
+                ),
+                alpha_vantage_api_key=_env_optional_any(
+                    env,
+                    "FRA_ALPHA_VANTAGE_API_KEY",
+                    "ALPHA_VANTAGE_API_KEY",
+                ),
             ),
         )
 

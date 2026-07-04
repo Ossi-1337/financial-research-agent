@@ -4,7 +4,8 @@ Financial Research Agent is a local-first AI agent system for company and stock 
 The project is currently a Python foundation with provider-neutral LLM contracts,
 an offline test provider, an OpenAI-compatible local endpoint adapter, and an optional
 hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
-not ingest market data yet. A minimal local chat UI is available for direct LLM chat.
+only ingests daily market data when a provider key is configured. A minimal local chat UI
+is available for direct LLM chat.
 
 ## Status
 
@@ -23,12 +24,13 @@ Implemented:
 - Agent prompt contracts, role definitions, and structured JSON output schemas.
 - Local FastAPI chat UI with persistent local sessions, bounded context, and direct provider-backed responses.
 - SEC company ticker search for reviewable company/security entity candidates with cached source metadata.
+- Alpha Vantage daily historical price ingestion with local JSON storage, freshness warnings, and deterministic price metrics.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
-- Market data, financial statement, filings, or news ingestion.
+- Financial statement, filings, or news ingestion.
 - Database, vector search, or RAG.
 
 ## Setup
@@ -59,6 +61,9 @@ endpoint does not use live financial data tools, RAG, or multi-agent orchestrati
 The sidebar company lookup searches SEC company tickers and returns candidates for review
 with source and freshness metadata. It does not infer prices, exchange MICs, ISINs, or
 financial facts.
+After selecting a candidate, the sidebar can fetch daily historical prices through the
+configured market data provider. Live price fetches require `FRA_ALPHA_VANTAGE_API_KEY`
+or `ALPHA_VANTAGE_API_KEY`.
 
 ## Tools
 
@@ -80,6 +85,23 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/company-search?query=Novo%20Nordisk
 Results are candidates for user review, not automatic selection. SEC ticker data includes
 CIK, ticker, and company title only, so missing exchange, currency, country, and ISIN fields
 are explicit until a later identifier source such as OpenFIGI is added.
+
+## Market Data
+
+The first market data provider is Alpha Vantage daily prices:
+
+```powershell
+$env:FRA_ALPHA_VANTAGE_API_KEY = "your-alpha-vantage-key"
+Invoke-RestMethod "http://127.0.0.1:8000/api/market-data/history" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"symbol":"NVO","refresh":true}'
+```
+
+Historical bars are persisted locally under `FRA_HOME/data/market_data_price_bars.json`.
+The API returns source metadata, freshness warnings, and deterministic metrics including
+returns, moving averages, volatility, and max drawdown. This is delayed/provider-limited
+research data, not a trading feed.
 
 ## Agent Prompts
 
@@ -142,8 +164,9 @@ task-specific provider/model overrides for chat, tool calling, structured output
 streaming. Chat history context is controlled by `FRA_CHAT_HISTORY_RECENT_TURNS` and
 `FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS`. Company lookup is controlled by
 `FRA_COMPANY_LOOKUP_PROVIDER`, `FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS`, and
-`FRA_SEC_USER_AGENT`. `.env.example` is a reference file only; the app does not auto-load
-`.env` yet.
+`FRA_SEC_USER_AGENT`. Market data is controlled by `FRA_MARKET_DATA_PROVIDER`,
+`FRA_MARKET_DATA_CACHE_TTL_DAYS`, and `FRA_ALPHA_VANTAGE_API_KEY`.
+`.env.example` is a reference file only; the app does not auto-load `.env` yet.
 
 ## Verify
 

@@ -4,6 +4,7 @@ const state = {
   sessions: [],
   companyResults: [],
   selectedCompany: null,
+  marketData: null,
   busy: false,
 };
 
@@ -14,6 +15,8 @@ const companySearchButton = document.querySelector("#company-search-button");
 const companySearchStatus = document.querySelector("#company-search-status");
 const companyResults = document.querySelector("#company-results");
 const selectedCompany = document.querySelector("#selected-company");
+const marketDataStatus = document.querySelector("#market-data-status");
+const marketDataSummary = document.querySelector("#market-data-summary");
 const input = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
 const messageList = document.querySelector("#message-list");
@@ -104,14 +107,62 @@ function primarySecurity(candidate) {
   return candidate.securities[0] || { ticker: "unknown" };
 }
 
+function renderSelectedCompany() {
+  selectedCompany.innerHTML = "";
+  selectedCompany.hidden = state.selectedCompany === null;
+  if (!state.selectedCompany) {
+    return;
+  }
+  const security = primarySecurity(state.selectedCompany);
+  const text = document.createElement("div");
+  text.textContent = `Selected: ${state.selectedCompany.company.legal_name} / ${security.ticker}`;
+  const fetchButton = document.createElement("button");
+  fetchButton.type = "button";
+  fetchButton.className = "secondary-button fetch-market-button";
+  fetchButton.textContent = "Fetch prices";
+  fetchButton.addEventListener("click", () => fetchMarketData(state.selectedCompany));
+  selectedCompany.append(text, fetchButton);
+}
+
+function renderMarketData(payload) {
+  state.marketData = payload;
+  marketDataSummary.innerHTML = "";
+  marketDataSummary.hidden = payload === null;
+  if (!payload) {
+    marketDataStatus.textContent = "";
+    return;
+  }
+  const history = payload.history;
+  const latestBar = history.bars[history.bars.length - 1];
+  const title = document.createElement("div");
+  title.className = "market-data-title";
+  title.textContent = `${history.security.symbol} latest close ${history.metrics.latest_close}`;
+  const meta = document.createElement("div");
+  meta.textContent = `${latestBar?.priced_at || "unknown date"} / ${history.source.provider}`;
+  const metrics = document.createElement("div");
+  metrics.textContent = `1d return ${history.metrics.return_1d || "n/a"} / max drawdown ${
+    history.metrics.max_drawdown || "n/a"
+  }`;
+  marketDataSummary.append(title, meta, metrics);
+  for (const warning of history.warnings || []) {
+    const warningRow = document.createElement("div");
+    warningRow.className = "market-data-warning";
+    warningRow.textContent = warning;
+    marketDataSummary.append(warningRow);
+  }
+  if (history.source.freshness_warning) {
+    const freshness = document.createElement("div");
+    freshness.className = "market-data-warning";
+    freshness.textContent = history.source.freshness_warning;
+    marketDataSummary.append(freshness);
+  }
+  marketDataStatus.textContent = payload.stored ? "Using stored prices" : "Prices fetched";
+}
+
 function renderCompanyResults(result) {
   state.companyResults = result.candidates || [];
   companyResults.innerHTML = "";
-  selectedCompany.hidden = state.selectedCompany === null;
-  if (state.selectedCompany) {
-    const security = primarySecurity(state.selectedCompany);
-    selectedCompany.textContent = `Selected: ${state.selectedCompany.company.legal_name} / ${security.ticker}`;
-  }
+  renderSelectedCompany();
   if (result.status === "no_matches") {
     companySearchStatus.textContent = "No matches";
     return;
@@ -145,6 +196,7 @@ function renderCompanyResults(result) {
     button.textContent = "Select";
     button.addEventListener("click", () => {
       state.selectedCompany = candidate;
+      renderMarketData(null);
       renderCompanyResults({ ...result, candidates: state.companyResults });
     });
 
@@ -240,7 +292,38 @@ async function searchCompanies(query) {
     `/api/company-search?query=${encodeURIComponent(query)}&limit=8`
   );
   state.selectedCompany = null;
+  renderMarketData(null);
   renderCompanyResults(payload.result);
+}
+
+async function fetchMarketData(candidate) {
+  if (!candidate || state.busy) {
+    return;
+  }
+  const security = primarySecurity(candidate);
+  clearError();
+  setBusy(true);
+  marketDataStatus.textContent = "Fetching prices...";
+  try {
+    const payload = await requestJson("/api/market-data/history", {
+      method: "POST",
+      body: JSON.stringify({
+        symbol: security.ticker,
+        security_id: security.id,
+        exchange_mic: security.exchange_mic,
+        exchange_name: security.exchange_name,
+        currency: security.currency,
+        outputsize: "compact",
+        refresh: true,
+      }),
+    });
+    renderMarketData(payload);
+  } catch (error) {
+    marketDataStatus.textContent = "";
+    showError(error instanceof Error ? error.message : "Market data request failed.");
+  } finally {
+    setBusy(false);
+  }
 }
 
 companySearchForm.addEventListener("submit", async (event) => {

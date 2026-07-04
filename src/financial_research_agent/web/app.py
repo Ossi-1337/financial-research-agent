@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,14 @@ from financial_research_agent.llm import (
     ProviderErrorCode,
 )
 from financial_research_agent.llm.registry import ProviderRegistry, create_default_provider_registry
+from financial_research_agent.market_data import (
+    MarketDataError,
+    MarketDataErrorCode,
+    MarketDataProvider,
+    MarketDataStore,
+    MarketSecurity,
+    create_default_market_data_provider,
+)
 from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.web.sessions import ChatSessionStore
 
@@ -38,17 +47,31 @@ class MessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
 
 
+class MarketDataHistoryRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    security_id: str | None = None
+    exchange_mic: str | None = None
+    exchange_name: str | None = None
+    currency: str | None = None
+    outputsize: str = Field(default="compact", pattern="^(compact|full)$")
+    refresh: bool = False
+
+
 def create_app(
     *,
     settings: Settings | None = None,
     registry: ProviderRegistry | None = None,
     session_store: ChatSessionStore | None = None,
     company_search_provider: CompanySearchProvider | None = None,
+    market_data_provider: MarketDataProvider | None = None,
+    market_data_store: MarketDataStore | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
     sessions = session_store or ChatSessionStore.from_settings(app_settings)
     company_search = company_search_provider or create_default_company_search_provider(app_settings)
+    market_provider = market_data_provider or create_default_market_data_provider(app_settings)
+    market_store = market_data_store or MarketDataStore.from_settings(app_settings)
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -56,6 +79,8 @@ def create_app(
     app.state.provider_registry = provider_registry
     app.state.sessions = sessions
     app.state.company_search = company_search
+    app.state.market_data_provider = market_provider
+    app.state.market_data_store = market_store
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -85,6 +110,14 @@ def create_app(
             "company_search": {
                 "provider": app_settings.data_sources.company_lookup_provider,
                 "cache_ttl_days": app_settings.data_sources.company_lookup_cache_ttl_days,
+            },
+            "market_data": {
+                "provider": app_settings.data_sources.market_data_provider,
+                "cache_ttl_days": app_settings.data_sources.market_data_cache_ttl_days,
+                "alpha_vantage_api_key_configured": (
+                    app_settings.data_sources.alpha_vantage_api_key is not None
+                ),
+                "stored_series_count": market_store.count(),
             },
         }
 
@@ -127,6 +160,45 @@ def create_app(
                 detail=exc.to_dict(),
             ) from exc
         return {"result": result.to_dict()}
+
+    @app.get("/api/market-data/history/{symbol}")
+    def get_market_history(symbol: str) -> dict[str, Any]:
+        stored = market_store.get_history(
+            symbol=symbol,
+            provider=app_settings.data_sources.market_data_provider,
+        )
+        if stored is None:
+            raise HTTPException(status_code=404, detail={"error": "market_data_not_found"})
+        return {"history": stored.to_dict(), "stored": True}
+
+    @app.post("/api/market-data/history")
+    async def fetch_market_history(request: MarketDataHistoryRequest) -> dict[str, Any]:
+        security = MarketSecurity(
+            symbol=request.symbol,
+            security_id=request.security_id,
+            exchange_mic=request.exchange_mic,
+            exchange_name=request.exchange_name,
+            currency=request.currency,
+        )
+        if not request.refresh:
+            stored = market_store.get_history(
+                symbol=security.symbol,
+                provider=app_settings.data_sources.market_data_provider,
+            )
+            if stored is not None:
+                return {"history": stored.to_dict(), "stored": True}
+        try:
+            history = await market_provider.fetch_daily_prices(
+                security,
+                outputsize=request.outputsize,
+            )
+        except MarketDataError as exc:
+            raise HTTPException(
+                status_code=_status_for_market_data_error(exc.code),
+                detail=exc.to_dict(),
+            ) from exc
+        stored_history = market_store.save_history(_history_with_missing_metadata_warnings(history))
+        return {"history": stored_history.to_dict(), "stored": False}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def post_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
@@ -231,3 +303,26 @@ def _status_for_company_search_error(code: CompanySearchErrorCode) -> int:
     if code == CompanySearchErrorCode.TIMEOUT:
         return 504
     return 503
+
+
+def _status_for_market_data_error(code: MarketDataErrorCode) -> int:
+    if code == MarketDataErrorCode.AUTHENTICATION_FAILED:
+        return 401
+    if code == MarketDataErrorCode.RATE_LIMITED:
+        return 429
+    if code == MarketDataErrorCode.TIMEOUT:
+        return 504
+    if code == MarketDataErrorCode.INVALID_REQUEST:
+        return 400
+    if code == MarketDataErrorCode.NOT_FOUND:
+        return 404
+    return 503
+
+
+def _history_with_missing_metadata_warnings(history):
+    warnings = list(history.warnings)
+    if history.security.currency is None:
+        warnings.append("Currency metadata is unavailable for this security.")
+    if history.security.exchange_mic is None and history.security.exchange_name is None:
+        warnings.append("Exchange metadata is unavailable for this security.")
+    return replace(history, warnings=tuple(dict.fromkeys(warnings)))
