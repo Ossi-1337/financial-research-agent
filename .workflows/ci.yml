@@ -33,22 +33,14 @@ jobs:
 
       - name: Detect changed areas
         id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            source:
-              - 'src/**'
-            tests:
-              - 'tests/**'
-            workflows:
-              - '.workflows/**'
-            config:
-              - 'pyproject.toml'
-              - '.env.example'
-              - '.gitattributes'
-              - '.gitignore'
-            docs:
-              - 'README.md'
+        run: |
+          {
+            echo "source=true"
+            echo "tests=true"
+            echo "workflows=true"
+            echo "config=true"
+            echo "docs=true"
+          } >> "$GITHUB_OUTPUT"
 
   format:
     name: Format
@@ -67,11 +59,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install
-        run: python -m pip install -e ".[dev]"
-
       - name: Verify formatting
-        run: python -m ruff format --check .
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m ruff format --check .
 
   lint:
     name: Lint
@@ -90,11 +81,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install
-        run: python -m pip install -e ".[dev]"
-
       - name: Run Ruff
-        run: python -m ruff check .
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m ruff check .
 
   test:
     name: Test
@@ -113,11 +103,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install
-        run: python -m pip install -e ".[dev]"
-
       - name: Run tests
-        run: python -m pytest
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest
 
   compile:
     name: Compile
@@ -136,11 +125,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install
-        run: python -m pip install -e ".[dev]"
-
       - name: Compile source and tests
-        run: python -m compileall -q src tests
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m compileall -q src tests
 
   health:
     name: Health CLI
@@ -159,11 +147,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install
-        run: python -m pip install -e ".[dev]"
-
       - name: Run health check
-        run: python -m financial_research_agent --pretty
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m financial_research_agent --pretty
 
   diff:
     name: Diff check
@@ -182,4 +169,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check whitespace errors
-        run: git diff --check
+        run: |
+          apt-get update && apt-get install -y git
+          git diff --check

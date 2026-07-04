@@ -40,7 +40,7 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
-    sessions = session_store or ChatSessionStore()
+    sessions = session_store or ChatSessionStore.from_settings(app_settings)
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -67,11 +67,25 @@ def create_app(
                 "base_url": selection.base_url,
                 "registered": provider_registry.has_chat_provider(selection.provider),
             },
+            "history": {
+                "recent_turns": sessions.recent_turns,
+                "summary_max_chars": sessions.summary_max_chars,
+                "session_count": sessions.count(),
+                "persistent": sessions.storage_path is not None,
+            },
         }
 
     @app.post("/api/sessions")
     def create_session() -> dict[str, Any]:
         return {"session": sessions.create().to_dict()}
+
+    @app.get("/api/sessions")
+    def list_sessions() -> dict[str, Any]:
+        return {"sessions": [session.to_dict() for session in sessions.list()]}
+
+    @app.delete("/api/sessions")
+    def clear_sessions() -> dict[str, Any]:
+        return {"deleted": sessions.clear()}
 
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: str) -> dict[str, Any]:
@@ -79,6 +93,12 @@ def create_app(
         if session is None:
             raise HTTPException(status_code=404, detail={"error": "session_not_found"})
         return {"session": session.to_dict()}
+
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict[str, Any]:
+        if not sessions.delete(session_id):
+            raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+        return {"deleted": True}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def post_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
@@ -91,7 +111,13 @@ def create_app(
             provider = provider_registry.chat_provider(selection.provider)
             response = await provider.chat(
                 ChatRequest(
-                    messages=_request_messages(session.to_provider_messages(), content),
+                    messages=_request_messages(
+                        session.context_messages(
+                            recent_turns=sessions.recent_turns,
+                            summary_max_chars=sessions.summary_max_chars,
+                        ),
+                        content,
+                    ),
                     model=selection.model,
                 )
             )

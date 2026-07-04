@@ -14,6 +14,8 @@ DEFAULT_LLM_LOCAL_RUNTIME = "llama.cpp"
 DEFAULT_LLM_TIMEOUT_SECONDS = 30.0
 DEFAULT_EMBEDDING_PROVIDER = "disabled"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_CHAT_HISTORY_RECENT_TURNS = 6
+DEFAULT_CHAT_HISTORY_SUMMARY_MAX_CHARS = 1200
 
 
 class ProviderTask(StrEnum):
@@ -153,10 +155,29 @@ class ProviderSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatSettings:
+    history_recent_turns: int = DEFAULT_CHAT_HISTORY_RECENT_TURNS
+    history_summary_max_chars: int = DEFAULT_CHAT_HISTORY_SUMMARY_MAX_CHARS
+
+    def __post_init__(self) -> None:
+        if self.history_recent_turns <= 0:
+            raise ValueError("history_recent_turns must be positive")
+        if self.history_summary_max_chars <= 0:
+            raise ValueError("history_summary_max_chars must be positive")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "history_recent_turns": self.history_recent_turns,
+            "history_summary_max_chars": self.history_summary_max_chars,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     environment: str
     local_paths: LocalPaths
     provider: ProviderSettings
+    chat: ChatSettings
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Self:
@@ -203,6 +224,18 @@ class Settings:
                 streaming_provider=_env_optional(env, "FRA_STREAMING_PROVIDER"),
                 streaming_model=_env_optional(env, "FRA_STREAMING_MODEL"),
             ),
+            chat=ChatSettings(
+                history_recent_turns=_env_int_value(
+                    env,
+                    "FRA_CHAT_HISTORY_RECENT_TURNS",
+                    DEFAULT_CHAT_HISTORY_RECENT_TURNS,
+                ),
+                history_summary_max_chars=_env_int_value(
+                    env,
+                    "FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS",
+                    DEFAULT_CHAT_HISTORY_SUMMARY_MAX_CHARS,
+                ),
+            ),
         )
 
 
@@ -236,6 +269,19 @@ def _env_float_value(environ: Mapping[str, str], name: str, default: float) -> f
         result = float(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be a number") from exc
+    if result <= 0:
+        raise ValueError(f"{name} must be positive")
+    return result
+
+
+def _env_int_value(environ: Mapping[str, str], name: str, default: int) -> int:
+    value = environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        result = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
     if result <= 0:
         raise ValueError(f"{name} must be positive")
     return result

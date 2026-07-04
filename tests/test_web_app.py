@@ -17,7 +17,7 @@ from financial_research_agent.llm import (
 )
 from financial_research_agent.llm.registry import ProviderRegistry, create_offline_provider_registry
 from financial_research_agent.settings import Settings
-from financial_research_agent.web import create_app
+from financial_research_agent.web import ChatSessionStore, create_app
 
 
 def test_root_html_and_static_asset_are_served() -> None:
@@ -48,6 +48,7 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert response.status_code == 200
     assert payload["chat"]["provider"] == "offline-test"
     assert payload["chat"]["model"] == "offline-test"
+    assert payload["history"]["session_count"] == 0
     assert "secret-value" not in json.dumps(payload)
 
 
@@ -60,6 +61,23 @@ def test_session_creation_and_retrieval() -> None:
     assert created["id"].startswith("session_")
     assert retrieved == created
     assert retrieved["messages"] == []
+    assert retrieved["summary"] is None
+
+
+def test_session_list_delete_and_clear() -> None:
+    client = _client()
+    first = client.post("/api/sessions").json()["session"]
+    second = client.post("/api/sessions").json()["session"]
+
+    listed = client.get("/api/sessions").json()["sessions"]
+    deleted = client.delete(f"/api/sessions/{first['id']}")
+    clear = client.delete("/api/sessions")
+    remaining = client.get("/api/sessions").json()["sessions"]
+
+    assert [session["id"] for session in listed] == [second["id"], first["id"]]
+    assert deleted.status_code == 200
+    assert clear.json()["deleted"] == 1
+    assert remaining == []
 
 
 def test_unknown_session_returns_404() -> None:
@@ -122,6 +140,49 @@ def test_chat_request_includes_milestone_10_system_prompt() -> None:
     assert request.messages[-1].content == "Hello"
 
 
+def test_chat_request_uses_bounded_recent_context_and_summary(tmp_path) -> None:
+    provider = CapturingProvider()
+    registry = ProviderRegistry().register_chat_provider("capture", provider)
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_LLM_PROVIDER": "capture",
+            "FRA_LLM_MODEL": "capture-model",
+            "FRA_CHAT_HISTORY_RECENT_TURNS": "1",
+            "FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS": "500",
+        }
+    )
+    client = _client(settings=settings, registry=registry, use_default_store=True)
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    for content in ("first", "second", "third"):
+        response = client.post(f"/api/sessions/{session_id}/messages", json={"content": content})
+        assert response.status_code == 200
+
+    latest_request = provider.requests[-1]
+
+    assert latest_request.messages[0].role == MessageRole.SYSTEM
+    assert latest_request.messages[1].role == MessageRole.SYSTEM
+    assert "Earlier conversation summary" in latest_request.messages[1].content
+    assert "first" in latest_request.messages[1].content
+    assert [message.content for message in latest_request.messages[-3:]] == [
+        "second",
+        "captured response",
+        "third",
+    ]
+
+
+def test_default_app_store_persists_sessions_between_app_instances(tmp_path) -> None:
+    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
+    first_client = _client(settings=settings, use_default_store=True)
+    session_id = first_client.post("/api/sessions").json()["session"]["id"]
+
+    second_client = _client(settings=settings, use_default_store=True)
+    sessions = second_client.get("/api/sessions").json()["sessions"]
+
+    assert [session["id"] for session in sessions] == [session_id]
+
+
 def test_provider_error_maps_to_http_error_and_does_not_mutate_session() -> None:
     error = ProviderError(
         code=ProviderErrorCode.PROVIDER_UNAVAILABLE,
@@ -174,11 +235,13 @@ def _client(
     *,
     settings: Settings | None = None,
     registry: ProviderRegistry | None = None,
+    use_default_store: bool = False,
 ) -> TestClient:
     return TestClient(
         create_app(
             settings=settings or Settings.from_env({}),
             registry=registry or create_offline_provider_registry(),
+            session_store=None if use_default_store else ChatSessionStore(),
         )
     )
 

@@ -71,6 +71,67 @@ h1 {
   white-space: nowrap;
 }
 
+.workspace {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.session-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.session-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  margin: 0;
+  padding: 10px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.session-button {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.session-button:hover {
+  border-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.session-button.active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: var(--assistant);
+  color: var(--accent-strong);
+}
+
 .chat-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
@@ -177,6 +238,16 @@ button:hover {
   background: var(--accent-strong);
 }
 
+.secondary-button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.secondary-button:hover {
+  background: #f9fafb;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.62;
@@ -209,6 +280,18 @@ button:disabled {
 
   .chat-panel {
     min-height: calc(100vh - 86px);
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .session-panel {
+    max-height: 190px;
     border-right: 0;
     border-left: 0;
     border-radius: 0;

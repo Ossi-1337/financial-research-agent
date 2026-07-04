@@ -46,6 +46,8 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_STRUCTURED_OUTPUT_MODEL": "json-model",
             "FRA_STREAMING_PROVIDER": "stream-provider",
             "FRA_STREAMING_MODEL": "stream-model",
+            "FRA_CHAT_HISTORY_RECENT_TURNS": "4",
+            "FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS": "500",
         }
     )
 
@@ -73,6 +75,8 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.provider.selection_for_task("streaming").model == "stream-model"
     assert settings.provider.selection_for_task("embeddings").provider == "local-openai"
     assert settings.provider.selection_for_task("embeddings").model == "nomic-embed-text"
+    assert settings.chat.history_recent_turns == 4
+    assert settings.chat.history_summary_max_chars == 500
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -116,6 +120,22 @@ def test_invalid_timeout_setting_is_rejected() -> None:
         assert "FRA_LLM_TIMEOUT_SECONDS must be positive" in str(exc)
     else:
         raise AssertionError("Expected invalid timeout setting to be rejected")
+
+
+def test_invalid_chat_history_settings_are_rejected() -> None:
+    try:
+        Settings.from_env({"FRA_CHAT_HISTORY_RECENT_TURNS": "0"})
+    except ValueError as exc:
+        assert "FRA_CHAT_HISTORY_RECENT_TURNS must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid recent turns setting to be rejected")
+
+    try:
+        Settings.from_env({"FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS": "many"})
+    except ValueError as exc:
+        assert "FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS must be an integer" in str(exc)
+    else:
+        raise AssertionError("Expected invalid summary max chars setting to be rejected")
 
 
 def test_task_provider_settings_fall_back_to_global_llm_settings() -> None:

@@ -16,23 +16,33 @@
         <div id="provider-pill" class="provider-pill">offline-test</div>
       </header>
 
-      <section class="chat-panel" aria-label="Chat">
-        <div id="error-banner" class="error-banner" role="alert" hidden></div>
-        <ol id="message-list" class="message-list"></ol>
-        <div id="loading-row" class="loading-row" hidden>Thinking...</div>
-        <form id="chat-form" class="composer">
-          <label class="sr-only" for="message-input">Message</label>
-          <textarea
-            id="message-input"
-            name="message"
-            rows="3"
-            maxlength="20000"
-            placeholder="Ask about a company or research topic"
-            required
-          ></textarea>
-          <button id="send-button" type="submit">Send</button>
-        </form>
-      </section>
+      <div class="workspace">
+        <aside class="session-panel" aria-label="Chat sessions">
+          <div class="session-actions">
+            <button id="new-session-button" type="button">New</button>
+            <button id="clear-sessions-button" class="secondary-button" type="button">Clear</button>
+          </div>
+          <ol id="session-list" class="session-list"></ol>
+        </aside>
+
+        <section class="chat-panel" aria-label="Chat">
+          <div id="error-banner" class="error-banner" role="alert" hidden></div>
+          <ol id="message-list" class="message-list"></ol>
+          <div id="loading-row" class="loading-row" hidden>Thinking...</div>
+          <form id="chat-form" class="composer">
+            <label class="sr-only" for="message-input">Message</label>
+            <textarea
+              id="message-input"
+              name="message"
+              rows="3"
+              maxlength="20000"
+              placeholder="Ask a follow-up or start a company research question"
+              required
+            ></textarea>
+            <button id="send-button" type="submit">Send</button>
+          </form>
+        </section>
+      </div>
     </main>
     <script src="/static/app.js" type="module"></script>
   </body>

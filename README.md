@@ -21,14 +21,14 @@ Implemented:
 - Local endpoint health checks for reachability, selected model, available models, capabilities, and known limitations.
 - Deterministic tool registry and guarded tool-call loop for local function calling.
 - Agent prompt contracts, role definitions, and structured JSON output schemas.
-- Local FastAPI chat UI with in-memory sessions and direct provider-backed responses.
+- Local FastAPI chat UI with persistent local sessions, bounded context, and direct provider-backed responses.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
 - Live financial data tools or ingestion.
-- Persistent chat history, database, vector search, or RAG.
+- Database, vector search, or RAG.
 
 ## Setup
 
@@ -53,8 +53,8 @@ python -m financial_research_agent serve --host 127.0.0.1 --port 8000
 ```
 
 Then open `http://127.0.0.1:8000`. The UI uses the configured chat provider and model.
-Sessions are in memory only; restarting the server clears them. The chat endpoint does not
-use live financial data tools, RAG, or multi-agent orchestration yet.
+Sessions are persisted under `FRA_HOME` and can be reopened or cleared locally. The chat
+endpoint does not use live financial data tools, RAG, or multi-agent orchestration yet.
 
 ## Tools
 
@@ -122,8 +122,9 @@ Runtime references:
 Settings are read from real environment variables. `.env.example` documents the supported
 `FRA_*` variables. `FRA` means Financial Research Agent. The settings include
 task-specific provider/model overrides for chat, tool calling, structured output, and
-streaming. `.env.example` is a reference file only; the app does not auto-load `.env`
-yet.
+streaming. Chat history context is controlled by `FRA_CHAT_HISTORY_RECENT_TURNS` and
+`FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS`. `.env.example` is a reference file only; the app
+does not auto-load `.env` yet.
 
 ## Verify
 
