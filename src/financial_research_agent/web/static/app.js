@@ -2,10 +2,18 @@ const state = {
   sessionId: null,
   messages: [],
   sessions: [],
+  companyResults: [],
+  selectedCompany: null,
   busy: false,
 };
 
 const form = document.querySelector("#chat-form");
+const companySearchForm = document.querySelector("#company-search-form");
+const companySearchInput = document.querySelector("#company-search-input");
+const companySearchButton = document.querySelector("#company-search-button");
+const companySearchStatus = document.querySelector("#company-search-status");
+const companyResults = document.querySelector("#company-results");
+const selectedCompany = document.querySelector("#selected-company");
 const input = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
 const messageList = document.querySelector("#message-list");
@@ -23,6 +31,8 @@ function setBusy(value) {
   input.disabled = value;
   newSessionButton.disabled = value;
   clearSessionsButton.disabled = value;
+  companySearchInput.disabled = value;
+  companySearchButton.disabled = value;
   loadingRow.hidden = !value;
 }
 
@@ -79,6 +89,67 @@ function renderSessions() {
     button.addEventListener("click", () => openSession(session.id));
     item.append(button);
     sessionList.append(item);
+  }
+}
+
+function sourceTimestamp(candidate) {
+  const retrievedAt = candidate.source?.retrieved_at;
+  if (!retrievedAt) {
+    return "unknown freshness";
+  }
+  return new Date(retrievedAt).toLocaleString();
+}
+
+function primarySecurity(candidate) {
+  return candidate.securities[0] || { ticker: "unknown" };
+}
+
+function renderCompanyResults(result) {
+  state.companyResults = result.candidates || [];
+  companyResults.innerHTML = "";
+  selectedCompany.hidden = state.selectedCompany === null;
+  if (state.selectedCompany) {
+    const security = primarySecurity(state.selectedCompany);
+    selectedCompany.textContent = `Selected: ${state.selectedCompany.company.legal_name} / ${security.ticker}`;
+  }
+  if (result.status === "no_matches") {
+    companySearchStatus.textContent = "No matches";
+    return;
+  }
+  companySearchStatus.textContent =
+    state.companyResults.length === 1
+      ? "Review 1 candidate"
+      : `Review ${state.companyResults.length} candidates`;
+  for (const candidate of state.companyResults) {
+    const item = document.createElement("li");
+    item.className = "company-result";
+    const security = primarySecurity(candidate);
+
+    const title = document.createElement("div");
+    title.className = "company-result-title";
+    title.textContent = candidate.company.legal_name;
+
+    const meta = document.createElement("div");
+    meta.className = "company-result-meta";
+    meta.textContent = `${security.ticker} / ${candidate.match_reason} / ${sourceTimestamp(candidate)}`;
+
+    const identifiers = document.createElement("div");
+    identifiers.className = "company-result-identifiers";
+    identifiers.textContent = candidate.company.identifiers
+      .map((identifier) => `${identifier.type.toUpperCase()}: ${identifier.value}`)
+      .join(" / ");
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button select-company-button";
+    button.textContent = "Select";
+    button.addEventListener("click", () => {
+      state.selectedCompany = candidate;
+      renderCompanyResults({ ...result, candidates: state.companyResults });
+    });
+
+    item.append(title, meta, identifiers, button);
+    companyResults.append(item);
   }
 }
 
@@ -163,6 +234,34 @@ async function sendMessage(content) {
   await loadSessions();
   renderMessages();
 }
+
+async function searchCompanies(query) {
+  const payload = await requestJson(
+    `/api/company-search?query=${encodeURIComponent(query)}&limit=8`
+  );
+  state.selectedCompany = null;
+  renderCompanyResults(payload.result);
+}
+
+companySearchForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = companySearchInput.value.trim();
+  if (!query || state.busy) {
+    return;
+  }
+  clearError();
+  setBusy(true);
+  companySearchStatus.textContent = "Searching...";
+  try {
+    await searchCompanies(query);
+  } catch (error) {
+    companySearchStatus.textContent = "";
+    showError(error instanceof Error ? error.message : "Company search failed.");
+  } finally {
+    setBusy(false);
+    companySearchInput.focus();
+  }
+});
 
 newSessionButton.addEventListener("click", async () => {
   if (state.busy) {

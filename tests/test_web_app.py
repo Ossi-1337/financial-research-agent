@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
+from financial_research_agent.entities import (
+    CompanySearchCandidate,
+    CompanySearchError,
+    CompanySearchErrorCode,
+    CompanySearchResult,
+    CompanySearchStatus,
+    EntityIdentifier,
+    EntityIdentifierType,
+    ResolvedCompany,
+    ResolvedSecurity,
+    SourceMetadata,
+)
 from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
@@ -49,6 +62,7 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["chat"]["provider"] == "offline-test"
     assert payload["chat"]["model"] == "offline-test"
     assert payload["history"]["session_count"] == 0
+    assert payload["company_search"]["provider"] == "sec"
     assert "secret-value" not in json.dumps(payload)
 
 
@@ -231,17 +245,45 @@ def test_provider_error_status_mapping(code: ProviderErrorCode, expected_status:
     assert response.status_code == expected_status
 
 
+def test_company_search_endpoint_returns_reviewable_candidates() -> None:
+    client = _client(company_search_provider=FakeCompanySearchProvider())
+
+    response = client.get("/api/company-search", params={"query": "Novo Nordisk", "limit": 3})
+    payload = response.json()["result"]
+
+    assert response.status_code == 200
+    assert payload["status"] == "review_required"
+    assert payload["source"]["provider"] == "fake-company-search"
+    assert payload["candidates"][0]["company"]["legal_name"] == "TEST TOOL OUTPUT NOVO NORDISK"
+    assert payload["candidates"][0]["securities"][0]["ticker"] == "NVO"
+
+
+def test_company_search_errors_map_to_http_status() -> None:
+    client = _client(
+        company_search_provider=FailingCompanySearchProvider(
+            CompanySearchErrorCode.RATE_LIMITED,
+        )
+    )
+
+    response = client.get("/api/company-search", params={"query": "Novo Nordisk"})
+
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "rate_limited"
+
+
 def _client(
     *,
     settings: Settings | None = None,
     registry: ProviderRegistry | None = None,
     use_default_store: bool = False,
+    company_search_provider=None,
 ) -> TestClient:
     return TestClient(
         create_app(
             settings=settings or Settings.from_env({}),
             registry=registry or create_offline_provider_registry(),
             session_store=None if use_default_store else ChatSessionStore(),
+            company_search_provider=company_search_provider or FakeCompanySearchProvider(),
         )
     )
 
@@ -260,4 +302,59 @@ class CapturingProvider:
             message=ChatMessage(role=MessageRole.ASSISTANT, content="captured response"),
             provider="capture",
             model=request.model or "capture-model",
+        )
+
+
+class FakeCompanySearchProvider:
+    async def search(self, query: str, *, limit: int = 10) -> CompanySearchResult:
+        source = SourceMetadata(
+            provider="fake-company-search",
+            provider_status="test fixture",
+            source_url="https://example.invalid/company-search-fixture",
+            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
+            attribution="test fixture",
+        )
+        company = ResolvedCompany(
+            id="fixture:company:novo",
+            legal_name="TEST TOOL OUTPUT NOVO NORDISK",
+            identifiers=(
+                EntityIdentifier(
+                    EntityIdentifierType.TICKER,
+                    "NVO",
+                    source="fixture",
+                ),
+            ),
+        )
+        security = ResolvedSecurity(
+            id="fixture:security:nvo",
+            company_id=company.id,
+            ticker="NVO",
+            name=company.legal_name,
+        )
+        return CompanySearchResult(
+            query=query,
+            status=CompanySearchStatus.REVIEW_REQUIRED,
+            candidates=(
+                CompanySearchCandidate(
+                    company=company,
+                    securities=(security,),
+                    score=90,
+                    match_reason=f"limit_{limit}",
+                    source=source,
+                ),
+            ),
+            source=source,
+        )
+
+
+class FailingCompanySearchProvider:
+    def __init__(self, code: CompanySearchErrorCode) -> None:
+        self.code = code
+
+    async def search(self, _query: str, *, limit: int = 10) -> CompanySearchResult:
+        raise CompanySearchError(
+            code=self.code,
+            message=f"company search failed with limit {limit}",
+            provider="fake-company-search",
+            retryable=True,
         )

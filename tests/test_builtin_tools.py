@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 
+from financial_research_agent.entities import (
+    CompanySearchCandidate,
+    CompanySearchResult,
+    CompanySearchStatus,
+    EntityIdentifier,
+    EntityIdentifierType,
+    ResolvedCompany,
+    ResolvedSecurity,
+    SourceMetadata,
+)
 from financial_research_agent.llm import ToolCall
 from financial_research_agent.tools import (
     ToolContext,
@@ -70,7 +80,29 @@ def test_resolve_company_stub_returns_no_fake_company_data() -> None:
     assert result.data["query"] == "Novo Nordisk"
     assert result.data["matches"] == ()
     assert result.data["real_entity_resolution_available"] is False
-    assert result.warnings == ("Real company entity resolution is planned for Milestone 12.",)
+    assert result.warnings == (
+        "Real company entity resolution requires an injected company search provider.",
+    )
+
+
+def test_resolve_company_tool_returns_reviewable_candidates() -> None:
+    registry = create_default_tool_registry(company_search_provider=FakeCompanySearchProvider())
+
+    result = asyncio.run(
+        registry.execute(
+            ToolCall(
+                id="call_company",
+                name="resolve_company",
+                arguments={"query": "Novo Nordisk", "limit": 3},
+            )
+        )
+    )
+
+    assert result.status == ToolResultStatus.SUCCEEDED
+    assert result.source == "fake-company-search"
+    assert result.data["status"] == "review_required"
+    assert result.data["candidates"][0]["securities"][0]["ticker"] == "NVO"
+    assert result.warnings == ("limit=3",)
 
 
 def test_read_local_evidence_tool_reads_injected_mapping_and_reports_missing_items() -> None:
@@ -109,3 +141,40 @@ def test_read_local_evidence_tool_reads_injected_mapping_and_reports_missing_ite
     assert found.data["evidence"]["title"] == "Source title"
     assert missing.status == ToolResultStatus.FAILED
     assert missing.error_code == ToolErrorCode.NOT_FOUND
+
+
+class FakeCompanySearchProvider:
+    async def search(self, query: str, *, limit: int = 10) -> CompanySearchResult:
+        source = SourceMetadata(
+            provider="fake-company-search",
+            provider_status="test fixture",
+            source_url="https://example.invalid/company-search-fixture",
+            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
+            attribution="test fixture",
+        )
+        company = ResolvedCompany(
+            id="fixture:company:novo",
+            legal_name="TEST TOOL OUTPUT NOVO NORDISK",
+            identifiers=(EntityIdentifier(EntityIdentifierType.TICKER, "NVO", source="fixture"),),
+        )
+        security = ResolvedSecurity(
+            id="fixture:security:nvo",
+            company_id=company.id,
+            ticker="NVO",
+            name=company.legal_name,
+        )
+        return CompanySearchResult(
+            query=query,
+            status=CompanySearchStatus.REVIEW_REQUIRED,
+            candidates=(
+                CompanySearchCandidate(
+                    company=company,
+                    securities=(security,),
+                    score=90,
+                    match_reason="test_fixture",
+                    source=source,
+                ),
+            ),
+            source=source,
+            warnings=(f"limit={limit}",),
+        )

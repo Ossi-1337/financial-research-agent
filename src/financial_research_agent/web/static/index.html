@@ -23,6 +23,24 @@
             <button id="clear-sessions-button" class="secondary-button" type="button">Clear</button>
           </div>
           <ol id="session-list" class="session-list"></ol>
+          <section class="company-lookup" aria-label="Company lookup">
+            <form id="company-search-form" class="company-search-form">
+              <label for="company-search-input">Company</label>
+              <div class="company-search-row">
+                <input
+                  id="company-search-input"
+                  name="company"
+                  maxlength="200"
+                  placeholder="Novo Nordisk"
+                  required
+                />
+                <button id="company-search-button" type="submit">Find</button>
+              </div>
+            </form>
+            <div id="company-search-status" class="lookup-status" aria-live="polite"></div>
+            <ol id="company-results" class="company-results"></ol>
+            <div id="selected-company" class="selected-company" hidden></div>
+          </section>
         </aside>
 
         <section class="chat-panel" aria-label="Chat">

@@ -20,6 +20,7 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
             "python_version": platform.python_version(),
         },
         "provider": settings.provider.to_dict(),
+        "data_sources": settings.data_sources.to_dict(),
         "paths": settings.local_paths.to_dict(),
         "environment": settings.environment,
         "notes": [
@@ -28,7 +29,10 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
                 "LLM calls use offline-test by default; local-openai or openai only run "
                 "when configured."
             ),
-            "No financial data ingestion, database, or agents are configured yet.",
+            (
+                "SEC company ticker lookup is available for entity resolution; market data, "
+                "filings ingestion, database, and agents are not configured yet."
+            ),
         ],
     }
     if settings.provider.llm_provider == "local-openai":

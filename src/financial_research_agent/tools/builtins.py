@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from financial_research_agent.entities import CompanySearchError, CompanySearchProvider
 from financial_research_agent.tools.contracts import (
     ToolContext,
     ToolErrorCode,
@@ -15,12 +16,19 @@ from financial_research_agent.tools.contracts import (
 )
 
 
-def create_default_tool_registry() -> ToolRegistry:
+def create_default_tool_registry(
+    company_search_provider: CompanySearchProvider | None = None,
+) -> ToolRegistry:
+    company_tool = (
+        resolve_company_tool(company_search_provider)
+        if company_search_provider is not None
+        else resolve_company_stub_tool()
+    )
     return ToolRegistry(
         (
             current_utc_datetime_tool(),
             calculate_ratio_tool(),
-            resolve_company_stub_tool(),
+            company_tool,
             read_local_evidence_tool(),
         )
     )
@@ -123,7 +131,9 @@ def resolve_company_stub_tool() -> ToolSpec:
                 "real_entity_resolution_available": False,
             },
             source="milestone_08_stub",
-            warnings=("Real company entity resolution is planned for Milestone 12.",),
+            warnings=(
+                "Real company entity resolution requires an injected company search provider.",
+            ),
         )
 
     return ToolSpec(
@@ -137,6 +147,59 @@ def resolve_company_stub_tool() -> ToolSpec:
         },
         permissions=(ToolPermission.ENTITY_LOOKUP,),
         timeout_seconds=1.0,
+        handler=handler,
+    )
+
+
+def resolve_company_tool(company_search_provider: CompanySearchProvider) -> ToolSpec:
+    async def handler(_context: ToolContext, arguments: Mapping[str, Any]) -> ToolResult:
+        query = str(arguments["query"]).strip()
+        limit = int(arguments.get("limit", 10))
+        try:
+            result = await company_search_provider.search(query, limit=limit)
+        except (CompanySearchError, ValueError) as exc:
+            data: Mapping[str, Any] = {}
+            if isinstance(exc, CompanySearchError):
+                data = {
+                    "code": exc.code.value,
+                    "provider": exc.provider,
+                    "retryable": exc.retryable,
+                }
+            return ToolResult.failed(
+                tool_call_id="resolve_company",
+                tool_name="resolve_company",
+                error_code=ToolErrorCode.EXECUTION_FAILED,
+                errors=(f"Company search failed: {exc}",),
+                data=data,
+            )
+        source = result.source.provider if result.source is not None else None
+        freshness = result.source.retrieved_at.isoformat() if result.source is not None else None
+        return ToolResult.succeeded(
+            tool_call_id="resolve_company",
+            tool_name="resolve_company",
+            data=result.to_dict(),
+            source=source,
+            freshness=freshness,
+            warnings=result.warnings,
+        )
+
+    return ToolSpec(
+        name="resolve_company",
+        description=(
+            "Resolve a company search query to real candidate companies, securities, tickers, "
+            "CIKs, and source metadata. Return candidates for user review instead of guessing."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        permissions=(ToolPermission.ENTITY_LOOKUP,),
+        timeout_seconds=20.0,
         handler=handler,
     )
 

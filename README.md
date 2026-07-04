@@ -4,7 +4,7 @@ Financial Research Agent is a local-first AI agent system for company and stock 
 The project is currently a Python foundation with provider-neutral LLM contracts,
 an offline test provider, an OpenAI-compatible local endpoint adapter, and an optional
 hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
-not ingest financial data yet. A minimal local chat UI is available for direct LLM chat.
+not ingest market data yet. A minimal local chat UI is available for direct LLM chat.
 
 ## Status
 
@@ -22,12 +22,13 @@ Implemented:
 - Deterministic tool registry and guarded tool-call loop for local function calling.
 - Agent prompt contracts, role definitions, and structured JSON output schemas.
 - Local FastAPI chat UI with persistent local sessions, bounded context, and direct provider-backed responses.
+- SEC company ticker search for reviewable company/security entity candidates with cached source metadata.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
-- Live financial data tools or ingestion.
+- Market data, financial statement, filings, or news ingestion.
 - Database, vector search, or RAG.
 
 ## Setup
@@ -55,14 +56,30 @@ python -m financial_research_agent serve --host 127.0.0.1 --port 8000
 Then open `http://127.0.0.1:8000`. The UI uses the configured chat provider and model.
 Sessions are persisted under `FRA_HOME` and can be reopened or cleared locally. The chat
 endpoint does not use live financial data tools, RAG, or multi-agent orchestration yet.
+The sidebar company lookup searches SEC company tickers and returns candidates for review
+with source and freshness metadata. It does not infer prices, exchange MICs, ISINs, or
+financial facts.
 
 ## Tools
 
 The tracked `financial_research_agent.tools` package defines deterministic tool contracts,
 a guarded registry, basic JSON-schema argument validation, and a provider-neutral tool-call
 loop. Current built-in tools are limited to UTC time, simple ratio calculation, a company
-lookup stub, and injected in-memory evidence reads. They do not fetch live financial data,
-execute shell commands, browse the web, or use a database.
+lookup tool when a real provider is injected, a company lookup stub when no provider is
+injected, and injected in-memory evidence reads. They do not execute shell commands,
+browse the web, use a database, or fetch prices/filings/news.
+
+## Company Lookup
+
+The first entity-resolution source is the SEC company ticker list:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/company-search?query=Novo%20Nordisk"
+```
+
+Results are candidates for user review, not automatic selection. SEC ticker data includes
+CIK, ticker, and company title only, so missing exchange, currency, country, and ISIN fields
+are explicit until a later identifier source such as OpenFIGI is added.
 
 ## Agent Prompts
 
@@ -123,8 +140,10 @@ Settings are read from real environment variables. `.env.example` documents the 
 `FRA_*` variables. `FRA` means Financial Research Agent. The settings include
 task-specific provider/model overrides for chat, tool calling, structured output, and
 streaming. Chat history context is controlled by `FRA_CHAT_HISTORY_RECENT_TURNS` and
-`FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS`. `.env.example` is a reference file only; the app
-does not auto-load `.env` yet.
+`FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS`. Company lookup is controlled by
+`FRA_COMPANY_LOOKUP_PROVIDER`, `FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS`, and
+`FRA_SEC_USER_AGENT`. `.env.example` is a reference file only; the app does not auto-load
+`.env` yet.
 
 ## Verify
 

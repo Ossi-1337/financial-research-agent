@@ -6,6 +6,7 @@ from financial_research_agent.tools.builtins import (
     current_utc_datetime_tool,
     read_local_evidence_tool,
     resolve_company_stub_tool,
+    resolve_company_tool,
 )
 from financial_research_agent.tools.contracts import (
     ToolContext,
@@ -34,6 +35,7 @@ __all__ = [
     "current_utc_datetime_tool",
     "read_local_evidence_tool",
     "resolve_company_stub_tool",
+    "resolve_company_tool",
     "validate_tool_arguments",
     "validate_tool_schema",
 ]

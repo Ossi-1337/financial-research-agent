@@ -80,7 +80,7 @@ h1 {
 
 .session-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -106,6 +106,93 @@ h1 {
   padding: 10px;
   overflow-y: auto;
   list-style: none;
+}
+
+.company-lookup {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.company-search-form {
+  display: grid;
+  gap: 6px;
+}
+
+.company-search-form label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.company-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.company-search-row input {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.lookup-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.company-results {
+  display: grid;
+  gap: 8px;
+  max-height: 230px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.company-result {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.company-result-title {
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.company-result-meta,
+.company-result-identifiers,
+.selected-company {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.select-company-button {
+  min-height: 30px;
+  padding: 6px 8px;
+}
+
+.selected-company {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--assistant);
+  color: var(--accent-strong);
+  font-weight: 700;
 }
 
 .session-button {

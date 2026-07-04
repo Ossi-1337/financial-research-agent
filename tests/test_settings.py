@@ -48,6 +48,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_STREAMING_MODEL": "stream-model",
             "FRA_CHAT_HISTORY_RECENT_TURNS": "4",
             "FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS": "500",
+            "FRA_COMPANY_LOOKUP_PROVIDER": "sec",
+            "FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS": "7",
+            "FRA_SEC_USER_AGENT": "financial-research-agent-test/0.1 contact",
         }
     )
 
@@ -77,6 +80,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.provider.selection_for_task("embeddings").model == "nomic-embed-text"
     assert settings.chat.history_recent_turns == 4
     assert settings.chat.history_summary_max_chars == 500
+    assert settings.data_sources.company_lookup_provider == "sec"
+    assert settings.data_sources.company_lookup_cache_ttl_days == 7
+    assert settings.data_sources.sec_user_agent == "financial-research-agent-test/0.1 contact"
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -136,6 +142,15 @@ def test_invalid_chat_history_settings_are_rejected() -> None:
         assert "FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS must be an integer" in str(exc)
     else:
         raise AssertionError("Expected invalid summary max chars setting to be rejected")
+
+
+def test_invalid_company_lookup_cache_ttl_is_rejected() -> None:
+    try:
+        Settings.from_env({"FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS": "0"})
+    except ValueError as exc:
+        assert "FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid company lookup cache TTL to be rejected")
 
 
 def test_task_provider_settings_fall_back_to_global_llm_settings() -> None:

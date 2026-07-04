@@ -3,11 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from financial_research_agent.entities import (
+    CompanySearchError,
+    CompanySearchErrorCode,
+    CompanySearchProvider,
+    create_default_company_search_provider,
+)
 from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
@@ -37,16 +43,19 @@ def create_app(
     settings: Settings | None = None,
     registry: ProviderRegistry | None = None,
     session_store: ChatSessionStore | None = None,
+    company_search_provider: CompanySearchProvider | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
     sessions = session_store or ChatSessionStore.from_settings(app_settings)
+    company_search = company_search_provider or create_default_company_search_provider(app_settings)
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
     app.state.settings = app_settings
     app.state.provider_registry = provider_registry
     app.state.sessions = sessions
+    app.state.company_search = company_search
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -72,6 +81,10 @@ def create_app(
                 "summary_max_chars": sessions.summary_max_chars,
                 "session_count": sessions.count(),
                 "persistent": sessions.storage_path is not None,
+            },
+            "company_search": {
+                "provider": app_settings.data_sources.company_lookup_provider,
+                "cache_ttl_days": app_settings.data_sources.company_lookup_cache_ttl_days,
             },
         }
 
@@ -99,6 +112,21 @@ def create_app(
         if not sessions.delete(session_id):
             raise HTTPException(status_code=404, detail={"error": "session_not_found"})
         return {"deleted": True}
+
+    @app.get("/api/company-search")
+    async def search_companies(
+        query: str = Query(min_length=1, max_length=200),
+        limit: int = Query(default=10, ge=1, le=50),
+    ) -> dict[str, Any]:
+        content = _message_content(query)
+        try:
+            result = await company_search.search(content, limit=limit)
+        except CompanySearchError as exc:
+            raise HTTPException(
+                status_code=_status_for_company_search_error(exc.code),
+                detail=exc.to_dict(),
+            ) from exc
+        return {"result": result.to_dict()}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def post_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
@@ -193,3 +221,13 @@ def _provider_error_detail(error: ProviderError) -> dict[str, Any]:
         "model": error.model,
         "retryable": error.retryable,
     }
+
+
+def _status_for_company_search_error(code: CompanySearchErrorCode) -> int:
+    if code == CompanySearchErrorCode.INVALID_REQUEST:
+        return 400
+    if code == CompanySearchErrorCode.RATE_LIMITED:
+        return 429
+    if code == CompanySearchErrorCode.TIMEOUT:
+        return 504
+    return 503
