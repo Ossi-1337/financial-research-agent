@@ -176,7 +176,8 @@ h1 {
 .company-result-meta,
 .company-result-identifiers,
 .selected-company,
-.market-data-summary {
+.market-data-summary,
+.financial-statements-summary {
   color: var(--muted);
   font-size: 0.76rem;
   line-height: 1.35;
@@ -203,7 +204,13 @@ h1 {
   padding: 6px 8px;
 }
 
-.market-data-summary {
+.fetch-statements-button {
+  min-height: 30px;
+  padding: 6px 8px;
+}
+
+.market-data-summary,
+.financial-statements-summary {
   display: grid;
   gap: 5px;
   padding: 9px;
@@ -212,12 +219,14 @@ h1 {
   background: var(--surface-muted);
 }
 
-.market-data-title {
+.market-data-title,
+.financial-statements-title {
   color: var(--text);
   font-weight: 700;
 }
 
-.market-data-warning {
+.market-data-warning,
+.financial-statements-warning {
   color: #8a4b00;
 }
 

@@ -32,6 +32,14 @@ from financial_research_agent.market_data import (
     create_default_market_data_provider,
 )
 from financial_research_agent.settings import ProviderTask, Settings
+from financial_research_agent.statements import (
+    FinancialStatementCompany,
+    FinancialStatementError,
+    FinancialStatementErrorCode,
+    FinancialStatementProvider,
+    FinancialStatementStore,
+    create_default_financial_statement_provider,
+)
 from financial_research_agent.web.sessions import ChatSessionStore
 
 SYSTEM_PROMPT = (
@@ -57,6 +65,14 @@ class MarketDataHistoryRequest(BaseModel):
     refresh: bool = False
 
 
+class FinancialStatementRequest(BaseModel):
+    cik: str = Field(min_length=1, max_length=10, pattern="^[0-9]+$")
+    company_id: str | None = None
+    legal_name: str | None = None
+    fiscal_years: int = Field(default=3, ge=1, le=10)
+    refresh: bool = False
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -65,6 +81,8 @@ def create_app(
     company_search_provider: CompanySearchProvider | None = None,
     market_data_provider: MarketDataProvider | None = None,
     market_data_store: MarketDataStore | None = None,
+    financial_statement_provider: FinancialStatementProvider | None = None,
+    financial_statement_store: FinancialStatementStore | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -72,6 +90,12 @@ def create_app(
     company_search = company_search_provider or create_default_company_search_provider(app_settings)
     market_provider = market_data_provider or create_default_market_data_provider(app_settings)
     market_store = market_data_store or MarketDataStore.from_settings(app_settings)
+    statement_provider = (
+        financial_statement_provider or create_default_financial_statement_provider(app_settings)
+    )
+    statement_store = financial_statement_store or FinancialStatementStore.from_settings(
+        app_settings
+    )
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -81,6 +105,8 @@ def create_app(
     app.state.company_search = company_search
     app.state.market_data_provider = market_provider
     app.state.market_data_store = market_store
+    app.state.financial_statement_provider = statement_provider
+    app.state.financial_statement_store = statement_store
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -118,6 +144,11 @@ def create_app(
                     app_settings.data_sources.alpha_vantage_api_key is not None
                 ),
                 "stored_series_count": market_store.count(),
+            },
+            "financial_statements": {
+                "provider": app_settings.data_sources.financial_statement_provider,
+                "cache_ttl_days": (app_settings.data_sources.financial_statement_cache_ttl_days),
+                "stored_result_count": statement_store.count(),
             },
         }
 
@@ -199,6 +230,45 @@ def create_app(
             ) from exc
         stored_history = market_store.save_history(_history_with_missing_metadata_warnings(history))
         return {"history": stored_history.to_dict(), "stored": False}
+
+    @app.get("/api/financial-statements/{cik}")
+    def get_financial_statements(cik: str) -> dict[str, Any]:
+        stored = statement_store.get_result(
+            cik=cik,
+            provider=app_settings.data_sources.financial_statement_provider,
+        )
+        if stored is None:
+            raise HTTPException(status_code=404, detail={"error": "financial_statements_not_found"})
+        return {"statements": stored.to_dict(), "stored": True}
+
+    @app.post("/api/financial-statements")
+    async def fetch_financial_statements(
+        request: FinancialStatementRequest,
+    ) -> dict[str, Any]:
+        company = FinancialStatementCompany(
+            cik=request.cik,
+            company_id=request.company_id,
+            legal_name=request.legal_name,
+        )
+        if not request.refresh:
+            stored = statement_store.get_result(
+                cik=company.cik,
+                provider=app_settings.data_sources.financial_statement_provider,
+            )
+            if stored is not None:
+                return {"statements": stored.to_dict(), "stored": True}
+        try:
+            result = await statement_provider.fetch_statements(
+                company,
+                fiscal_years=request.fiscal_years,
+            )
+        except FinancialStatementError as exc:
+            raise HTTPException(
+                status_code=_status_for_financial_statement_error(exc.code),
+                detail=exc.to_dict(),
+            ) from exc
+        stored_result = statement_store.save_result(result)
+        return {"statements": stored_result.to_dict(), "stored": False}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def post_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
@@ -315,6 +385,18 @@ def _status_for_market_data_error(code: MarketDataErrorCode) -> int:
     if code == MarketDataErrorCode.INVALID_REQUEST:
         return 400
     if code == MarketDataErrorCode.NOT_FOUND:
+        return 404
+    return 503
+
+
+def _status_for_financial_statement_error(code: FinancialStatementErrorCode) -> int:
+    if code == FinancialStatementErrorCode.RATE_LIMITED:
+        return 429
+    if code == FinancialStatementErrorCode.TIMEOUT:
+        return 504
+    if code == FinancialStatementErrorCode.INVALID_REQUEST:
+        return 400
+    if code == FinancialStatementErrorCode.NOT_FOUND:
         return 404
     return 503
 

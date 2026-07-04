@@ -21,6 +21,8 @@ DEFAULT_COMPANY_LOOKUP_CACHE_TTL_DAYS = 30
 DEFAULT_SEC_USER_AGENT = "financial-research-agent/0.1 local-research contact-not-configured"
 DEFAULT_MARKET_DATA_PROVIDER = "alpha-vantage"
 DEFAULT_MARKET_DATA_CACHE_TTL_DAYS = 1
+DEFAULT_FINANCIAL_STATEMENT_PROVIDER = "sec-companyfacts"
+DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS = 30
 
 
 class ProviderTask(StrEnum):
@@ -185,6 +187,8 @@ class DataSourceSettings:
     market_data_provider: str = DEFAULT_MARKET_DATA_PROVIDER
     market_data_cache_ttl_days: int = DEFAULT_MARKET_DATA_CACHE_TTL_DAYS
     alpha_vantage_api_key: str | None = None
+    financial_statement_provider: str = DEFAULT_FINANCIAL_STATEMENT_PROVIDER
+    financial_statement_cache_ttl_days: int = DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -195,12 +199,19 @@ class DataSourceSettings:
         object.__setattr__(self, "sec_user_agent", _require_text(self.sec_user_agent))
         object.__setattr__(self, "market_data_provider", _require_text(self.market_data_provider))
         object.__setattr__(
+            self,
+            "financial_statement_provider",
+            _require_text(self.financial_statement_provider),
+        )
+        object.__setattr__(
             self, "alpha_vantage_api_key", _optional_text(self.alpha_vantage_api_key)
         )
         if self.company_lookup_cache_ttl_days <= 0:
             raise ValueError("company_lookup_cache_ttl_days must be positive")
         if self.market_data_cache_ttl_days <= 0:
             raise ValueError("market_data_cache_ttl_days must be positive")
+        if self.financial_statement_cache_ttl_days <= 0:
+            raise ValueError("financial_statement_cache_ttl_days must be positive")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -210,6 +221,8 @@ class DataSourceSettings:
             "market_data_provider": self.market_data_provider,
             "market_data_cache_ttl_days": self.market_data_cache_ttl_days,
             "alpha_vantage_api_key_configured": self.alpha_vantage_api_key is not None,
+            "financial_statement_provider": self.financial_statement_provider,
+            "financial_statement_cache_ttl_days": self.financial_statement_cache_ttl_days,
         }
 
 
@@ -304,6 +317,16 @@ class Settings:
                     env,
                     "FRA_ALPHA_VANTAGE_API_KEY",
                     "ALPHA_VANTAGE_API_KEY",
+                ),
+                financial_statement_provider=_env_value(
+                    env,
+                    "FRA_FINANCIAL_STATEMENT_PROVIDER",
+                    DEFAULT_FINANCIAL_STATEMENT_PROVIDER,
+                ),
+                financial_statement_cache_ttl_days=_env_int_value(
+                    env,
+                    "FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS",
+                    DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS,
                 ),
             ),
         )

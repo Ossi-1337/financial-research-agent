@@ -19,6 +19,8 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.provider.openai_base_url == "https://api.openai.com/v1"
     assert settings.provider.selection_for_task(ProviderTask.CHAT).provider == "offline-test"
     assert settings.provider.selection_for_task(ProviderTask.CHAT).model == "offline-test"
+    assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
+    assert settings.data_sources.financial_statement_cache_ttl_days == 30
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -89,6 +91,8 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.data_sources.market_data_provider == "alpha-vantage"
     assert settings.data_sources.market_data_cache_ttl_days == 2
     assert settings.data_sources.alpha_vantage_api_key == "alpha-key"
+    assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
+    assert settings.data_sources.financial_statement_cache_ttl_days == 30
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -166,6 +170,25 @@ def test_invalid_market_data_cache_ttl_is_rejected() -> None:
         assert "FRA_MARKET_DATA_CACHE_TTL_DAYS must be positive" in str(exc)
     else:
         raise AssertionError("Expected invalid market data cache TTL to be rejected")
+
+
+def test_financial_statement_settings_are_read_and_validated() -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_FINANCIAL_STATEMENT_PROVIDER": "sec-companyfacts",
+            "FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS": "14",
+        }
+    )
+
+    assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
+    assert settings.data_sources.financial_statement_cache_ttl_days == 14
+
+    try:
+        Settings.from_env({"FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS": "0"})
+    except ValueError as exc:
+        assert "FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid financial statement cache TTL to be rejected")
 
 
 def test_alpha_vantage_key_supports_standard_alias() -> None:

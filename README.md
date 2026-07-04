@@ -4,8 +4,9 @@ Financial Research Agent is a local-first AI agent system for company and stock 
 The project is currently a Python foundation with provider-neutral LLM contracts,
 an offline test provider, an OpenAI-compatible local endpoint adapter, and an optional
 hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
-only ingests daily market data when a provider key is configured. A minimal local chat UI
-is available for direct LLM chat.
+not run multi-agent research yet. It ingests daily market data when a provider key is
+configured and SEC financial statements for SEC filers. A minimal local chat UI is
+available for direct LLM chat.
 
 ## Status
 
@@ -25,12 +26,13 @@ Implemented:
 - Local FastAPI chat UI with persistent local sessions, bounded context, and direct provider-backed responses.
 - SEC company ticker search for reviewable company/security entity candidates with cached source metadata.
 - Alpha Vantage daily historical price ingestion with local JSON storage, freshness warnings, and deterministic price metrics.
+- SEC companyfacts financial statement ingestion with normalized statements, key ratios, local JSON storage, and source metadata.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
-- Financial statement, filings, or news ingestion.
+- Filing document, PDF, news, or macro ingestion.
 - Database, vector search, or RAG.
 
 ## Setup
@@ -64,6 +66,9 @@ financial facts.
 After selecting a candidate, the sidebar can fetch daily historical prices through the
 configured market data provider. Live price fetches require `FRA_ALPHA_VANTAGE_API_KEY`
 or `ALPHA_VANTAGE_API_KEY`.
+The same selected SEC candidate can fetch annual SEC companyfacts statements by CIK.
+Statement ingestion stores normalized rows locally and does not parse full filing PDFs,
+issuer-specific extension tags, or report presentation yet.
 
 ## Tools
 
@@ -102,6 +107,23 @@ Historical bars are persisted locally under `FRA_HOME/data/market_data_price_bar
 The API returns source metadata, freshness warnings, and deterministic metrics including
 returns, moving averages, volatility, and max drawdown. This is delayed/provider-limited
 research data, not a trading feed.
+
+## Financial Statements
+
+The first financial statement provider is the official SEC companyfacts XBRL API for SEC
+filers:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/financial-statements" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"cik":"0000320193","fiscal_years":3,"refresh":true}'
+```
+
+Statement results are persisted locally under `FRA_HOME/data/financial_statements.json`.
+The API returns normalized annual income statement, balance sheet, cash flow, and ratio
+rows where supported facts are available, plus source metadata and warnings for missing
+periods, restatements, ignored units, and stale cached data.
 
 ## Agent Prompts
 
@@ -166,6 +188,8 @@ streaming. Chat history context is controlled by `FRA_CHAT_HISTORY_RECENT_TURNS`
 `FRA_COMPANY_LOOKUP_PROVIDER`, `FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS`, and
 `FRA_SEC_USER_AGENT`. Market data is controlled by `FRA_MARKET_DATA_PROVIDER`,
 `FRA_MARKET_DATA_CACHE_TTL_DAYS`, and `FRA_ALPHA_VANTAGE_API_KEY`.
+Financial statements are controlled by `FRA_FINANCIAL_STATEMENT_PROVIDER` and
+`FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS`.
 `.env.example` is a reference file only; the app does not auto-load `.env` yet.
 
 ## Verify

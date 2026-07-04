@@ -33,6 +33,10 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
                 "SEC company ticker lookup and Alpha Vantage daily market data ingestion "
                 "are available; market data requires an explicit API key."
             ),
+            (
+                "SEC companyfacts financial statement ingestion is available for SEC filers "
+                "through official EDGAR XBRL JSON APIs."
+            ),
         ],
     }
     if settings.provider.llm_provider == "local-openai":

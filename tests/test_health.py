@@ -15,8 +15,10 @@ def test_health_report_has_no_external_requirements() -> None:
     assert report["provider"]["llm_provider"] == "offline-test"
     assert report["data_sources"]["market_data_provider"] == "alpha-vantage"
     assert report["data_sources"]["alpha_vantage_api_key_configured"] is False
+    assert report["data_sources"]["financial_statement_provider"] == "sec-companyfacts"
     assert report["notes"][0] == "Foundation health check only."
     assert "offline-test by default" in report["notes"][1]
+    assert "companyfacts financial statement ingestion" in report["notes"][3]
 
 
 def test_health_report_includes_local_endpoint_when_configured(monkeypatch) -> None:

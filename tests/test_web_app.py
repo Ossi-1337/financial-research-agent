@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.entities import (
     CompanySearchCandidate,
     CompanySearchError,
@@ -41,6 +42,17 @@ from financial_research_agent.market_data import (
     calculate_price_metrics,
 )
 from financial_research_agent.settings import Settings
+from financial_research_agent.statements import (
+    FinancialStatementCompany,
+    FinancialStatementError,
+    FinancialStatementErrorCode,
+    FinancialStatementPeriod,
+    FinancialStatementPeriodType,
+    FinancialStatementResult,
+    FinancialStatementSource,
+    FinancialStatementStore,
+    NormalizedFinancialStatement,
+)
 from financial_research_agent.web import ChatSessionStore, create_app
 
 
@@ -74,6 +86,7 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["chat"]["model"] == "offline-test"
     assert payload["history"]["session_count"] == 0
     assert payload["company_search"]["provider"] == "sec"
+    assert payload["financial_statements"]["provider"] == "sec-companyfacts"
     assert "secret-value" not in json.dumps(payload)
 
 
@@ -333,6 +346,66 @@ def test_market_data_errors_map_to_http_status() -> None:
     assert response.json()["detail"]["code"] == "authentication_failed"
 
 
+def test_financial_statement_fetch_endpoint_persists_result(tmp_path) -> None:
+    store = FinancialStatementStore(storage_path=tmp_path / "financial_statements.json")
+    client = _client(
+        financial_statement_provider=FakeFinancialStatementProvider(),
+        financial_statement_store=store,
+    )
+
+    response = client.post(
+        "/api/financial-statements",
+        json={
+            "cik": "0000320193",
+            "company_id": "fixture:company:apple",
+            "legal_name": "TEST TOOL OUTPUT APPLE INC.",
+            "refresh": True,
+        },
+    )
+    stored = client.get("/api/financial-statements/320193")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stored"] is False
+    assert payload["statements"]["statements"][0]["line_items"]["revenues"] == "1000"
+    assert stored.status_code == 200
+    assert stored.json()["stored"] is True
+    assert stored.json()["statements"]["company"]["cik"] == "320193"
+
+
+def test_financial_statement_endpoint_uses_cached_result_without_refresh(tmp_path) -> None:
+    store = FinancialStatementStore(storage_path=tmp_path / "financial_statements.json")
+    store.save_result(FakeFinancialStatementProvider.result())
+    client = _client(
+        financial_statement_provider=FailingFinancialStatementProvider(
+            FinancialStatementErrorCode.PROVIDER_UNAVAILABLE
+        ),
+        financial_statement_store=store,
+    )
+
+    response = client.post("/api/financial-statements", json={"cik": "320193"})
+
+    assert response.status_code == 200
+    assert response.json()["stored"] is True
+
+
+def test_financial_statement_errors_map_to_http_status() -> None:
+    client = _client(
+        financial_statement_provider=FailingFinancialStatementProvider(
+            FinancialStatementErrorCode.NOT_FOUND
+        ),
+        financial_statement_store=FinancialStatementStore(),
+    )
+
+    response = client.post(
+        "/api/financial-statements",
+        json={"cik": "320193", "refresh": True},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "not_found"
+
+
 def _client(
     *,
     settings: Settings | None = None,
@@ -341,6 +414,8 @@ def _client(
     company_search_provider=None,
     market_data_provider=None,
     market_data_store=None,
+    financial_statement_provider=None,
+    financial_statement_store=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -350,6 +425,10 @@ def _client(
             company_search_provider=company_search_provider or FakeCompanySearchProvider(),
             market_data_provider=market_data_provider or FakeMarketDataProvider(),
             market_data_store=market_data_store or MarketDataStore(),
+            financial_statement_provider=(
+                financial_statement_provider or FakeFinancialStatementProvider()
+            ),
+            financial_statement_store=financial_statement_store or FinancialStatementStore(),
         )
     )
 
@@ -501,3 +580,77 @@ class FailingMarketDataProvider:
 
     async def fetch_quote(self, security: MarketSecurity):
         raise NotImplementedError
+
+
+class FakeFinancialStatementProvider:
+    async def fetch_statements(
+        self,
+        company: FinancialStatementCompany,
+        *,
+        fiscal_years: int = 3,
+    ) -> FinancialStatementResult:
+        return self.result(company=company, warning=f"fiscal_years={fiscal_years}")
+
+    @staticmethod
+    def result(
+        *,
+        company: FinancialStatementCompany | None = None,
+        warning: str = "test fixture",
+    ) -> FinancialStatementResult:
+        selected_company = company or FinancialStatementCompany(
+            cik="320193",
+            company_id="fixture:company:apple",
+            legal_name="TEST TOOL OUTPUT APPLE INC.",
+        )
+        source = FinancialStatementSource(
+            provider="sec-companyfacts",
+            provider_status="test fixture",
+            source_url="https://example.invalid/sec-companyfacts-fixture",
+            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
+            data_as_of=datetime(2026, 6, 30, tzinfo=UTC).date(),
+            attribution="test fixture",
+        )
+        period = FinancialStatementPeriod(
+            fiscal_year=2025,
+            fiscal_period="FY",
+            period_type=FinancialStatementPeriodType.ANNUAL,
+            period_start=datetime(2024, 7, 1, tzinfo=UTC).date(),
+            period_end=datetime(2025, 6, 30, tzinfo=UTC).date(),
+            form="10-K",
+            accession_number="fixture-accession",
+            filed_at=datetime(2026, 6, 30, tzinfo=UTC).date(),
+        )
+        return FinancialStatementResult(
+            company=selected_company,
+            statements=(
+                NormalizedFinancialStatement(
+                    id="fixture:statement:income:2025",
+                    company=selected_company,
+                    statement_type=FinancialStatementType.INCOME_STATEMENT,
+                    period=period,
+                    currency="USD",
+                    line_items={"revenues": Decimal("1000"), "net_income_loss": Decimal("250")},
+                    source=source,
+                ),
+            ),
+            source=source,
+            warnings=(warning,),
+        )
+
+
+class FailingFinancialStatementProvider:
+    def __init__(self, code: FinancialStatementErrorCode) -> None:
+        self.code = code
+
+    async def fetch_statements(
+        self,
+        _company: FinancialStatementCompany,
+        *,
+        fiscal_years: int = 3,
+    ) -> FinancialStatementResult:
+        raise FinancialStatementError(
+            code=self.code,
+            message=f"financial statement fetch failed with fiscal_years {fiscal_years}",
+            provider="sec-companyfacts",
+            retryable=True,
+        )

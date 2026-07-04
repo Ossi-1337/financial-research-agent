@@ -5,6 +5,7 @@ const state = {
   companyResults: [],
   selectedCompany: null,
   marketData: null,
+  financialStatements: null,
   busy: false,
 };
 
@@ -17,6 +18,8 @@ const companyResults = document.querySelector("#company-results");
 const selectedCompany = document.querySelector("#selected-company");
 const marketDataStatus = document.querySelector("#market-data-status");
 const marketDataSummary = document.querySelector("#market-data-summary");
+const financialStatementsStatus = document.querySelector("#financial-statements-status");
+const financialStatementsSummary = document.querySelector("#financial-statements-summary");
 const input = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
 const messageList = document.querySelector("#message-list");
@@ -107,6 +110,14 @@ function primarySecurity(candidate) {
   return candidate.securities[0] || { ticker: "unknown" };
 }
 
+function identifierValue(candidate, type) {
+  return (
+    candidate.company.identifiers.find((identifier) => identifier.type === type)?.value ||
+    primarySecurity(candidate).identifiers?.find((identifier) => identifier.type === type)?.value ||
+    null
+  );
+}
+
 function renderSelectedCompany() {
   selectedCompany.innerHTML = "";
   selectedCompany.hidden = state.selectedCompany === null;
@@ -121,7 +132,13 @@ function renderSelectedCompany() {
   fetchButton.className = "secondary-button fetch-market-button";
   fetchButton.textContent = "Fetch prices";
   fetchButton.addEventListener("click", () => fetchMarketData(state.selectedCompany));
-  selectedCompany.append(text, fetchButton);
+  const statementButton = document.createElement("button");
+  statementButton.type = "button";
+  statementButton.className = "secondary-button fetch-statements-button";
+  statementButton.textContent = "Fetch statements";
+  statementButton.disabled = identifierValue(state.selectedCompany, "cik") === null;
+  statementButton.addEventListener("click", () => fetchFinancialStatements(state.selectedCompany));
+  selectedCompany.append(text, fetchButton, statementButton);
 }
 
 function renderMarketData(payload) {
@@ -157,6 +174,56 @@ function renderMarketData(payload) {
     marketDataSummary.append(freshness);
   }
   marketDataStatus.textContent = payload.stored ? "Using stored prices" : "Prices fetched";
+}
+
+function statementCountByType(statements) {
+  return statements.reduce((counts, statement) => {
+    counts[statement.statement_type] = (counts[statement.statement_type] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function renderFinancialStatements(payload) {
+  state.financialStatements = payload;
+  financialStatementsSummary.innerHTML = "";
+  financialStatementsSummary.hidden = payload === null;
+  if (!payload) {
+    financialStatementsStatus.textContent = "";
+    return;
+  }
+  const result = payload.statements;
+  const statements = result.statements || [];
+  const latest = statements
+    .slice()
+    .sort((left, right) => right.period.period_end.localeCompare(left.period.period_end))[0];
+  const counts = statementCountByType(statements);
+  const title = document.createElement("div");
+  title.className = "financial-statements-title";
+  title.textContent = `${result.company.legal_name || result.company.cik} / ${
+    statements.length
+  } statement rows`;
+  const meta = document.createElement("div");
+  meta.textContent = `${latest?.period.period_end || "unknown period"} / ${result.source.provider}`;
+  const types = document.createElement("div");
+  types.textContent = Object.entries(counts)
+    .map(([type, count]) => `${type}: ${count}`)
+    .join(" / ");
+  financialStatementsSummary.append(title, meta, types);
+  for (const warning of result.warnings || []) {
+    const warningRow = document.createElement("div");
+    warningRow.className = "financial-statements-warning";
+    warningRow.textContent = warning;
+    financialStatementsSummary.append(warningRow);
+  }
+  if (result.source.freshness_warning) {
+    const freshness = document.createElement("div");
+    freshness.className = "financial-statements-warning";
+    freshness.textContent = result.source.freshness_warning;
+    financialStatementsSummary.append(freshness);
+  }
+  financialStatementsStatus.textContent = payload.stored
+    ? "Using stored statements"
+    : "Statements fetched";
 }
 
 function renderCompanyResults(result) {
@@ -197,6 +264,7 @@ function renderCompanyResults(result) {
     button.addEventListener("click", () => {
       state.selectedCompany = candidate;
       renderMarketData(null);
+      renderFinancialStatements(null);
       renderCompanyResults({ ...result, candidates: state.companyResults });
     });
 
@@ -293,6 +361,7 @@ async function searchCompanies(query) {
   );
   state.selectedCompany = null;
   renderMarketData(null);
+  renderFinancialStatements(null);
   renderCompanyResults(payload.result);
 }
 
@@ -321,6 +390,38 @@ async function fetchMarketData(candidate) {
   } catch (error) {
     marketDataStatus.textContent = "";
     showError(error instanceof Error ? error.message : "Market data request failed.");
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function fetchFinancialStatements(candidate) {
+  if (!candidate || state.busy) {
+    return;
+  }
+  const cik = identifierValue(candidate, "cik");
+  if (!cik) {
+    showError("Selected company does not include an SEC CIK.");
+    return;
+  }
+  clearError();
+  setBusy(true);
+  financialStatementsStatus.textContent = "Fetching statements...";
+  try {
+    const payload = await requestJson("/api/financial-statements", {
+      method: "POST",
+      body: JSON.stringify({
+        cik,
+        company_id: candidate.company.id,
+        legal_name: candidate.company.legal_name,
+        fiscal_years: 3,
+        refresh: true,
+      }),
+    });
+    renderFinancialStatements(payload);
+  } catch (error) {
+    financialStatementsStatus.textContent = "";
+    showError(error instanceof Error ? error.message : "Financial statement request failed.");
   } finally {
     setBusy(false);
   }
