@@ -15,6 +15,14 @@ from financial_research_agent.entities import (
     CompanySearchProvider,
     create_default_company_search_provider,
 )
+from financial_research_agent.filings import (
+    FilingCompany,
+    FilingError,
+    FilingErrorCode,
+    FilingProvider,
+    FilingStore,
+    create_default_filing_provider,
+)
 from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
@@ -43,11 +51,12 @@ from financial_research_agent.statements import (
 from financial_research_agent.web.sessions import ChatSessionStore
 
 SYSTEM_PROMPT = (
-    "You are a local financial research chat assistant. This milestone has no live financial "
-    "data ingestion, database, RAG, or agent orchestration. Do not invent identifiers, prices, "
-    "financial facts, source URLs, or citations. If the user asks for current company or market "
-    "facts, explain that real data tools are not connected yet. Do not provide buy, sell, or "
-    "hold recommendations."
+    "You are a local financial research chat assistant. Sidebar data fetches may exist, but "
+    "this chat endpoint does not automatically receive live financial data, RAG evidence, "
+    "or agent orchestration. Do not invent identifiers, prices, financial facts, source URLs, "
+    "or citations. If the user asks for current company or market facts, explain that they "
+    "must fetch and inspect source data first. Do not provide buy, sell, or hold "
+    "recommendations."
 )
 
 
@@ -73,6 +82,15 @@ class FinancialStatementRequest(BaseModel):
     refresh: bool = False
 
 
+class FilingIngestionRequest(BaseModel):
+    cik: str = Field(min_length=1, max_length=10, pattern="^[0-9]+$")
+    company_id: str | None = None
+    legal_name: str | None = None
+    forms: tuple[str, ...] = ("10-K", "10-Q")
+    limit: int = Field(default=1, ge=1, le=10)
+    refresh: bool = False
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -83,6 +101,8 @@ def create_app(
     market_data_store: MarketDataStore | None = None,
     financial_statement_provider: FinancialStatementProvider | None = None,
     financial_statement_store: FinancialStatementStore | None = None,
+    filing_provider: FilingProvider | None = None,
+    filing_store: FilingStore | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -96,6 +116,8 @@ def create_app(
     statement_store = financial_statement_store or FinancialStatementStore.from_settings(
         app_settings
     )
+    filing_source = filing_provider or create_default_filing_provider(app_settings)
+    filings = filing_store or FilingStore.from_settings(app_settings)
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -107,6 +129,8 @@ def create_app(
     app.state.market_data_store = market_store
     app.state.financial_statement_provider = statement_provider
     app.state.financial_statement_store = statement_store
+    app.state.filing_provider = filing_source
+    app.state.filing_store = filings
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -149,6 +173,12 @@ def create_app(
                 "provider": app_settings.data_sources.financial_statement_provider,
                 "cache_ttl_days": (app_settings.data_sources.financial_statement_cache_ttl_days),
                 "stored_result_count": statement_store.count(),
+            },
+            "filings": {
+                "provider": app_settings.data_sources.filing_provider,
+                "cache_ttl_days": app_settings.data_sources.filing_cache_ttl_days,
+                "max_document_bytes": app_settings.data_sources.filing_max_document_bytes,
+                "stored_result_count": filings.count(),
             },
         }
 
@@ -269,6 +299,44 @@ def create_app(
             ) from exc
         stored_result = statement_store.save_result(result)
         return {"statements": stored_result.to_dict(), "stored": False}
+
+    @app.get("/api/filings/{cik}")
+    def get_filings(cik: str) -> dict[str, Any]:
+        stored = filings.get_result(
+            cik=cik,
+            provider=app_settings.data_sources.filing_provider,
+        )
+        if stored is None:
+            raise HTTPException(status_code=404, detail={"error": "filings_not_found"})
+        return {"filings": stored.to_dict(), "stored": True}
+
+    @app.post("/api/filings/ingest")
+    async def ingest_filings(request: FilingIngestionRequest) -> dict[str, Any]:
+        company = FilingCompany(
+            cik=request.cik,
+            company_id=request.company_id,
+            legal_name=request.legal_name,
+        )
+        if not request.refresh:
+            stored = filings.get_result(
+                cik=company.cik,
+                provider=app_settings.data_sources.filing_provider,
+            )
+            if stored is not None:
+                return {"filings": stored.to_dict(), "stored": True}
+        try:
+            result = await filing_source.ingest_latest(
+                company,
+                forms=request.forms,
+                limit=request.limit,
+            )
+        except FilingError as exc:
+            raise HTTPException(
+                status_code=_status_for_filing_error(exc.code),
+                detail=exc.to_dict(),
+            ) from exc
+        stored_result = filings.save_result(result)
+        return {"filings": stored_result.to_dict(), "stored": False}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def post_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
@@ -397,6 +465,22 @@ def _status_for_financial_statement_error(code: FinancialStatementErrorCode) -> 
     if code == FinancialStatementErrorCode.INVALID_REQUEST:
         return 400
     if code == FinancialStatementErrorCode.NOT_FOUND:
+        return 404
+    return 503
+
+
+def _status_for_filing_error(code: FilingErrorCode) -> int:
+    if code == FilingErrorCode.RATE_LIMITED:
+        return 429
+    if code == FilingErrorCode.TIMEOUT:
+        return 504
+    if code in {
+        FilingErrorCode.INVALID_REQUEST,
+        FilingErrorCode.UNSUPPORTED_FORMAT,
+        FilingErrorCode.DOCUMENT_TOO_LARGE,
+    }:
+        return 400
+    if code == FilingErrorCode.NOT_FOUND:
         return 404
     return 503
 

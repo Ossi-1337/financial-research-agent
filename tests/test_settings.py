@@ -21,6 +21,9 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.provider.selection_for_task(ProviderTask.CHAT).model == "offline-test"
     assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
     assert settings.data_sources.financial_statement_cache_ttl_days == 30
+    assert settings.data_sources.filing_provider == "sec-edgar"
+    assert settings.data_sources.filing_cache_ttl_days == 30
+    assert settings.data_sources.filing_max_document_bytes == 8_000_000
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -56,6 +59,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_MARKET_DATA_PROVIDER": "alpha-vantage",
             "FRA_MARKET_DATA_CACHE_TTL_DAYS": "2",
             "FRA_ALPHA_VANTAGE_API_KEY": "alpha-key",
+            "FRA_FILING_PROVIDER": "sec-edgar",
+            "FRA_FILING_CACHE_TTL_DAYS": "12",
+            "FRA_FILING_MAX_DOCUMENT_BYTES": "5000000",
         }
     )
 
@@ -93,6 +99,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.data_sources.alpha_vantage_api_key == "alpha-key"
     assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
     assert settings.data_sources.financial_statement_cache_ttl_days == 30
+    assert settings.data_sources.filing_provider == "sec-edgar"
+    assert settings.data_sources.filing_cache_ttl_days == 12
+    assert settings.data_sources.filing_max_document_bytes == 5_000_000
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -189,6 +198,34 @@ def test_financial_statement_settings_are_read_and_validated() -> None:
         assert "FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS must be positive" in str(exc)
     else:
         raise AssertionError("Expected invalid financial statement cache TTL to be rejected")
+
+
+def test_filing_settings_are_read_and_validated() -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_FILING_PROVIDER": "sec-edgar",
+            "FRA_FILING_CACHE_TTL_DAYS": "14",
+            "FRA_FILING_MAX_DOCUMENT_BYTES": "1000",
+        }
+    )
+
+    assert settings.data_sources.filing_provider == "sec-edgar"
+    assert settings.data_sources.filing_cache_ttl_days == 14
+    assert settings.data_sources.filing_max_document_bytes == 1000
+
+    try:
+        Settings.from_env({"FRA_FILING_CACHE_TTL_DAYS": "0"})
+    except ValueError as exc:
+        assert "FRA_FILING_CACHE_TTL_DAYS must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid filing cache TTL to be rejected")
+
+    try:
+        Settings.from_env({"FRA_FILING_MAX_DOCUMENT_BYTES": "0"})
+    except ValueError as exc:
+        assert "FRA_FILING_MAX_DOCUMENT_BYTES must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid filing max bytes to be rejected")
 
 
 def test_alpha_vantage_key_supports_standard_alias() -> None:

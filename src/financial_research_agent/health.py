@@ -37,6 +37,10 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
                 "SEC companyfacts financial statement ingestion is available for SEC filers "
                 "through official EDGAR XBRL JSON APIs."
             ),
+            (
+                "SEC EDGAR filing ingestion is available for HTML/TXT primary documents "
+                "with local raw and extracted-text storage."
+            ),
         ],
     }
     if settings.provider.llm_provider == "local-openai":

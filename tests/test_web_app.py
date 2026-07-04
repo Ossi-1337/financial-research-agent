@@ -20,6 +20,17 @@ from financial_research_agent.entities import (
     ResolvedSecurity,
     SourceMetadata,
 )
+from financial_research_agent.filings import (
+    FilingChunk,
+    FilingCompany,
+    FilingDocument,
+    FilingDocumentFormat,
+    FilingError,
+    FilingErrorCode,
+    FilingIngestionResult,
+    FilingSource,
+    FilingStore,
+)
 from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
@@ -87,6 +98,7 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["history"]["session_count"] == 0
     assert payload["company_search"]["provider"] == "sec"
     assert payload["financial_statements"]["provider"] == "sec-companyfacts"
+    assert payload["filings"]["provider"] == "sec-edgar"
     assert "secret-value" not in json.dumps(payload)
 
 
@@ -160,7 +172,7 @@ def test_chat_message_uses_offline_provider_and_updates_session() -> None:
     assert retrieved["messages"] == payload["session"]["messages"]
 
 
-def test_chat_request_includes_milestone_10_system_prompt() -> None:
+def test_chat_request_includes_financial_research_system_prompt() -> None:
     provider = CapturingProvider()
     registry = ProviderRegistry().register_chat_provider("capture", provider)
     settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
@@ -173,7 +185,8 @@ def test_chat_request_includes_milestone_10_system_prompt() -> None:
     request = provider.requests[0]
     system_prompt = request.messages[0]
     assert system_prompt.role == MessageRole.SYSTEM
-    assert "no live financial data" in system_prompt.content
+    assert "does not automatically receive live financial data" in system_prompt.content
+    assert "must fetch and inspect source data first" in system_prompt.content
     assert "Do not provide buy, sell, or hold recommendations" in system_prompt.content
     assert request.messages[-1].content == "Hello"
 
@@ -406,6 +419,61 @@ def test_financial_statement_errors_map_to_http_status() -> None:
     assert response.json()["detail"]["code"] == "not_found"
 
 
+def test_filing_ingestion_endpoint_persists_result(tmp_path) -> None:
+    store = FilingStore(storage_path=tmp_path / "filings_index.json")
+    client = _client(filing_provider=FakeFilingProvider(), filing_store=store)
+
+    response = client.post(
+        "/api/filings/ingest",
+        json={
+            "cik": "0000320193",
+            "company_id": "fixture:company:apple",
+            "legal_name": "TEST TOOL OUTPUT APPLE INC.",
+            "forms": ["10-K"],
+            "limit": 1,
+            "refresh": True,
+        },
+    )
+    stored = client.get("/api/filings/320193")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stored"] is False
+    assert payload["filings"]["filings"][0]["form_type"] == "10-K"
+    assert payload["filings"]["chunks"][0]["section_heading"] == "Item 1. Business"
+    assert stored.status_code == 200
+    assert stored.json()["stored"] is True
+
+
+def test_filing_ingestion_endpoint_uses_cached_result_without_refresh(tmp_path) -> None:
+    store = FilingStore(storage_path=tmp_path / "filings_index.json")
+    store.save_result(FakeFilingProvider.result())
+    client = _client(
+        filing_provider=FailingFilingProvider(FilingErrorCode.PROVIDER_UNAVAILABLE),
+        filing_store=store,
+    )
+
+    response = client.post("/api/filings/ingest", json={"cik": "320193"})
+
+    assert response.status_code == 200
+    assert response.json()["stored"] is True
+
+
+def test_filing_errors_map_to_http_status() -> None:
+    client = _client(
+        filing_provider=FailingFilingProvider(FilingErrorCode.UNSUPPORTED_FORMAT),
+        filing_store=FilingStore(),
+    )
+
+    response = client.post(
+        "/api/filings/ingest",
+        json={"cik": "320193", "forms": ["10-K"], "refresh": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "unsupported_format"
+
+
 def _client(
     *,
     settings: Settings | None = None,
@@ -416,6 +484,8 @@ def _client(
     market_data_store=None,
     financial_statement_provider=None,
     financial_statement_store=None,
+    filing_provider=None,
+    filing_store=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -429,6 +499,8 @@ def _client(
                 financial_statement_provider or FakeFinancialStatementProvider()
             ),
             financial_statement_store=financial_statement_store or FinancialStatementStore(),
+            filing_provider=filing_provider or FakeFilingProvider(),
+            filing_store=filing_store or FilingStore(),
         )
     )
 
@@ -652,5 +724,92 @@ class FailingFinancialStatementProvider:
             code=self.code,
             message=f"financial statement fetch failed with fiscal_years {fiscal_years}",
             provider="sec-companyfacts",
+            retryable=True,
+        )
+
+
+class FakeFilingProvider:
+    async def ingest_latest(
+        self,
+        company: FilingCompany,
+        *,
+        forms: tuple[str, ...] = ("10-K", "10-Q"),
+        limit: int = 1,
+    ) -> FilingIngestionResult:
+        return self.result(company=company, warning=f"forms={','.join(forms)};limit={limit}")
+
+    @staticmethod
+    def result(
+        *,
+        company: FilingCompany | None = None,
+        warning: str = "test fixture",
+    ) -> FilingIngestionResult:
+        selected_company = company or FilingCompany(
+            cik="320193",
+            company_id="fixture:company:apple",
+            legal_name="TEST TOOL OUTPUT APPLE INC.",
+        )
+        source = FilingSource(
+            provider="sec-edgar",
+            provider_status="test fixture",
+            source_url="https://example.invalid/submissions/CIK0000320193.json",
+            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
+            data_as_of=datetime(2026, 1, 31, tzinfo=UTC).date(),
+            attribution="test fixture",
+        )
+        filing = FilingDocument(
+            id="fixture:filing:10-k",
+            company=selected_company,
+            form_type="10-K",
+            accession_number="0000320193-25-000001",
+            filing_date=datetime(2026, 1, 31, tzinfo=UTC).date(),
+            report_date=datetime(2025, 12, 31, tzinfo=UTC).date(),
+            publication_date=datetime(2026, 1, 31, tzinfo=UTC).date(),
+            document_url="https://example.invalid/aapl-20251231.htm",
+            source_url="https://example.invalid/submissions/CIK0000320193.json",
+            document_format=FilingDocumentFormat.HTML,
+            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
+            local_raw_path="fixture/raw/aapl-20251231.htm",
+            local_text_path="fixture/text/aapl-20251231.txt",
+            source=source,
+            chunk_ids=("fixture:filing:10-k:chunk:0",),
+        )
+        chunk = FilingChunk(
+            id="fixture:filing:10-k:chunk:0",
+            filing_id=filing.id,
+            chunk_index=0,
+            text="TEST TOOL OUTPUT filing chunk",
+            char_start=0,
+            char_end=29,
+            section_heading="Item 1. Business",
+            source_url=filing.document_url,
+            accession_number=filing.accession_number,
+            form_type=filing.form_type,
+            metadata={"fixture": "true"},
+        )
+        return FilingIngestionResult(
+            company=selected_company,
+            filings=(filing,),
+            chunks=(chunk,),
+            source=source,
+            warnings=(warning,),
+        )
+
+
+class FailingFilingProvider:
+    def __init__(self, code: FilingErrorCode) -> None:
+        self.code = code
+
+    async def ingest_latest(
+        self,
+        _company: FilingCompany,
+        *,
+        forms: tuple[str, ...] = ("10-K", "10-Q"),
+        limit: int = 1,
+    ) -> FilingIngestionResult:
+        raise FilingError(
+            code=self.code,
+            message=f"filing ingestion failed with forms {','.join(forms)} and limit {limit}",
+            provider="sec-edgar",
             retryable=True,
         )

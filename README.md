@@ -5,8 +5,8 @@ The project is currently a Python foundation with provider-neutral LLM contracts
 an offline test provider, an OpenAI-compatible local endpoint adapter, and an optional
 hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
 not run multi-agent research yet. It ingests daily market data when a provider key is
-configured and SEC financial statements for SEC filers. A minimal local chat UI is
-available for direct LLM chat.
+configured, SEC financial statements for SEC filers, and SEC HTML/TXT filing documents.
+A minimal local chat UI is available for direct LLM chat.
 
 ## Status
 
@@ -27,12 +27,13 @@ Implemented:
 - SEC company ticker search for reviewable company/security entity candidates with cached source metadata.
 - Alpha Vantage daily historical price ingestion with local JSON storage, freshness warnings, and deterministic price metrics.
 - SEC companyfacts financial statement ingestion with normalized statements, key ratios, local JSON storage, and source metadata.
+- SEC EDGAR filing/document ingestion for primary HTML/TXT filings with local raw document, extracted text, chunk metadata, and source metadata storage.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
-- Filing document, PDF, news, or macro ingestion.
+- PDF, news, or macro ingestion.
 - Database, vector search, or RAG.
 
 ## Setup
@@ -69,6 +70,9 @@ or `ALPHA_VANTAGE_API_KEY`.
 The same selected SEC candidate can fetch annual SEC companyfacts statements by CIK.
 Statement ingestion stores normalized rows locally and does not parse full filing PDFs,
 issuer-specific extension tags, or report presentation yet.
+The sidebar can also fetch the latest SEC 10-K/10-Q primary HTML/TXT filing document.
+Filing ingestion stores raw documents, extracted text, and deterministic chunks locally;
+the chat endpoint does not automatically use those chunks as evidence yet.
 
 ## Tools
 
@@ -125,6 +129,23 @@ The API returns normalized annual income statement, balance sheet, cash flow, an
 rows where supported facts are available, plus source metadata and warnings for missing
 periods, restatements, ignored units, and stale cached data.
 
+## Filings
+
+The first filing document provider is SEC EDGAR submissions plus SEC Archives primary
+documents:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/filings/ingest" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"cik":"0000320193","forms":["10-K","10-Q"],"limit":1,"refresh":true}'
+```
+
+Raw documents, extracted text, chunks, and metadata are stored locally under
+`FRA_HOME/data/filings/`. Only SEC primary HTML/TXT documents are extracted at runtime.
+PDF extraction, vector search, RAG, document interpretation, and redistribution are
+deferred.
+
 ## Agent Prompts
 
 The tracked `financial_research_agent.agents` package defines reusable prompt contracts
@@ -177,6 +198,8 @@ Runtime references:
 - OpenAI API overview: https://developers.openai.com/api/reference/overview/
 - OpenAI Chat Completions: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/
 - OpenAI embeddings: https://developers.openai.com/api/reference/resources/embeddings/methods/create/
+- SEC EDGAR APIs: https://www.sec.gov/search-filings/edgar-application-programming-interfaces
+- SEC EDGAR access policy: https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data
 
 ## Configuration
 
@@ -189,7 +212,9 @@ streaming. Chat history context is controlled by `FRA_CHAT_HISTORY_RECENT_TURNS`
 `FRA_SEC_USER_AGENT`. Market data is controlled by `FRA_MARKET_DATA_PROVIDER`,
 `FRA_MARKET_DATA_CACHE_TTL_DAYS`, and `FRA_ALPHA_VANTAGE_API_KEY`.
 Financial statements are controlled by `FRA_FINANCIAL_STATEMENT_PROVIDER` and
-`FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS`.
+`FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS`. Filing ingestion is controlled by
+`FRA_FILING_PROVIDER`, `FRA_FILING_CACHE_TTL_DAYS`, and
+`FRA_FILING_MAX_DOCUMENT_BYTES`.
 `.env.example` is a reference file only; the app does not auto-load `.env` yet.
 
 ## Verify

@@ -6,6 +6,7 @@ const state = {
   selectedCompany: null,
   marketData: null,
   financialStatements: null,
+  filings: null,
   busy: false,
 };
 
@@ -20,6 +21,8 @@ const marketDataStatus = document.querySelector("#market-data-status");
 const marketDataSummary = document.querySelector("#market-data-summary");
 const financialStatementsStatus = document.querySelector("#financial-statements-status");
 const financialStatementsSummary = document.querySelector("#financial-statements-summary");
+const filingsStatus = document.querySelector("#filings-status");
+const filingsSummary = document.querySelector("#filings-summary");
 const input = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
 const messageList = document.querySelector("#message-list");
@@ -138,7 +141,13 @@ function renderSelectedCompany() {
   statementButton.textContent = "Fetch statements";
   statementButton.disabled = identifierValue(state.selectedCompany, "cik") === null;
   statementButton.addEventListener("click", () => fetchFinancialStatements(state.selectedCompany));
-  selectedCompany.append(text, fetchButton, statementButton);
+  const filingButton = document.createElement("button");
+  filingButton.type = "button";
+  filingButton.className = "secondary-button fetch-filing-button";
+  filingButton.textContent = "Fetch filing";
+  filingButton.disabled = identifierValue(state.selectedCompany, "cik") === null;
+  filingButton.addEventListener("click", () => fetchFiling(state.selectedCompany));
+  selectedCompany.append(text, fetchButton, statementButton, filingButton);
 }
 
 function renderMarketData(payload) {
@@ -226,6 +235,39 @@ function renderFinancialStatements(payload) {
     : "Statements fetched";
 }
 
+function renderFilings(payload) {
+  state.filings = payload;
+  filingsSummary.innerHTML = "";
+  filingsSummary.hidden = payload === null;
+  if (!payload) {
+    filingsStatus.textContent = "";
+    return;
+  }
+  const result = payload.filings;
+  const latest = result.filings[0];
+  const title = document.createElement("div");
+  title.className = "filings-title";
+  title.textContent = `${latest.form_type} / ${latest.filing_date}`;
+  const meta = document.createElement("div");
+  meta.textContent = `${latest.accession_number} / ${result.chunks.length} chunks`;
+  const source = document.createElement("div");
+  source.textContent = latest.source.provider;
+  filingsSummary.append(title, meta, source);
+  for (const warning of result.warnings || []) {
+    const warningRow = document.createElement("div");
+    warningRow.className = "filings-warning";
+    warningRow.textContent = warning;
+    filingsSummary.append(warningRow);
+  }
+  if (result.source.freshness_warning) {
+    const freshness = document.createElement("div");
+    freshness.className = "filings-warning";
+    freshness.textContent = result.source.freshness_warning;
+    filingsSummary.append(freshness);
+  }
+  filingsStatus.textContent = payload.stored ? "Using stored filing" : "Filing fetched";
+}
+
 function renderCompanyResults(result) {
   state.companyResults = result.candidates || [];
   companyResults.innerHTML = "";
@@ -265,6 +307,7 @@ function renderCompanyResults(result) {
       state.selectedCompany = candidate;
       renderMarketData(null);
       renderFinancialStatements(null);
+      renderFilings(null);
       renderCompanyResults({ ...result, candidates: state.companyResults });
     });
 
@@ -362,6 +405,7 @@ async function searchCompanies(query) {
   state.selectedCompany = null;
   renderMarketData(null);
   renderFinancialStatements(null);
+  renderFilings(null);
   renderCompanyResults(payload.result);
 }
 
@@ -422,6 +466,39 @@ async function fetchFinancialStatements(candidate) {
   } catch (error) {
     financialStatementsStatus.textContent = "";
     showError(error instanceof Error ? error.message : "Financial statement request failed.");
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function fetchFiling(candidate) {
+  if (!candidate || state.busy) {
+    return;
+  }
+  const cik = identifierValue(candidate, "cik");
+  if (!cik) {
+    showError("Selected company does not include an SEC CIK.");
+    return;
+  }
+  clearError();
+  setBusy(true);
+  filingsStatus.textContent = "Fetching filing...";
+  try {
+    const payload = await requestJson("/api/filings/ingest", {
+      method: "POST",
+      body: JSON.stringify({
+        cik,
+        company_id: candidate.company.id,
+        legal_name: candidate.company.legal_name,
+        forms: ["10-K", "10-Q"],
+        limit: 1,
+        refresh: true,
+      }),
+    });
+    renderFilings(payload);
+  } catch (error) {
+    filingsStatus.textContent = "";
+    showError(error instanceof Error ? error.message : "Filing request failed.");
   } finally {
     setBusy(false);
   }

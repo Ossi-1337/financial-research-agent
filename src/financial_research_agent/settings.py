@@ -23,6 +23,9 @@ DEFAULT_MARKET_DATA_PROVIDER = "alpha-vantage"
 DEFAULT_MARKET_DATA_CACHE_TTL_DAYS = 1
 DEFAULT_FINANCIAL_STATEMENT_PROVIDER = "sec-companyfacts"
 DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS = 30
+DEFAULT_FILING_PROVIDER = "sec-edgar"
+DEFAULT_FILING_CACHE_TTL_DAYS = 30
+DEFAULT_FILING_MAX_DOCUMENT_BYTES = 8_000_000
 
 
 class ProviderTask(StrEnum):
@@ -189,6 +192,9 @@ class DataSourceSettings:
     alpha_vantage_api_key: str | None = None
     financial_statement_provider: str = DEFAULT_FINANCIAL_STATEMENT_PROVIDER
     financial_statement_cache_ttl_days: int = DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS
+    filing_provider: str = DEFAULT_FILING_PROVIDER
+    filing_cache_ttl_days: int = DEFAULT_FILING_CACHE_TTL_DAYS
+    filing_max_document_bytes: int = DEFAULT_FILING_MAX_DOCUMENT_BYTES
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -203,6 +209,7 @@ class DataSourceSettings:
             "financial_statement_provider",
             _require_text(self.financial_statement_provider),
         )
+        object.__setattr__(self, "filing_provider", _require_text(self.filing_provider))
         object.__setattr__(
             self, "alpha_vantage_api_key", _optional_text(self.alpha_vantage_api_key)
         )
@@ -212,6 +219,10 @@ class DataSourceSettings:
             raise ValueError("market_data_cache_ttl_days must be positive")
         if self.financial_statement_cache_ttl_days <= 0:
             raise ValueError("financial_statement_cache_ttl_days must be positive")
+        if self.filing_cache_ttl_days <= 0:
+            raise ValueError("filing_cache_ttl_days must be positive")
+        if self.filing_max_document_bytes <= 0:
+            raise ValueError("filing_max_document_bytes must be positive")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -223,6 +234,9 @@ class DataSourceSettings:
             "alpha_vantage_api_key_configured": self.alpha_vantage_api_key is not None,
             "financial_statement_provider": self.financial_statement_provider,
             "financial_statement_cache_ttl_days": self.financial_statement_cache_ttl_days,
+            "filing_provider": self.filing_provider,
+            "filing_cache_ttl_days": self.filing_cache_ttl_days,
+            "filing_max_document_bytes": self.filing_max_document_bytes,
         }
 
 
@@ -327,6 +341,21 @@ class Settings:
                     env,
                     "FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS",
                     DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS,
+                ),
+                filing_provider=_env_value(
+                    env,
+                    "FRA_FILING_PROVIDER",
+                    DEFAULT_FILING_PROVIDER,
+                ),
+                filing_cache_ttl_days=_env_int_value(
+                    env,
+                    "FRA_FILING_CACHE_TTL_DAYS",
+                    DEFAULT_FILING_CACHE_TTL_DAYS,
+                ),
+                filing_max_document_bytes=_env_int_value(
+                    env,
+                    "FRA_FILING_MAX_DOCUMENT_BYTES",
+                    DEFAULT_FILING_MAX_DOCUMENT_BYTES,
                 ),
             ),
         )
