@@ -48,6 +48,7 @@ from financial_research_agent.statements import (
     FinancialStatementStore,
     create_default_financial_statement_provider,
 )
+from financial_research_agent.storage import LocalStorageManager
 from financial_research_agent.web.sessions import ChatMention, ChatSessionStore
 
 SYSTEM_PROMPT = (
@@ -114,6 +115,7 @@ def create_app(
     financial_statement_store: FinancialStatementStore | None = None,
     filing_provider: FilingProvider | None = None,
     filing_store: FilingStore | None = None,
+    storage_manager: LocalStorageManager | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -129,6 +131,7 @@ def create_app(
     )
     filing_source = filing_provider or create_default_filing_provider(app_settings)
     filings = filing_store or FilingStore.from_settings(app_settings)
+    storage = storage_manager or LocalStorageManager.from_settings(app_settings)
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -142,6 +145,7 @@ def create_app(
     app.state.financial_statement_store = statement_store
     app.state.filing_provider = filing_source
     app.state.filing_store = filings
+    app.state.storage_manager = storage
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -191,7 +195,24 @@ def create_app(
                 "max_document_bytes": app_settings.data_sources.filing_max_document_bytes,
                 "stored_result_count": filings.count(),
             },
+            "storage": {
+                "provider": app_settings.storage.provider,
+                "app_home": str(app_settings.local_paths.app_home),
+                "dataset_count": len(storage.dataset_specs),
+            },
         }
+
+    @app.get("/api/storage")
+    def storage_status() -> dict[str, Any]:
+        return {"storage": storage.inspect().to_dict()}
+
+    @app.post("/api/storage/migrate")
+    def migrate_storage() -> dict[str, Any]:
+        return {"result": storage.migrate().to_dict()}
+
+    @app.delete("/api/storage/cache")
+    def clear_storage_cache() -> dict[str, Any]:
+        return {"result": storage.clear_cache().to_dict()}
 
     @app.post("/api/sessions")
     def create_session() -> dict[str, Any]:

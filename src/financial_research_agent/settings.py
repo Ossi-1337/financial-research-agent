@@ -26,6 +26,7 @@ DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS = 30
 DEFAULT_FILING_PROVIDER = "sec-edgar"
 DEFAULT_FILING_CACHE_TTL_DAYS = 30
 DEFAULT_FILING_MAX_DOCUMENT_BYTES = 8_000_000
+DEFAULT_STORAGE_PROVIDER = "local-json"
 
 
 class ProviderTask(StrEnum):
@@ -241,12 +242,24 @@ class DataSourceSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class StorageSettings:
+    provider: str = DEFAULT_STORAGE_PROVIDER
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "provider", _require_text(self.provider))
+
+    def to_dict(self) -> dict[str, object]:
+        return {"provider": self.provider}
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     environment: str
     local_paths: LocalPaths
     provider: ProviderSettings
     chat: ChatSettings
     data_sources: DataSourceSettings
+    storage: StorageSettings
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Self:
@@ -357,6 +370,9 @@ class Settings:
                     "FRA_FILING_MAX_DOCUMENT_BYTES",
                     DEFAULT_FILING_MAX_DOCUMENT_BYTES,
                 ),
+            ),
+            storage=StorageSettings(
+                provider=_env_value(env, "FRA_STORAGE_PROVIDER", DEFAULT_STORAGE_PROVIDER),
             ),
         )
 

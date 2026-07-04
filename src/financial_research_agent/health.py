@@ -8,9 +8,11 @@ from financial_research_agent import __version__
 from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
 from financial_research_agent.llm.openai import OpenAIProvider
 from financial_research_agent.settings import Settings
+from financial_research_agent.storage import LocalStorageManager
 
 
 def build_health_report(settings: Settings) -> dict[str, Any]:
+    storage = LocalStorageManager.from_settings(settings).inspect()
     report: dict[str, Any] = {
         "app": "financial-research-agent",
         "version": __version__,
@@ -21,6 +23,14 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
         },
         "provider": settings.provider.to_dict(),
         "data_sources": settings.data_sources.to_dict(),
+        "storage": {
+            "provider": storage.provider,
+            "app_home": str(storage.app_home),
+            "dataset_count": len(storage.datasets),
+            "existing_dataset_count": sum(1 for entry in storage.datasets if entry.exists),
+            "migration_count": len(storage.migrations),
+            "warnings": list(storage.warnings),
+        },
         "paths": settings.local_paths.to_dict(),
         "environment": settings.environment,
         "notes": [

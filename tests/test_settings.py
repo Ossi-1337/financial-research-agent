@@ -24,6 +24,7 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.data_sources.filing_provider == "sec-edgar"
     assert settings.data_sources.filing_cache_ttl_days == 30
     assert settings.data_sources.filing_max_document_bytes == 8_000_000
+    assert settings.storage.provider == "local-json"
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -62,6 +63,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_FILING_PROVIDER": "sec-edgar",
             "FRA_FILING_CACHE_TTL_DAYS": "12",
             "FRA_FILING_MAX_DOCUMENT_BYTES": "5000000",
+            "FRA_STORAGE_PROVIDER": "local-json",
         }
     )
 
@@ -102,6 +104,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.data_sources.filing_provider == "sec-edgar"
     assert settings.data_sources.filing_cache_ttl_days == 12
     assert settings.data_sources.filing_max_document_bytes == 5_000_000
+    assert settings.storage.provider == "local-json"
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:

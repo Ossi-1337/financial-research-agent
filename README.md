@@ -28,13 +28,14 @@ Implemented:
 - Alpha Vantage daily historical price ingestion with local JSON storage, freshness warnings, and deterministic price metrics.
 - SEC companyfacts financial statement ingestion with normalized statements, key ratios, local JSON storage, and source metadata.
 - SEC EDGAR filing/document ingestion for primary HTML/TXT filings with local raw document, extracted text, chunk metadata, and source metadata storage.
+- Local storage manifest, migration, cache inspection, cache clear, and local data reset commands for `FRA_HOME`.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
 - PDF, news, or macro ingestion.
-- Database, vector search, or RAG.
+- SQLite/remote database, vector search, or RAG.
 
 ## Setup
 
@@ -138,6 +139,24 @@ Raw documents, extracted text, chunks, and metadata are stored locally under
 PDF extraction, vector search, RAG, document interpretation, and redistribution are
 deferred.
 
+## Local Storage And Cache
+
+Local runtime state lives under `FRA_HOME`, which defaults to
+`~/.financial-research-agent`. Milestone 16 keeps the existing local JSON/file storage
+formats and adds shared inspection and maintenance commands:
+
+```powershell
+python -m financial_research_agent storage-status --pretty
+python -m financial_research_agent storage-migrate --pretty
+python -m financial_research_agent cache-clear --pretty
+python -m financial_research_agent data-reset --yes --pretty
+```
+
+`cache-clear` removes clearable provider cache entries, such as SEC company ticker cache,
+without deleting chat sessions or stored research data. `data-reset --yes` removes local
+chat/research data and cache files while leaving logs alone. Secrets are not stored in
+ordinary app tables or local JSON stores.
+
 ## Agent Prompts
 
 The tracked `financial_research_agent.agents` package defines reusable prompt contracts
@@ -198,7 +217,9 @@ Runtime references:
 Settings are read from real environment variables. `.env.example` documents the supported
 `FRA_*` variables. `FRA` means Financial Research Agent. The settings include
 task-specific provider/model overrides for chat, tool calling, structured output, and
-streaming. Chat history context is controlled by `FRA_CHAT_HISTORY_RECENT_TURNS` and
+streaming. Local storage is controlled by `FRA_HOME` and
+`FRA_STORAGE_PROVIDER=local-json`. Chat history context is controlled by
+`FRA_CHAT_HISTORY_RECENT_TURNS` and
 `FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS`. Company lookup is controlled by
 `FRA_COMPANY_LOOKUP_PROVIDER`, `FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS`, and
 `FRA_SEC_USER_AGENT`. Market data is controlled by `FRA_MARKET_DATA_PROVIDER`,

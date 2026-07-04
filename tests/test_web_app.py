@@ -114,7 +114,62 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["company_search"]["provider"] == "sec"
     assert payload["financial_statements"]["provider"] == "sec-companyfacts"
     assert payload["filings"]["provider"] == "sec-edgar"
+    assert payload["storage"]["provider"] == "local-json"
     assert "secret-value" not in json.dumps(payload)
+
+
+def test_storage_status_endpoint_reports_local_datasets(tmp_path) -> None:
+    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
+    cache_path = tmp_path / "cache" / "sec_company_tickers.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps({"version": 1, "retrieved_at": "2026-07-04T00:00:00+00:00", "records": []}),
+        encoding="utf-8",
+    )
+    client = _client(settings=settings)
+
+    response = client.get("/api/storage")
+    payload = response.json()["storage"]
+
+    assert response.status_code == 200
+    assert payload["provider"] == "local-json"
+    assert payload["app_home"] == str(tmp_path)
+    cache_entries = [
+        entry for entry in payload["datasets"] if entry["spec"]["id"] == "company_lookup_cache"
+    ]
+    assert cache_entries[0]["exists"] is True
+    assert cache_entries[0]["record_count"] == 0
+
+
+def test_storage_migrate_endpoint_creates_local_layout(tmp_path) -> None:
+    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
+    client = _client(settings=settings)
+
+    response = client.post("/api/storage/migrate")
+    payload = response.json()["result"]
+
+    assert response.status_code == 200
+    assert payload["applied_migrations"][0]["id"] == "0001_local_json_storage_layout"
+    assert tmp_path.joinpath("data", "storage_migrations.json").exists()
+
+
+def test_storage_cache_clear_endpoint_removes_cache_without_data(tmp_path) -> None:
+    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
+    cache_path = tmp_path / "cache" / "sec_company_tickers.json"
+    data_path = tmp_path / "data" / "chat_sessions.json"
+    cache_path.parent.mkdir(parents=True)
+    data_path.parent.mkdir(parents=True)
+    cache_path.write_text("{}", encoding="utf-8")
+    data_path.write_text("{}", encoding="utf-8")
+    client = _client(settings=settings)
+
+    response = client.delete("/api/storage/cache")
+    payload = response.json()["result"]
+
+    assert response.status_code == 200
+    assert payload["deleted_count"] == 1
+    assert not cache_path.exists()
+    assert data_path.exists()
 
 
 def test_session_creation_and_retrieval() -> None:

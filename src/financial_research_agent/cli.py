@@ -8,6 +8,7 @@ import uvicorn
 
 from financial_research_agent.health import build_health_report
 from financial_research_agent.settings import Settings
+from financial_research_agent.storage import LocalStorageManager
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,7 +19,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["health", "serve"],
+        choices=[
+            "health",
+            "serve",
+            "storage-status",
+            "storage-migrate",
+            "cache-clear",
+            "data-reset",
+        ],
         default="health",
         help="Command to run. Defaults to health.",
     )
@@ -34,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=8000,
         help="Port for the local web UI when using the serve command.",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm destructive local data reset.",
+    )
     return parser
 
 
@@ -44,7 +57,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "health":
         settings = Settings.from_env()
         health = build_health_report(settings)
-        print(json.dumps(health, indent=2 if args.pretty else None, sort_keys=True))
+        _print_json(health, pretty=args.pretty)
+        return 0
+
+    if args.command in {"storage-status", "storage-migrate", "cache-clear", "data-reset"}:
+        settings = Settings.from_env()
+        storage = LocalStorageManager.from_settings(settings)
+        if args.command == "storage-status":
+            _print_json(storage.inspect().to_dict(), pretty=args.pretty)
+            return 0
+        if args.command == "storage-migrate":
+            _print_json(storage.migrate().to_dict(), pretty=args.pretty)
+            return 0
+        if args.command == "cache-clear":
+            _print_json(storage.clear_cache().to_dict(), pretty=args.pretty)
+            return 0
+        if not args.yes:
+            parser.error("data-reset requires --yes")
+        _print_json(storage.reset_local_data().to_dict(), pretty=args.pretty)
         return 0
 
     if args.command == "serve":
@@ -56,6 +86,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.error(f"Unsupported command: {args.command}")
     return 2
+
+
+def _print_json(payload: object, *, pretty: bool) -> None:
+    print(json.dumps(payload, indent=2 if pretty else None, sort_keys=True))
 
 
 def _port_value(value: str) -> int:
