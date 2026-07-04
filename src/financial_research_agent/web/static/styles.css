@@ -30,11 +30,11 @@ body {
 .app-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(1120px, calc(100vw - 32px));
+  width: min(1180px, calc(100vw - 32px));
   min-height: 100vh;
   margin: 0 auto;
   padding: 18px 0;
-  gap: 14px;
+  gap: 16px;
 }
 
 .topbar {
@@ -73,14 +73,14 @@ h1 {
 
 .workspace {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
   gap: 14px;
   min-height: 0;
 }
 
 .session-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -106,137 +106,6 @@ h1 {
   padding: 10px;
   overflow-y: auto;
   list-style: none;
-}
-
-.company-lookup {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.company-search-form {
-  display: grid;
-  gap: 6px;
-}
-
-.company-search-form label {
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.company-search-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
-}
-
-.company-search-row input {
-  min-width: 0;
-  padding: 8px 9px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font: inherit;
-}
-
-.lookup-status {
-  min-height: 18px;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.company-results {
-  display: grid;
-  gap: 8px;
-  max-height: 230px;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-
-.company-result {
-  display: grid;
-  gap: 5px;
-  padding: 9px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
-}
-
-.company-result-title {
-  color: var(--text);
-  font-size: 0.86rem;
-  font-weight: 700;
-}
-
-.company-result-meta,
-.company-result-identifiers,
-.selected-company,
-.market-data-summary,
-.financial-statements-summary,
-.filings-summary {
-  color: var(--muted);
-  font-size: 0.76rem;
-  line-height: 1.35;
-}
-
-.select-company-button {
-  min-height: 30px;
-  padding: 6px 8px;
-}
-
-.selected-company {
-  display: grid;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--assistant);
-  color: var(--accent-strong);
-  font-weight: 700;
-}
-
-.fetch-market-button {
-  min-height: 30px;
-  padding: 6px 8px;
-}
-
-.fetch-statements-button {
-  min-height: 30px;
-  padding: 6px 8px;
-}
-
-.fetch-filing-button {
-  min-height: 30px;
-  padding: 6px 8px;
-}
-
-.market-data-summary,
-.financial-statements-summary,
-.filings-summary {
-  display: grid;
-  gap: 5px;
-  padding: 9px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
-}
-
-.market-data-title,
-.financial-statements-title,
-.filings-title {
-  color: var(--text);
-  font-weight: 700;
-}
-
-.market-data-warning,
-.financial-statements-warning,
-.filings-warning {
-  color: #8a4b00;
 }
 
 .session-button {
@@ -265,21 +134,22 @@ h1 {
 
 .chat-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--surface-muted);
   overflow: hidden;
 }
 
 .message-list {
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-height: 0;
   margin: 0;
-  padding: 18px;
+  padding: 28px 28px 18px;
   overflow-y: auto;
   list-style: none;
 }
@@ -310,7 +180,28 @@ h1 {
   font-size: 0.75rem;
 }
 
+.message-content {
+  overflow-wrap: anywhere;
+}
+
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 0 2px;
+  padding: 1px 7px;
+  border: 1px solid #8db8ff;
+  border-radius: 999px;
+  background: #eaf2ff;
+  color: #1358b7;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .error-banner {
+  z-index: 2;
+  grid-row: 1;
+  align-self: start;
   margin: 12px 12px 0;
   padding: 10px 12px;
   border: 1px solid #f0b3ad;
@@ -321,12 +212,16 @@ h1 {
 }
 
 .loading-row {
+  z-index: 2;
+  grid-row: 1;
+  align-self: end;
   padding: 0 18px 12px;
   color: var(--muted);
   font-size: 0.9rem;
 }
 
 .composer {
+  grid-row: 2;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
@@ -335,21 +230,91 @@ h1 {
   background: var(--surface-muted);
 }
 
-textarea {
+.composer-shell {
+  position: relative;
   width: 100%;
-  min-height: 64px;
-  max-height: 220px;
+}
+
+.message-input {
+  width: 100%;
+  min-height: 132px;
+  max-height: 240px;
+  overflow-y: auto;
   resize: vertical;
   padding: 11px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
+  background: var(--surface);
   color: var(--text);
   font: inherit;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
-textarea:focus {
+.message-input:empty::before {
+  color: var(--muted);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+.message-input:focus {
   border-color: var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.mention-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 3;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgb(23 32 42 / 14%);
+  list-style: none;
+}
+
+.mention-menu[hidden] {
+  display: none;
+}
+
+.mention-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.mention-option:hover,
+.mention-option.active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: var(--assistant);
+}
+
+.mention-option-title {
+  color: #1358b7;
+  font-weight: 800;
+}
+
+.mention-option-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 button {
@@ -410,7 +375,7 @@ button:disabled {
   }
 
   .chat-panel {
-    min-height: calc(100vh - 86px);
+    min-height: calc(100vh - 276px);
     border-right: 0;
     border-left: 0;
     border-radius: 0;
@@ -430,6 +395,10 @@ button:disabled {
 
   .composer {
     grid-template-columns: 1fr;
+  }
+
+  .message-list {
+    padding: 16px 12px;
   }
 
   button {

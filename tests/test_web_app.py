@@ -75,8 +75,23 @@ def test_root_html_and_static_asset_are_served() -> None:
 
     assert root_response.status_code == 200
     assert "Financial Research Agent" in root_response.text
+    assert 'id="mention-menu"' in root_response.text
+    assert 'id="company-search-form"' not in root_response.text
+    assert 'id="selected-company"' not in root_response.text
     assert css_response.status_code == 200
     assert "text/css" in css_response.headers["content-type"]
+    assert ".mention-menu[hidden]" in css_response.text
+    assert "display: none" in css_response.text
+
+
+def test_static_script_contains_mention_autocomplete_wiring() -> None:
+    client = _client()
+
+    response = client.get("/static/app.js")
+
+    assert response.status_code == 200
+    assert "/api/company-search?query=" in response.text
+    assert "mention-chip" in response.text
 
 
 def test_status_returns_chat_provider_without_secrets() -> None:
@@ -191,6 +206,43 @@ def test_chat_request_includes_financial_research_system_prompt() -> None:
     assert request.messages[-1].content == "Hello"
 
 
+def test_chat_request_accepts_mentions_and_adds_provider_context() -> None:
+    provider = CapturingProvider()
+    registry = ProviderRegistry().register_chat_provider("capture", provider)
+    settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
+    client = _client(settings=settings, registry=registry)
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={
+            "content": "Summarize @AAPL.",
+            "mentions": [
+                {
+                    "id": "sec:company:320193",
+                    "label": "AAPL",
+                    "company_id": "sec:company:320193",
+                    "legal_name": "TEST TOOL OUTPUT APPLE INC.",
+                    "ticker": "AAPL",
+                    "cik": "320193",
+                    "source_provider": "sec",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    user_message = payload["session"]["messages"][0]
+    assert user_message["mentions"][0]["label"] == "AAPL"
+    request = provider.requests[0]
+    assert "Resolved @company mentions" in request.messages[1].content
+    assert "ticker=AAPL" in request.messages[1].content
+    assert "cik=320193" in request.messages[1].content
+    assert "not live financial evidence" in request.messages[1].content
+    assert request.messages[-1].content == "Summarize @AAPL."
+
+
 def test_chat_request_uses_bounded_recent_context_and_summary(tmp_path) -> None:
     provider = CapturingProvider()
     registry = ProviderRegistry().register_chat_provider("capture", provider)
@@ -248,7 +300,20 @@ def test_provider_error_maps_to_http_error_and_does_not_mutate_session() -> None
     client = _client(registry=registry)
     session_id = client.post("/api/sessions").json()["session"]["id"]
 
-    response = client.post(f"/api/sessions/{session_id}/messages", json={"content": "Hello"})
+    response = client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={
+            "content": "Hello @AAPL",
+            "mentions": [
+                {
+                    "id": "sec:company:320193",
+                    "label": "AAPL",
+                    "company_id": "sec:company:320193",
+                    "legal_name": "TEST TOOL OUTPUT APPLE INC.",
+                }
+            ],
+        },
+    )
     retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
 
     assert response.status_code == 503

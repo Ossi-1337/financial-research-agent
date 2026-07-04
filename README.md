@@ -61,18 +61,9 @@ python -m financial_research_agent serve --host 127.0.0.1 --port 8000
 Then open `http://127.0.0.1:8000`. The UI uses the configured chat provider and model.
 Sessions are persisted under `FRA_HOME` and can be reopened or cleared locally. The chat
 endpoint does not use live financial data tools, RAG, or multi-agent orchestration yet.
-The sidebar company lookup searches SEC company tickers and returns candidates for review
-with source and freshness metadata. It does not infer prices, exchange MICs, ISINs, or
-financial facts.
-After selecting a candidate, the sidebar can fetch daily historical prices through the
-configured market data provider. Live price fetches require `FRA_ALPHA_VANTAGE_API_KEY`
-or `ALPHA_VANTAGE_API_KEY`.
-The same selected SEC candidate can fetch annual SEC companyfacts statements by CIK.
-Statement ingestion stores normalized rows locally and does not parse full filing PDFs,
-issuer-specific extension tags, or report presentation yet.
-The sidebar can also fetch the latest SEC 10-K/10-Q primary HTML/TXT filing document.
-Filing ingestion stores raw documents, extracted text, and deterministic chunks locally;
-the chat endpoint does not automatically use those chunks as evidence yet.
+Type `@company` in the composer to search SEC company tickers and insert a resolved
+company mention chip. Mentions are sent to the LLM as identifier context only; they do not
+automatically fetch prices, statements, filings, RAG evidence, or run agents.
 
 ## Tools
 
@@ -85,7 +76,8 @@ browse the web, use a database, or fetch prices/filings/news.
 
 ## Company Lookup
 
-The first entity-resolution source is the SEC company ticker list:
+The first entity-resolution source is the SEC company ticker list. In the UI, use
+`@company` mentions in the chat composer. The API endpoint remains available directly:
 
 ```powershell
 Invoke-RestMethod "http://127.0.0.1:8000/api/company-search?query=Novo%20Nordisk"

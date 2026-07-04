@@ -2,6 +2,7 @@
 
 from financial_research_agent.web.app import create_app
 from financial_research_agent.web.sessions import (
+    ChatMention,
     ChatSession,
     ChatSessionMessage,
     ChatSessionStore,
@@ -9,6 +10,7 @@ from financial_research_agent.web.sessions import (
 )
 
 __all__ = [
+    "ChatMention",
     "ChatSession",
     "ChatSessionMessage",
     "ChatSessionStore",

@@ -16,6 +16,49 @@ DEFAULT_SESSION_LIST_LIMIT = 50
 
 
 @dataclass(frozen=True, slots=True)
+class ChatMention:
+    id: str
+    label: str
+    company_id: str
+    legal_name: str
+    ticker: str | None = None
+    cik: str | None = None
+    source_provider: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _require_text("id", self.id))
+        object.__setattr__(self, "label", _require_text("label", self.label))
+        object.__setattr__(self, "company_id", _require_text("company_id", self.company_id))
+        object.__setattr__(self, "legal_name", _require_text("legal_name", self.legal_name))
+        object.__setattr__(self, "ticker", _optional_text(self.ticker))
+        object.__setattr__(self, "cik", _optional_text(self.cik))
+        object.__setattr__(self, "source_provider", _optional_text(self.source_provider))
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Self:
+        return cls(
+            id=_payload_text(payload, "id"),
+            label=_payload_text(payload, "label"),
+            company_id=_payload_text(payload, "company_id"),
+            legal_name=_payload_text(payload, "legal_name"),
+            ticker=_payload_optional_text(payload, "ticker"),
+            cik=_payload_optional_text(payload, "cik"),
+            source_provider=_payload_optional_text(payload, "source_provider"),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "company_id": self.company_id,
+            "legal_name": self.legal_name,
+            "ticker": self.ticker,
+            "cik": self.cik,
+            "source_provider": self.source_provider,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ChatSessionMessage:
     id: str
     role: MessageRole
@@ -24,6 +67,7 @@ class ChatSessionMessage:
     provider: str | None = None
     model: str | None = None
     research_run_id: str | None = None
+    mentions: tuple[ChatMention, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "role", MessageRole(self.role))
@@ -34,6 +78,7 @@ class ChatSessionMessage:
         object.__setattr__(self, "provider", _optional_text(self.provider))
         object.__setattr__(self, "model", _optional_text(self.model))
         object.__setattr__(self, "research_run_id", _optional_text(self.research_run_id))
+        object.__setattr__(self, "mentions", _mention_tuple(self.mentions))
         object.__setattr__(self, "created_at", _aware_datetime("created_at", self.created_at))
 
     @classmethod
@@ -46,6 +91,10 @@ class ChatSessionMessage:
             provider=_payload_optional_text(payload, "provider"),
             model=_payload_optional_text(payload, "model"),
             research_run_id=_payload_optional_text(payload, "research_run_id"),
+            mentions=tuple(
+                ChatMention.from_dict(_payload_mapping(item, "mention"))
+                for item in _payload_list(payload, "mentions")
+            ),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -57,6 +106,7 @@ class ChatSessionMessage:
             "provider": self.provider,
             "model": self.model,
             "research_run_id": self.research_run_id,
+            "mentions": [mention.to_dict() for mention in self.mentions],
         }
 
     def to_provider_message(self) -> ChatMessage:
@@ -201,6 +251,7 @@ class ChatSessionStore:
         provider: str,
         model: str,
         research_run_id: str | None = None,
+        mentions: tuple[ChatMention, ...] = (),
     ) -> ChatSession:
         with self._lock:
             session = self._sessions[_require_text("session_id", session_id)]
@@ -213,6 +264,7 @@ class ChatSessionStore:
                     content=user_content,
                     created_at=created_at,
                     research_run_id=research_run_id,
+                    mentions=mentions,
                 ),
                 ChatSessionMessage(
                     id=_new_id("message"),
@@ -325,6 +377,14 @@ def _message_tuple(messages: tuple[ChatSessionMessage, ...]) -> tuple[ChatSessio
     return result
 
 
+def _mention_tuple(mentions: tuple[ChatMention, ...]) -> tuple[ChatMention, ...]:
+    result = tuple(mentions)
+    for index, mention in enumerate(result):
+        if not isinstance(mention, ChatMention):
+            raise ValueError(f"mentions[{index}] must be a ChatMention")
+    return result
+
+
 def _require_text(name: str, value: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{name} must be a string")
@@ -392,6 +452,13 @@ def _payload_optional_text(payload: dict[str, Any], name: str) -> str | None:
     if not isinstance(value, str):
         raise ValueError(f"{name} must be a string")
     return _optional_text(value)
+
+
+def _payload_list(payload: dict[str, Any], name: str) -> list[Any]:
+    value = payload.get(name, [])
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list")
+    return value
 
 
 def _payload_mapping(value: Any, name: str) -> dict[str, Any]:

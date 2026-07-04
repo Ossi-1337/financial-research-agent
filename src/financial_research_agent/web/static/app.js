@@ -2,28 +2,16 @@ const state = {
   sessionId: null,
   messages: [],
   sessions: [],
-  companyResults: [],
-  selectedCompany: null,
-  marketData: null,
-  financialStatements: null,
-  filings: null,
   busy: false,
+  suggestions: [],
+  selectedSuggestionIndex: 0,
+  suggestionQuery: "",
+  suggestionRequestId: 0,
 };
 
 const form = document.querySelector("#chat-form");
-const companySearchForm = document.querySelector("#company-search-form");
-const companySearchInput = document.querySelector("#company-search-input");
-const companySearchButton = document.querySelector("#company-search-button");
-const companySearchStatus = document.querySelector("#company-search-status");
-const companyResults = document.querySelector("#company-results");
-const selectedCompany = document.querySelector("#selected-company");
-const marketDataStatus = document.querySelector("#market-data-status");
-const marketDataSummary = document.querySelector("#market-data-summary");
-const financialStatementsStatus = document.querySelector("#financial-statements-status");
-const financialStatementsSummary = document.querySelector("#financial-statements-summary");
-const filingsStatus = document.querySelector("#filings-status");
-const filingsSummary = document.querySelector("#filings-summary");
 const input = document.querySelector("#message-input");
+const mentionMenu = document.querySelector("#mention-menu");
 const sendButton = document.querySelector("#send-button");
 const messageList = document.querySelector("#message-list");
 const loadingRow = document.querySelector("#loading-row");
@@ -37,12 +25,13 @@ const clearSessionsButton = document.querySelector("#clear-sessions-button");
 function setBusy(value) {
   state.busy = value;
   sendButton.disabled = value;
-  input.disabled = value;
+  input.contentEditable = value ? "false" : "true";
   newSessionButton.disabled = value;
   clearSessionsButton.disabled = value;
-  companySearchInput.disabled = value;
-  companySearchButton.disabled = value;
   loadingRow.hidden = !value;
+  if (value) {
+    hideMentionMenu();
+  }
 }
 
 function showError(message) {
@@ -53,6 +42,43 @@ function showError(message) {
 function clearError() {
   errorBanner.textContent = "";
   errorBanner.hidden = true;
+}
+
+function mentionText(mention) {
+  return `@${mention.label}`;
+}
+
+function renderMessageContent(container, message) {
+  if (message.role !== "user" || !message.mentions?.length) {
+    container.textContent = message.content;
+    return;
+  }
+
+  const mentionsByLabel = new Map(message.mentions.map((mention) => [mention.label, mention]));
+  const labels = [...mentionsByLabel.keys()]
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const matcher = new RegExp(`@(${labels})`, "g");
+  let cursor = 0;
+  for (const match of message.content.matchAll(matcher)) {
+    if (match.index > cursor) {
+      container.append(document.createTextNode(message.content.slice(cursor, match.index)));
+    }
+    container.append(renderMentionChip(mentionsByLabel.get(match[1])));
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < message.content.length) {
+    container.append(document.createTextNode(message.content.slice(cursor)));
+  }
+}
+
+function renderMentionChip(mention) {
+  const chip = document.createElement("span");
+  chip.className = "mention-chip";
+  chip.textContent = mentionText(mention);
+  chip.dataset.mention = JSON.stringify(mention);
+  chip.contentEditable = "false";
+  return chip;
 }
 
 function renderMessages() {
@@ -69,7 +95,8 @@ function renderMessages() {
         : message.role;
 
     const content = document.createElement("div");
-    content.textContent = message.content;
+    content.className = "message-content";
+    renderMessageContent(content, message);
 
     item.append(meta, content);
     messageList.append(item);
@@ -101,16 +128,8 @@ function renderSessions() {
   }
 }
 
-function sourceTimestamp(candidate) {
-  const retrievedAt = candidate.source?.retrieved_at;
-  if (!retrievedAt) {
-    return "unknown freshness";
-  }
-  return new Date(retrievedAt).toLocaleString();
-}
-
 function primarySecurity(candidate) {
-  return candidate.securities[0] || { ticker: "unknown" };
+  return candidate.securities[0] || { ticker: null };
 }
 
 function identifierValue(candidate, type) {
@@ -121,199 +140,59 @@ function identifierValue(candidate, type) {
   );
 }
 
-function renderSelectedCompany() {
-  selectedCompany.innerHTML = "";
-  selectedCompany.hidden = state.selectedCompany === null;
-  if (!state.selectedCompany) {
-    return;
-  }
-  const security = primarySecurity(state.selectedCompany);
-  const text = document.createElement("div");
-  text.textContent = `Selected: ${state.selectedCompany.company.legal_name} / ${security.ticker}`;
-  const fetchButton = document.createElement("button");
-  fetchButton.type = "button";
-  fetchButton.className = "secondary-button fetch-market-button";
-  fetchButton.textContent = "Fetch prices";
-  fetchButton.addEventListener("click", () => fetchMarketData(state.selectedCompany));
-  const statementButton = document.createElement("button");
-  statementButton.type = "button";
-  statementButton.className = "secondary-button fetch-statements-button";
-  statementButton.textContent = "Fetch statements";
-  statementButton.disabled = identifierValue(state.selectedCompany, "cik") === null;
-  statementButton.addEventListener("click", () => fetchFinancialStatements(state.selectedCompany));
-  const filingButton = document.createElement("button");
-  filingButton.type = "button";
-  filingButton.className = "secondary-button fetch-filing-button";
-  filingButton.textContent = "Fetch filing";
-  filingButton.disabled = identifierValue(state.selectedCompany, "cik") === null;
-  filingButton.addEventListener("click", () => fetchFiling(state.selectedCompany));
-  selectedCompany.append(text, fetchButton, statementButton, filingButton);
+function mentionFromCandidate(candidate) {
+  const security = primarySecurity(candidate);
+  const label =
+    security.ticker || candidate.company.display_name || candidate.company.legal_name || "company";
+  return {
+    id: candidate.company.id,
+    label,
+    company_id: candidate.company.id,
+    legal_name: candidate.company.legal_name,
+    ticker: security.ticker || null,
+    cik: identifierValue(candidate, "cik"),
+    source_provider: candidate.source?.provider || null,
+  };
 }
 
-function renderMarketData(payload) {
-  state.marketData = payload;
-  marketDataSummary.innerHTML = "";
-  marketDataSummary.hidden = payload === null;
-  if (!payload) {
-    marketDataStatus.textContent = "";
-    return;
-  }
-  const history = payload.history;
-  const latestBar = history.bars[history.bars.length - 1];
-  const title = document.createElement("div");
-  title.className = "market-data-title";
-  title.textContent = `${history.security.symbol} latest close ${history.metrics.latest_close}`;
-  const meta = document.createElement("div");
-  meta.textContent = `${latestBar?.priced_at || "unknown date"} / ${history.source.provider}`;
-  const metrics = document.createElement("div");
-  metrics.textContent = `1d return ${history.metrics.return_1d || "n/a"} / max drawdown ${
-    history.metrics.max_drawdown || "n/a"
-  }`;
-  marketDataSummary.append(title, meta, metrics);
-  for (const warning of history.warnings || []) {
-    const warningRow = document.createElement("div");
-    warningRow.className = "market-data-warning";
-    warningRow.textContent = warning;
-    marketDataSummary.append(warningRow);
-  }
-  if (history.source.freshness_warning) {
-    const freshness = document.createElement("div");
-    freshness.className = "market-data-warning";
-    freshness.textContent = history.source.freshness_warning;
-    marketDataSummary.append(freshness);
-  }
-  marketDataStatus.textContent = payload.stored ? "Using stored prices" : "Prices fetched";
-}
-
-function statementCountByType(statements) {
-  return statements.reduce((counts, statement) => {
-    counts[statement.statement_type] = (counts[statement.statement_type] || 0) + 1;
-    return counts;
-  }, {});
-}
-
-function renderFinancialStatements(payload) {
-  state.financialStatements = payload;
-  financialStatementsSummary.innerHTML = "";
-  financialStatementsSummary.hidden = payload === null;
-  if (!payload) {
-    financialStatementsStatus.textContent = "";
-    return;
-  }
-  const result = payload.statements;
-  const statements = result.statements || [];
-  const latest = statements
-    .slice()
-    .sort((left, right) => right.period.period_end.localeCompare(left.period.period_end))[0];
-  const counts = statementCountByType(statements);
-  const title = document.createElement("div");
-  title.className = "financial-statements-title";
-  title.textContent = `${result.company.legal_name || result.company.cik} / ${
-    statements.length
-  } statement rows`;
-  const meta = document.createElement("div");
-  meta.textContent = `${latest?.period.period_end || "unknown period"} / ${result.source.provider}`;
-  const types = document.createElement("div");
-  types.textContent = Object.entries(counts)
-    .map(([type, count]) => `${type}: ${count}`)
-    .join(" / ");
-  financialStatementsSummary.append(title, meta, types);
-  for (const warning of result.warnings || []) {
-    const warningRow = document.createElement("div");
-    warningRow.className = "financial-statements-warning";
-    warningRow.textContent = warning;
-    financialStatementsSummary.append(warningRow);
-  }
-  if (result.source.freshness_warning) {
-    const freshness = document.createElement("div");
-    freshness.className = "financial-statements-warning";
-    freshness.textContent = result.source.freshness_warning;
-    financialStatementsSummary.append(freshness);
-  }
-  financialStatementsStatus.textContent = payload.stored
-    ? "Using stored statements"
-    : "Statements fetched";
-}
-
-function renderFilings(payload) {
-  state.filings = payload;
-  filingsSummary.innerHTML = "";
-  filingsSummary.hidden = payload === null;
-  if (!payload) {
-    filingsStatus.textContent = "";
-    return;
-  }
-  const result = payload.filings;
-  const latest = result.filings[0];
-  const title = document.createElement("div");
-  title.className = "filings-title";
-  title.textContent = `${latest.form_type} / ${latest.filing_date}`;
-  const meta = document.createElement("div");
-  meta.textContent = `${latest.accession_number} / ${result.chunks.length} chunks`;
-  const source = document.createElement("div");
-  source.textContent = latest.source.provider;
-  filingsSummary.append(title, meta, source);
-  for (const warning of result.warnings || []) {
-    const warningRow = document.createElement("div");
-    warningRow.className = "filings-warning";
-    warningRow.textContent = warning;
-    filingsSummary.append(warningRow);
-  }
-  if (result.source.freshness_warning) {
-    const freshness = document.createElement("div");
-    freshness.className = "filings-warning";
-    freshness.textContent = result.source.freshness_warning;
-    filingsSummary.append(freshness);
-  }
-  filingsStatus.textContent = payload.stored ? "Using stored filing" : "Filing fetched";
-}
-
-function renderCompanyResults(result) {
-  state.companyResults = result.candidates || [];
-  companyResults.innerHTML = "";
-  renderSelectedCompany();
-  if (result.status === "no_matches") {
-    companySearchStatus.textContent = "No matches";
-    return;
-  }
-  companySearchStatus.textContent =
-    state.companyResults.length === 1
-      ? "Review 1 candidate"
-      : `Review ${state.companyResults.length} candidates`;
-  for (const candidate of state.companyResults) {
-    const item = document.createElement("li");
-    item.className = "company-result";
+function renderMentionMenu() {
+  mentionMenu.innerHTML = "";
+  mentionMenu.hidden = state.suggestions.length === 0;
+  state.suggestions.forEach((candidate, index) => {
+    const mention = mentionFromCandidate(candidate);
     const security = primarySecurity(candidate);
-
-    const title = document.createElement("div");
-    title.className = "company-result-title";
-    title.textContent = candidate.company.legal_name;
-
-    const meta = document.createElement("div");
-    meta.className = "company-result-meta";
-    meta.textContent = `${security.ticker} / ${candidate.match_reason} / ${sourceTimestamp(candidate)}`;
-
-    const identifiers = document.createElement("div");
-    identifiers.className = "company-result-identifiers";
-    identifiers.textContent = candidate.company.identifiers
-      .map((identifier) => `${identifier.type.toUpperCase()}: ${identifier.value}`)
-      .join(" / ");
-
+    const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "secondary-button select-company-button";
-    button.textContent = "Select";
-    button.addEventListener("click", () => {
-      state.selectedCompany = candidate;
-      renderMarketData(null);
-      renderFinancialStatements(null);
-      renderFilings(null);
-      renderCompanyResults({ ...result, candidates: state.companyResults });
-    });
+    button.className =
+      index === state.selectedSuggestionIndex ? "mention-option active" : "mention-option";
 
-    item.append(title, meta, identifiers, button);
-    companyResults.append(item);
-  }
+    const title = document.createElement("span");
+    title.className = "mention-option-title";
+    title.textContent = mentionText(mention);
+
+    const meta = document.createElement("span");
+    meta.className = "mention-option-meta";
+    meta.textContent = security.ticker
+      ? `${candidate.company.legal_name} / ${security.ticker}`
+      : candidate.company.legal_name;
+
+    button.append(title, meta);
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      insertMention(candidate);
+    });
+    item.append(button);
+    mentionMenu.append(item);
+  });
+}
+
+function hideMentionMenu() {
+  state.suggestions = [];
+  state.selectedSuggestionIndex = 0;
+  state.suggestionQuery = "";
+  mentionMenu.hidden = true;
+  mentionMenu.innerHTML = "";
 }
 
 async function requestJson(url, options = {}) {
@@ -327,6 +206,150 @@ async function requestJson(url, options = {}) {
     throw new Error(detail.message || detail.error || `Request failed with ${response.status}`);
   }
   return payload;
+}
+
+async function loadMentionSuggestions(query) {
+  const requestId = ++state.suggestionRequestId;
+  const payload = await requestJson(
+    `/api/company-search?query=${encodeURIComponent(query)}&limit=5`
+  );
+  if (requestId !== state.suggestionRequestId) {
+    return;
+  }
+  state.suggestions = payload.result.candidates || [];
+  state.selectedSuggestionIndex = 0;
+  renderMentionMenu();
+}
+
+function textBeforeCaret() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !input.contains(selection.anchorNode)) {
+    return "";
+  }
+  const range = selection.getRangeAt(0).cloneRange();
+  range.selectNodeContents(input);
+  range.setEnd(selection.anchorNode, selection.anchorOffset);
+  return range.toString();
+}
+
+function activeMentionQuery() {
+  const match = textBeforeCaret().match(/(?:^|\s)@([A-Za-z0-9][A-Za-z0-9 ._-]{1,40})$/);
+  if (!match) {
+    return null;
+  }
+  return match[1].trim();
+}
+
+function textPosition(root, offset) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  let lastNode = null;
+  while (true) {
+    const node = walker.nextNode();
+    if (!node) {
+      break;
+    }
+    lastNode = node;
+    if (remaining <= node.nodeValue.length) {
+      return { node, offset: remaining };
+    }
+    remaining -= node.nodeValue.length;
+  }
+  if (lastNode) {
+    return { node: lastNode, offset: lastNode.nodeValue.length };
+  }
+  return { node: root, offset: root.childNodes.length };
+}
+
+function replaceActiveMentionText(chip) {
+  const before = textBeforeCaret();
+  const match = before.match(/(?:^|\s)@([A-Za-z0-9][A-Za-z0-9 ._-]{1,40})$/);
+  if (!match) {
+    return;
+  }
+  const endOffset = before.length;
+  const startOffset = endOffset - match[1].length - 1;
+  const start = textPosition(input, startOffset);
+  const end = textPosition(input, endOffset);
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  range.deleteContents();
+  const spacer = document.createTextNode(" ");
+  range.insertNode(spacer);
+  range.insertNode(chip);
+  range.setStartAfter(spacer);
+  range.collapse(true);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function insertMention(candidate) {
+  const mention = mentionFromCandidate(candidate);
+  replaceActiveMentionText(renderMentionChip(mention));
+  hideMentionMenu();
+  input.focus();
+}
+
+async function updateMentionQuery() {
+  if (state.busy) {
+    return;
+  }
+  const query = activeMentionQuery();
+  if (!query || query.length < 2) {
+    hideMentionMenu();
+    return;
+  }
+  if (query === state.suggestionQuery && state.suggestions.length > 0) {
+    return;
+  }
+  state.suggestionQuery = query;
+  try {
+    await loadMentionSuggestions(query);
+  } catch {
+    hideMentionMenu();
+  }
+}
+
+function editorText() {
+  function read(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.nodeValue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return "";
+    }
+    if (node.classList?.contains("mention-chip")) {
+      return node.textContent;
+    }
+    if (node.tagName === "BR") {
+      return "\n";
+    }
+    const childText = [...node.childNodes].map(read).join("");
+    if (node.tagName === "DIV" || node.tagName === "P") {
+      return `${childText}\n`;
+    }
+    return childText;
+  }
+  return read(input).replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function editorMentions() {
+  const mentions = [];
+  const seen = new Set();
+  for (const chip of input.querySelectorAll(".mention-chip[data-mention]")) {
+    try {
+      const mention = JSON.parse(chip.dataset.mention);
+      if (!seen.has(mention.id)) {
+        seen.add(mention.id);
+        mentions.push(mention);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return mentions;
 }
 
 async function loadStatus() {
@@ -388,140 +411,55 @@ async function clearSessions() {
   }
 }
 
-async function sendMessage(content) {
+async function sendMessage(content, mentions) {
   const payload = await requestJson(`/api/sessions/${state.sessionId}/messages`, {
     method: "POST",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, mentions }),
   });
   state.messages = payload.session.messages;
   await loadSessions();
   renderMessages();
 }
 
-async function searchCompanies(query) {
-  const payload = await requestJson(
-    `/api/company-search?query=${encodeURIComponent(query)}&limit=8`
-  );
-  state.selectedCompany = null;
-  renderMarketData(null);
-  renderFinancialStatements(null);
-  renderFilings(null);
-  renderCompanyResults(payload.result);
-}
+input.addEventListener("input", () => {
+  updateMentionQuery();
+});
 
-async function fetchMarketData(candidate) {
-  if (!candidate || state.busy) {
-    return;
+input.addEventListener("keydown", (event) => {
+  if (!mentionMenu.hidden && state.suggestions.length > 0) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      state.selectedSuggestionIndex =
+        (state.selectedSuggestionIndex + 1) % state.suggestions.length;
+      renderMentionMenu();
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      state.selectedSuggestionIndex =
+        (state.selectedSuggestionIndex - 1 + state.suggestions.length) % state.suggestions.length;
+      renderMentionMenu();
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      insertMention(state.suggestions[state.selectedSuggestionIndex]);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideMentionMenu();
+      return;
+    }
   }
-  const security = primarySecurity(candidate);
-  clearError();
-  setBusy(true);
-  marketDataStatus.textContent = "Fetching prices...";
-  try {
-    const payload = await requestJson("/api/market-data/history", {
-      method: "POST",
-      body: JSON.stringify({
-        symbol: security.ticker,
-        security_id: security.id,
-        exchange_mic: security.exchange_mic,
-        exchange_name: security.exchange_name,
-        currency: security.currency,
-        outputsize: "compact",
-        refresh: true,
-      }),
-    });
-    renderMarketData(payload);
-  } catch (error) {
-    marketDataStatus.textContent = "";
-    showError(error instanceof Error ? error.message : "Market data request failed.");
-  } finally {
-    setBusy(false);
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    form.requestSubmit();
   }
-}
+});
 
-async function fetchFinancialStatements(candidate) {
-  if (!candidate || state.busy) {
-    return;
-  }
-  const cik = identifierValue(candidate, "cik");
-  if (!cik) {
-    showError("Selected company does not include an SEC CIK.");
-    return;
-  }
-  clearError();
-  setBusy(true);
-  financialStatementsStatus.textContent = "Fetching statements...";
-  try {
-    const payload = await requestJson("/api/financial-statements", {
-      method: "POST",
-      body: JSON.stringify({
-        cik,
-        company_id: candidate.company.id,
-        legal_name: candidate.company.legal_name,
-        fiscal_years: 3,
-        refresh: true,
-      }),
-    });
-    renderFinancialStatements(payload);
-  } catch (error) {
-    financialStatementsStatus.textContent = "";
-    showError(error instanceof Error ? error.message : "Financial statement request failed.");
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function fetchFiling(candidate) {
-  if (!candidate || state.busy) {
-    return;
-  }
-  const cik = identifierValue(candidate, "cik");
-  if (!cik) {
-    showError("Selected company does not include an SEC CIK.");
-    return;
-  }
-  clearError();
-  setBusy(true);
-  filingsStatus.textContent = "Fetching filing...";
-  try {
-    const payload = await requestJson("/api/filings/ingest", {
-      method: "POST",
-      body: JSON.stringify({
-        cik,
-        company_id: candidate.company.id,
-        legal_name: candidate.company.legal_name,
-        forms: ["10-K", "10-Q"],
-        limit: 1,
-        refresh: true,
-      }),
-    });
-    renderFilings(payload);
-  } catch (error) {
-    filingsStatus.textContent = "";
-    showError(error instanceof Error ? error.message : "Filing request failed.");
-  } finally {
-    setBusy(false);
-  }
-}
-
-companySearchForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const query = companySearchInput.value.trim();
-  if (!query || state.busy) {
-    return;
-  }
-  clearError();
-  setBusy(true);
-  companySearchStatus.textContent = "Searching...";
-  try {
-    await searchCompanies(query);
-  } catch (error) {
-    companySearchStatus.textContent = "";
-    showError(error instanceof Error ? error.message : "Company search failed.");
-  } finally {
-    setBusy(false);
-    companySearchInput.focus();
-  }
+input.addEventListener("blur", () => {
+  window.setTimeout(hideMentionMenu, 120);
 });
 
 newSessionButton.addEventListener("click", async () => {
@@ -546,17 +484,18 @@ clearSessionsButton.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const content = input.value.trim();
+  const content = editorText();
   if (!content || state.busy || !state.sessionId) {
     return;
   }
+  const mentions = editorMentions();
   clearError();
   setBusy(true);
-  input.value = "";
+  input.innerHTML = "";
   try {
-    await sendMessage(content);
+    await sendMessage(content, mentions);
   } catch (error) {
-    input.value = content;
+    input.textContent = content;
     showError(error instanceof Error ? error.message : "Chat request failed.");
   } finally {
     setBusy(false);

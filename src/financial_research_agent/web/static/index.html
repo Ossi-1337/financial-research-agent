@@ -23,30 +23,6 @@
             <button id="clear-sessions-button" class="secondary-button" type="button">Clear</button>
           </div>
           <ol id="session-list" class="session-list"></ol>
-          <section class="company-lookup" aria-label="Company lookup">
-            <form id="company-search-form" class="company-search-form">
-              <label for="company-search-input">Company</label>
-              <div class="company-search-row">
-                <input
-                  id="company-search-input"
-                  name="company"
-                  maxlength="200"
-                  placeholder="Novo Nordisk"
-                  required
-                />
-                <button id="company-search-button" type="submit">Find</button>
-              </div>
-            </form>
-            <div id="company-search-status" class="lookup-status" aria-live="polite"></div>
-            <ol id="company-results" class="company-results"></ol>
-            <div id="selected-company" class="selected-company" hidden></div>
-            <div id="market-data-status" class="lookup-status" aria-live="polite"></div>
-            <div id="market-data-summary" class="market-data-summary" hidden></div>
-            <div id="financial-statements-status" class="lookup-status" aria-live="polite"></div>
-            <div id="financial-statements-summary" class="financial-statements-summary" hidden></div>
-            <div id="filings-status" class="lookup-status" aria-live="polite"></div>
-            <div id="filings-summary" class="filings-summary" hidden></div>
-          </section>
         </aside>
 
         <section class="chat-panel" aria-label="Chat">
@@ -55,14 +31,22 @@
           <div id="loading-row" class="loading-row" hidden>Thinking...</div>
           <form id="chat-form" class="composer">
             <label class="sr-only" for="message-input">Message</label>
-            <textarea
-              id="message-input"
-              name="message"
-              rows="3"
-              maxlength="20000"
-              placeholder="Ask a follow-up or start a company research question"
-              required
-            ></textarea>
+            <div class="composer-shell">
+              <div
+                id="message-input"
+                class="message-input"
+                role="textbox"
+                aria-multiline="true"
+                contenteditable="true"
+                data-placeholder="Ask a follow-up or start a company research question"
+              ></div>
+              <ol
+                id="mention-menu"
+                class="mention-menu"
+                aria-label="Company mention suggestions"
+                hidden
+              ></ol>
+            </div>
             <button id="send-button" type="submit">Send</button>
           </form>
         </section>

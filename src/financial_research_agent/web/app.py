@@ -48,7 +48,7 @@ from financial_research_agent.statements import (
     FinancialStatementStore,
     create_default_financial_statement_provider,
 )
-from financial_research_agent.web.sessions import ChatSessionStore
+from financial_research_agent.web.sessions import ChatMention, ChatSessionStore
 
 SYSTEM_PROMPT = (
     "You are a local financial research chat assistant. Sidebar data fetches may exist, but "
@@ -60,8 +60,19 @@ SYSTEM_PROMPT = (
 )
 
 
+class MentionRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=200)
+    company_id: str = Field(min_length=1, max_length=200)
+    legal_name: str = Field(min_length=1, max_length=300)
+    ticker: str | None = Field(default=None, max_length=32)
+    cik: str | None = Field(default=None, max_length=10, pattern="^[0-9]+$")
+    source_provider: str | None = Field(default=None, max_length=80)
+
+
 class MessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
+    mentions: tuple[MentionRequest, ...] = ()
 
 
 class MarketDataHistoryRequest(BaseModel):
@@ -344,6 +355,7 @@ def create_app(
         if session is None:
             raise HTTPException(status_code=404, detail={"error": "session_not_found"})
         content = _message_content(request.content)
+        mentions = _chat_mentions(request.mentions)
         selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
         try:
             provider = provider_registry.chat_provider(selection.provider)
@@ -355,6 +367,7 @@ def create_app(
                             summary_max_chars=sessions.summary_max_chars,
                         ),
                         content,
+                        mentions,
                     ),
                     model=selection.model,
                 )
@@ -371,6 +384,7 @@ def create_app(
             assistant_content=response.message.content,
             provider=response.provider,
             model=response.model,
+            mentions=mentions,
         )
         return {
             "session": updated_session.to_dict(),
@@ -398,12 +412,54 @@ def _message_content(content: str) -> str:
 def _request_messages(
     history: tuple[ChatMessage, ...],
     user_content: str,
+    mentions: tuple[ChatMention, ...] = (),
 ) -> tuple[ChatMessage, ...]:
+    mention_context = _mention_context_messages(mentions)
     return (
         ChatMessage(role=MessageRole.SYSTEM, content=SYSTEM_PROMPT),
         *history,
+        *mention_context,
         ChatMessage(role=MessageRole.USER, content=user_content),
     )
+
+
+def _chat_mentions(mentions: tuple[MentionRequest, ...]) -> tuple[ChatMention, ...]:
+    return tuple(
+        ChatMention(
+            id=mention.id,
+            label=mention.label,
+            company_id=mention.company_id,
+            legal_name=mention.legal_name,
+            ticker=mention.ticker,
+            cik=mention.cik,
+            source_provider=mention.source_provider,
+        )
+        for mention in mentions
+    )
+
+
+def _mention_context_messages(mentions: tuple[ChatMention, ...]) -> tuple[ChatMessage, ...]:
+    if not mentions:
+        return ()
+    lines = [
+        "Resolved @company mentions for this user message.",
+        "These are identifier context only, not live financial evidence.",
+        "Do not invent prices, statements, filings, or citations from these identifiers.",
+    ]
+    for index, mention in enumerate(mentions, start=1):
+        fields = [
+            f"label={mention.label}",
+            f"legal_name={mention.legal_name}",
+            f"company_id={mention.company_id}",
+        ]
+        if mention.ticker is not None:
+            fields.append(f"ticker={mention.ticker}")
+        if mention.cik is not None:
+            fields.append(f"cik={mention.cik}")
+        if mention.source_provider is not None:
+            fields.append(f"source_provider={mention.source_provider}")
+        lines.append(f"{index}. " + "; ".join(fields))
+    return (ChatMessage(role=MessageRole.SYSTEM, content="\n".join(lines)),)
 
 
 def _status_for_provider_error(code: ProviderErrorCode) -> int:

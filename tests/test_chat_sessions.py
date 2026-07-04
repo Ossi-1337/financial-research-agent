@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from financial_research_agent.llm import MessageRole
-from financial_research_agent.web.sessions import ChatSessionStore, summarize_messages
+from financial_research_agent.web.sessions import ChatMention, ChatSessionStore, summarize_messages
 
 
 def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
@@ -21,6 +21,17 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
         provider="offline-test",
         model="offline-test",
         research_run_id="research_run_1",
+        mentions=(
+            ChatMention(
+                id="sec:company:320193",
+                label="AAPL",
+                company_id="sec:company:320193",
+                legal_name="TEST TOOL OUTPUT APPLE INC.",
+                ticker="AAPL",
+                cik="320193",
+                source_provider="sec",
+            ),
+        ),
     )
     reloaded = ChatSessionStore(storage_path=storage_path, recent_turns=2, summary_max_chars=200)
     loaded = reloaded.get(session.id)
@@ -31,7 +42,46 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
     assert len(loaded.messages) == 2
     assert loaded.messages[0].role == MessageRole.USER
     assert loaded.messages[0].research_run_id == "research_run_1"
+    assert loaded.messages[0].mentions[0].label == "AAPL"
+    assert loaded.messages[0].mentions[0].cik == "320193"
     assert loaded.messages[1].provider == "offline-test"
+
+
+def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> None:
+    storage_path = tmp_path / "chat_sessions.json"
+    storage_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sessions": [
+                    {
+                        "id": "session_old",
+                        "created_at": "2026-07-04T12:00:00+00:00",
+                        "updated_at": "2026-07-04T12:00:00+00:00",
+                        "summary": None,
+                        "messages": [
+                            {
+                                "id": "message_old",
+                                "role": "user",
+                                "content": "Hello",
+                                "created_at": "2026-07-04T12:00:00+00:00",
+                                "provider": None,
+                                "model": None,
+                                "research_run_id": None,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = ChatSessionStore(storage_path=storage_path)
+    session = store.get("session_old")
+
+    assert session is not None
+    assert session.messages[0].mentions == ()
 
 
 def test_session_list_sorts_by_updated_at_and_clear_removes_persisted_sessions(
