@@ -1,53 +1,73 @@
 # Financial Research Agent
 
-Financial Research Agent is a local-first AI agent system for company and stock research.
-The project is currently a Python foundation with provider-neutral LLM contracts,
-an offline test provider, an OpenAI-compatible local endpoint adapter, and an optional
-hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
-not run multi-agent research yet. It ingests daily market data when a provider key is
-configured, SEC financial statements for SEC filers, and SEC HTML/TXT filing documents.
-A minimal local chat UI is available for direct LLM chat. Stored filing chunks can be
-indexed into a local vector retrieval index when an embedding provider is configured, and
-explicit cited-answer requests can attach source snippets and citations to chat messages.
-It also has a first financial report analysis agent that summarizes stored statements and
-filings into evidence-backed sections, plus a stock price analysis agent over stored
-market data and a context agent for source-linked news, macro, and sector inputs.
+[![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Docker Compose](https://img.shields.io/badge/runtime-Docker%20Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![llama.cpp](https://img.shields.io/badge/local%20LLM-llama.cpp-555555)](https://github.com/ggml-org/llama.cpp)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Status
+Financial Research Agent is a local-first research workspace for company and stock analysis.
 
-Implemented:
+It combines a lightweight chat UI, provider-neutral LLM adapters, deterministic tools, SEC
+filing and statement ingestion, local storage, retrieval, citations, and bounded specialist
+workflows. The project is designed so local models can run first, while hosted providers can
+be swapped in through the same interfaces when needed.
 
-- Python 3.14 package foundation.
-- Environment-driven local settings.
-- Health-check CLI.
-- Immutable domain models for financial research concepts.
-- Async-first LLM provider contracts for chat, tools, structured output, embeddings, streaming, model metadata, token usage, and provider errors.
-- Deterministic `offline-test` provider for tests and local development without network access.
-- `local-openai` provider adapter for OpenAI-compatible local endpoints.
-- `openai` provider adapter for hosted OpenAI Chat Completions and embeddings.
-- Local endpoint health checks for reachability, selected model, available models, capabilities, and known limitations.
-- Deterministic tool registry and guarded tool-call loop for local function calling.
-- Agent prompt contracts, role definitions, and structured JSON output schemas.
-- Local FastAPI chat UI with persistent local sessions, bounded context, and direct provider-backed responses.
-- SEC company ticker search for reviewable company/security entity candidates with cached source metadata.
-- Alpha Vantage daily historical price ingestion with local JSON storage, freshness warnings, and deterministic price metrics.
-- SEC companyfacts financial statement ingestion with normalized statements, key ratios, local JSON storage, and source metadata.
-- SEC EDGAR filing/document ingestion for primary HTML/TXT filings with local raw document, extracted text, chunk metadata, and source metadata storage.
-- Local storage manifest, migration, cache inspection, cache clear, and local data reset commands for `FRA_HOME`.
-- Local vector retrieval index for stored filing chunks with source-linked search results.
-- Cited-answer workflow that retrieves stored evidence, builds a source-limited prompt, stores citation research runs, and displays citations/snippets in chat messages.
-- Financial report analysis agent for stored statements and filing chunks with structured findings, citations, confidence labels, prior-period revenue comparison, and limitations.
-- Stock price analysis agent for stored market data with deterministic metrics, trend/volatility/drawdown/volume findings, benchmark comparison when available, and chart-ready data.
-- News, macro, and sector context agent for explicit source-linked inputs with recency, reliability, deduplication, and separate company/macro/sector findings.
+The goal is not to create an automated trading system. The goal is to make financial
+research workflows inspectable, source-aware, and runnable on a developer machine.
 
-Not implemented yet:
+## Requirements
 
-- Anthropic, Gemini, or gateway provider integrations.
-- Synthesis and orchestrator agent workflows.
-- PDF, automatic news, or macro ingestion.
-- SQLite/remote database or automatic chat RAG.
+- Python 3.14
+- Docker Desktop for the recommended local model setup
+- Optional NVIDIA GPU support for the default llama.cpp CUDA container
+- Optional Alpha Vantage API key for daily market data
+- Optional OpenAI API key for hosted LLM usage
+- A real SEC User-Agent/contact string for serious SEC EDGAR usage
 
-## Setup
+## Quick Start
+
+Run the full local stack with Docker Compose:
+
+```powershell
+docker compose up --build
+```
+
+Open the app:
+
+```text
+http://127.0.0.1:8000
+```
+
+The Compose setup starts:
+
+- `llama-cpp` on `http://127.0.0.1:8080/v1`
+- the Financial Research Agent web app on `http://127.0.0.1:8000`
+- a persistent Docker volume for local app data
+
+By default, Compose uses:
+
+```text
+unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL
+```
+
+The first run downloads the llama.cpp image and the selected GGUF model into your Hugging
+Face cache. Override the model if needed:
+
+```powershell
+$env:FRA_LOCAL_MODEL = "your-huggingface-gguf-repo:quant"
+docker compose up --build
+```
+
+Stop the stack:
+
+```powershell
+docker compose down
+```
+
+## Python Development
+
+Install the project locally:
 
 ```powershell
 python -m venv .venv
@@ -55,259 +75,111 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
-## Run
+Run the health check:
 
 ```powershell
 python -m financial_research_agent --pretty
 ```
 
-The default provider is `offline-test`, so no API keys or local model server are required.
-
-## Run Chat UI
-
-The recommended local setup is Docker Compose. It starts both the llama.cpp OpenAI-compatible
-server and the Financial Research Agent web UI:
-
-```powershell
-docker compose up --build
-```
-
-Then open `http://127.0.0.1:8000`. The default Compose model is
-`unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL`, cached through your
-Hugging Face cache path. Override it with `FRA_LOCAL_MODEL` if needed:
-
-```powershell
-$env:FRA_LOCAL_MODEL = "your-huggingface-gguf-repo:quant"
-docker compose up --build
-```
-
-Stop everything with:
-
-```powershell
-docker compose down
-```
-
-For Python-only development without the local model container, run the app directly:
+Run the web UI without Docker:
 
 ```powershell
 python -m financial_research_agent serve --host 127.0.0.1 --port 8000
 ```
 
-The UI uses the configured chat provider and model, shows submitted user messages
-immediately, and streams assistant responses into the chat.
-Sessions are persisted under `FRA_HOME` and can be reopened or cleared locally. The chat
-endpoint does not use live financial data tools, RAG, or multi-agent orchestration yet.
-Type `@company` in the composer to search SEC company tickers and insert a resolved
-company mention chip. Mentions are sent to the LLM as identifier context only; they do not
-automatically fetch prices, statements, filings, RAG evidence, or run agents.
+The default provider is `offline-test`, so the Python-only path works without API keys or
+a local model server. Configure `local-openai` or `openai` when you want real model calls.
 
-## Tools
+## What Works Today
 
-The tracked `financial_research_agent.tools` package defines deterministic tool contracts,
-a guarded registry, basic JSON-schema argument validation, and a provider-neutral tool-call
-loop. Current built-in tools are limited to UTC time, simple ratio calculation, a company
-lookup tool when a real provider is injected, a company lookup stub when no provider is
-injected, and injected in-memory evidence reads. They do not execute shell commands,
-browse the web, use a database, or fetch prices/filings/news.
+- Local chat UI with persisted sessions, bounded context, and streamed assistant output.
+- Inline `@company` mentions backed by SEC company ticker search.
+- Provider-neutral LLM contracts for chat, streaming, embeddings, tool calls, structured
+  output, model metadata, usage, and provider errors.
+- Deterministic `offline-test` provider for tests and local development.
+- OpenAI-compatible local provider for llama.cpp, Ollama, and similar local endpoints.
+- Optional hosted OpenAI provider.
+- Deterministic tool registry with guarded function calling.
+- SEC company lookup using the official company ticker list.
+- Alpha Vantage daily market data ingestion when an API key is configured.
+- SEC companyfacts financial statement ingestion for SEC filers.
+- SEC EDGAR filing ingestion for primary HTML/TXT documents.
+- Local raw document, extracted text, chunk, metadata, and JSON store management.
+- Local vector retrieval over stored filing chunks when embeddings are configured.
+- Explicit cited-answer workflow over retrieved local evidence.
+- Specialist analysis for financial reports, stock price history, and explicit
+  news/macro/sector context.
+- Bounded orchestrator workflow that coordinates company resolution, data refresh,
+  specialist runs, handoffs, and inspectable research run state.
 
-## Company Lookup
+## Not Built Yet
 
-The first entity-resolution source is the SEC company ticker list. In the UI, use
-`@company` mentions in the chat composer. The API endpoint remains available directly:
+- Anthropic, Gemini, and gateway provider adapters.
+- LLM-generated final research report synthesis.
+- Automatic news or macro ingestion.
+- PDF extraction.
+- SQLite or remote database storage.
+- Automatic chat RAG for every message.
+- Trading, broker integration, alerts, monitoring, or buy/sell/hold recommendations.
 
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/company-search?query=Novo%20Nordisk"
+## Architecture
+
+The system is split into replaceable boundaries:
+
+```text
+Chat UI / HTTP API
+        |
+        v
+Provider-neutral LLM layer
+        |
+        +--> offline-test
+        +--> local-openai  -> llama.cpp / Ollama / compatible local servers
+        +--> openai        -> hosted OpenAI-compatible calls
+
+Research workflow layer
+        |
+        +--> tools and tool-call runner
+        +--> prompt contracts
+        +--> retrieval and cited answers
+        +--> specialist agents
+        +--> orchestrator
+
+Data layer
+        |
+        +--> SEC company lookup
+        +--> Alpha Vantage market data
+        +--> SEC companyfacts statements
+        +--> SEC EDGAR filings
+        +--> local JSON/file stores under FRA_HOME
 ```
 
-Results are candidates for user review, not automatic selection. SEC ticker data includes
-CIK, ticker, and company title only, so missing exchange, currency, country, and ISIN fields
-are explicit until a later identifier source such as OpenFIGI is added.
+The orchestration policy is intentionally bounded and local-safe. Steps run through declared
+providers and stores, persist handoffs separately, and preserve partial results when one
+provider or specialist step fails.
 
-## Market Data
+## Configuration
 
-The first market data provider is Alpha Vantage daily prices:
+Settings are read from environment variables. `.env.example` documents the supported
+variables, but the app does not auto-load `.env` yet.
 
-```powershell
-$env:FRA_ALPHA_VANTAGE_API_KEY = "your-alpha-vantage-key"
-Invoke-RestMethod "http://127.0.0.1:8000/api/market-data/history" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"symbol":"NVO","refresh":true}'
-```
+`FRA` means Financial Research Agent.
 
-Historical bars are persisted locally under `FRA_HOME/data/market_data_price_bars.json`.
-The API returns source metadata, freshness warnings, and deterministic metrics including
-returns, moving averages, volatility, and max drawdown. This is delayed/provider-limited
-research data, not a trading feed.
+Common settings:
 
-## Financial Statements
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `FRA_HOME` | Local app data directory | `~/.financial-research-agent` |
+| `FRA_LLM_PROVIDER` | Main LLM provider | `offline-test` |
+| `FRA_LLM_MODEL` | Main LLM model | `offline-test` |
+| `FRA_LLM_BASE_URL` | OpenAI-compatible local endpoint | `http://127.0.0.1:8080/v1` |
+| `FRA_LLM_LOCAL_RUNTIME` | Local runtime label | `llama.cpp` |
+| `FRA_OPENAI_API_KEY` | Hosted OpenAI API key | empty |
+| `FRA_SEC_USER_AGENT` | SEC EDGAR User-Agent/contact | project placeholder |
+| `FRA_ALPHA_VANTAGE_API_KEY` | Alpha Vantage API key | empty |
+| `FRA_EMBEDDING_PROVIDER` | Embedding provider for retrieval | `disabled` |
+| `FRA_LOCAL_MODEL` | Docker Compose llama.cpp model | Mistral Small GGUF |
 
-The first financial statement provider is the official SEC companyfacts XBRL API for SEC
-filers:
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/financial-statements" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"cik":"0000320193","fiscal_years":3,"refresh":true}'
-```
-
-Statement results are persisted locally under `FRA_HOME/data/financial_statements.json`.
-The API returns normalized annual income statement, balance sheet, cash flow, and ratio
-rows where supported facts are available, plus source metadata and warnings for missing
-periods, restatements, ignored units, and stale cached data.
-
-## Filings
-
-The first filing document provider is SEC EDGAR submissions plus SEC Archives primary
-documents:
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/filings/ingest" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"cik":"0000320193","forms":["10-K","10-Q"],"limit":1,"refresh":true}'
-```
-
-Raw documents, extracted text, chunks, and metadata are stored locally under
-`FRA_HOME/data/filings/`. Only SEC primary HTML/TXT documents are extracted at runtime.
-PDF extraction, automatic chat RAG, document interpretation, and redistribution are
-deferred.
-
-## Retrieval
-
-Milestone 17 adds a small local vector index for already-ingested filing chunks. It does
-not fetch documents, run agents, or add retrieved snippets to ordinary chat automatically.
-Configure an embedding provider first, such as a local OpenAI-compatible embedding
-endpoint:
-
-```powershell
-$env:FRA_EMBEDDING_PROVIDER = "local-openai"
-$env:FRA_EMBEDDING_MODEL = "your-embedding-model"
-Invoke-RestMethod "http://127.0.0.1:8000/api/retrieval/index/filings" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"cik":"0000320193","rebuild":true}'
-Invoke-RestMethod "http://127.0.0.1:8000/api/retrieval/search" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"query":"revenue growth","top_k":5}'
-```
-
-The index is derived local data stored under `FRA_HOME/data/retrieval/vector_index.json`.
-It can be inspected or cleared without deleting the original filings:
-
-```powershell
-python -m financial_research_agent retrieval-status --pretty
-python -m financial_research_agent retrieval-clear --pretty
-```
-
-## Cited Answers
-
-Milestone 18 adds an explicit cited-answer endpoint for report-style retrieval. It searches
-the local retrieval index, sends only the selected evidence snippets to the configured chat
-provider, and stores the resulting citation run under `FRA_HOME/data/report_runs.json`.
-If no supporting evidence is retrieved, the API returns a limitation note instead of asking
-the model to invent support.
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/sessions/$sessionId/cited-answer" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"content":"What does the latest filing say about revenue?","top_k":5}'
-```
-
-Citations include source URL, chunk/source identifiers, section heading when available,
-retrieval timestamp, quote bounds, and a short quote/snippet. This is still not a
-multi-agent report workflow and does not provide buy/sell/hold recommendations.
-
-## Financial Report Analysis
-
-Milestone 19 adds a first specialist analysis agent for already-stored SEC statements and
-filing chunks. It does not fetch data by itself, analyze stock prices, use news/macro data,
-or produce an investment conclusion.
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/financial-report-analysis" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"cik":"0000320193","company_id":"sec:company:320193","legal_name":"Apple Inc."}'
-```
-
-The response includes sections for revenue, margins, cash flow, debt/liquidity, guidance,
-risks, and accounting caveats. Every finding includes cited evidence IDs or a limitation.
-
-## Stock Price Analysis
-
-Milestone 20 adds a specialist analysis agent for already-stored daily market data. It
-does not fetch prices by itself, produce trading signals, or integrate with brokers.
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/stock-price-analysis" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"symbol":"NVO","benchmark_symbol":"SPY"}'
-```
-
-The response includes deterministic metrics, findings for recent performance, trend,
-volatility, drawdown, volume, optional benchmark comparison, source/freshness warnings,
-and chart-ready close/volume series.
-
-## News, Macro, And Sector Context
-
-Milestone 21 adds a deterministic context agent for explicit source-linked news, macro,
-and sector inputs. It does not fetch articles, scrape the web, score sentiment, or mix
-macro/sector context into company fundamentals without source evidence.
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/context-analysis" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"query":"What is the current macro context?","region":"US","source_items":[{"id":"fed-rates","title":"Federal Reserve rate release","summary":"Official rate context.","source_url":"https://example.com/fed-rates","source_name":"Federal Reserve","source_type":"rates","reliability":"official","scope":"macro","retrieved_at":"2026-07-05T12:00:00+00:00","published_at":"2026-07-04T12:00:00+00:00","region":"US"}]}'
-```
-
-Responses include source URLs, publication/retrieval timestamps, source reliability,
-recency labels, deduplication warnings, and limitations when no reliable recent source is
-available.
-
-## Local Storage And Cache
-
-Local runtime state lives under `FRA_HOME`, which defaults to
-`~/.financial-research-agent`. Milestone 16 keeps the existing local JSON/file storage
-formats and adds shared inspection and maintenance commands:
-
-```powershell
-python -m financial_research_agent storage-status --pretty
-python -m financial_research_agent storage-migrate --pretty
-python -m financial_research_agent cache-clear --pretty
-python -m financial_research_agent data-reset --yes --pretty
-```
-
-`cache-clear` removes clearable provider cache entries, such as SEC company ticker cache,
-without deleting chat sessions or stored research data. `data-reset --yes` removes local
-chat/research data and cache files while leaving logs alone. Secrets are not stored in
-ordinary app tables or local JSON stores.
-
-## Agent Prompts
-
-The tracked `financial_research_agent.agents` package defines reusable prompt contracts
-for orchestrator, financial report, stock, news/macro, and synthesis roles. These contracts
-include allowed tool names and structured JSON output schemas. They do not run agents,
-call providers, fetch data, or produce investment recommendations.
-
-## Local Inference
-
-The first documented local runtime path is `llama.cpp` through its OpenAI-compatible
-server. The default path is Docker Compose:
-
-```powershell
-docker compose up --build
-```
-
-Compose exposes llama.cpp at `http://127.0.0.1:8080/v1` and the app at
-`http://127.0.0.1:8000`. Internally, the app uses `http://llama-cpp:8080/v1`.
-
-If you run `llama-server` yourself outside Compose, configure the app manually:
+Example local model configuration outside Docker Compose:
 
 ```powershell
 $env:FRA_LLM_PROVIDER = "local-openai"
@@ -317,19 +189,7 @@ $env:FRA_LLM_LOCAL_RUNTIME = "llama.cpp"
 python -m financial_research_agent --pretty
 ```
 
-The project does not bundle model files. The Compose llama.cpp service downloads the
-selected Hugging Face GGUF model on first run and reuses the configured Hugging Face cache.
-GPU-specific tuning is limited to the documented Compose defaults. Tool calls, structured
-output, and embeddings depend on the local server, model, chat template, and runtime flags.
-
-Ollama can also be used through its OpenAI-compatible endpoint by setting
-`FRA_LLM_BASE_URL` to `http://127.0.0.1:11434/v1` and
-`FRA_LLM_LOCAL_RUNTIME` to `ollama`.
-
-## Hosted OpenAI
-
-The hosted OpenAI adapter is optional and disabled unless selected in the environment.
-It uses direct async HTTP through `httpx`, not the OpenAI SDK:
+Example hosted OpenAI configuration:
 
 ```powershell
 $env:FRA_LLM_PROVIDER = "openai"
@@ -338,45 +198,114 @@ $env:FRA_OPENAI_API_KEY = "your-api-key"
 python -m financial_research_agent --pretty
 ```
 
-`OPENAI_API_KEY`, `OPENAI_ORG_ID`, and `OPENAI_PROJECT_ID` are also supported as fallback
-aliases. Do not commit real keys. The adapter uses Chat Completions for parity with
-local OpenAI-compatible runtimes; newer OpenAI-only workflows can add Responses API
-support behind the same provider boundary later.
+Do not commit real API keys.
 
-Runtime references:
+## CLI
 
-- llama.cpp server: https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
-- Ollama OpenAI compatibility: https://docs.ollama.com/api/openai-compatibility
-- OpenAI API overview: https://developers.openai.com/api/reference/overview/
-- OpenAI Chat Completions: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/
-- OpenAI embeddings: https://developers.openai.com/api/reference/resources/embeddings/methods/create/
-- SEC EDGAR APIs: https://www.sec.gov/search-filings/edgar-application-programming-interfaces
-- SEC EDGAR access policy: https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data
+```powershell
+python -m financial_research_agent --pretty
+python -m financial_research_agent serve --host 127.0.0.1 --port 8000
+python -m financial_research_agent storage-status --pretty
+python -m financial_research_agent storage-migrate --pretty
+python -m financial_research_agent cache-clear --pretty
+python -m financial_research_agent data-reset --yes --pretty
+python -m financial_research_agent retrieval-status --pretty
+python -m financial_research_agent retrieval-clear --pretty
+```
 
-## Configuration
+The installed console script is also available after `pip install -e .`:
 
-Settings are read from real environment variables. `.env.example` documents the supported
-`FRA_*` variables. `FRA` means Financial Research Agent. The settings include
-task-specific provider/model overrides for chat, tool calling, structured output, and
-streaming. Local storage is controlled by `FRA_HOME` and
-`FRA_STORAGE_PROVIDER=local-json`. Chat history context is controlled by
-`FRA_CHAT_HISTORY_RECENT_TURNS` and
-`FRA_CHAT_HISTORY_SUMMARY_MAX_CHARS`. Company lookup is controlled by
-`FRA_COMPANY_LOOKUP_PROVIDER`, `FRA_COMPANY_LOOKUP_CACHE_TTL_DAYS`, and
-`FRA_SEC_USER_AGENT`. Market data is controlled by `FRA_MARKET_DATA_PROVIDER`,
-`FRA_MARKET_DATA_CACHE_TTL_DAYS`, and `FRA_ALPHA_VANTAGE_API_KEY`.
-Financial statements are controlled by `FRA_FINANCIAL_STATEMENT_PROVIDER` and
-`FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS`. Filing ingestion is controlled by
-`FRA_FILING_PROVIDER`, `FRA_FILING_CACHE_TTL_DAYS`, and
-`FRA_FILING_MAX_DOCUMENT_BYTES`. Retrieval is controlled by
-`FRA_RETRIEVAL_PROVIDER`, `FRA_RETRIEVAL_TOP_K`, `FRA_RETRIEVAL_MIN_SCORE`,
-`FRA_EMBEDDING_PROVIDER`, and `FRA_EMBEDDING_MODEL`.
-`.env.example` is a reference file only; the app does not auto-load `.env` yet.
-SEC requests can return `403` when `FRA_SEC_USER_AGENT` does not include usable contact
-information. The default local value includes a project contact placeholder, but serious
-use should set a real contact string.
+```powershell
+financial-research-agent --pretty
+```
 
-## Verify
+## HTTP API
+
+Start the app first:
+
+```powershell
+python -m financial_research_agent serve --host 127.0.0.1 --port 8000
+```
+
+Core endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/status` | Runtime status without secrets |
+| `POST /api/sessions` | Create a chat session |
+| `GET /api/sessions/{session_id}` | Read a chat session |
+| `POST /api/sessions/{session_id}/messages/stream` | Stream a chat response |
+| `GET /api/company-search?query=...` | Search SEC company ticker candidates |
+| `POST /api/market-data/history` | Fetch/store daily market data |
+| `POST /api/financial-statements` | Fetch/store SEC companyfacts statements |
+| `POST /api/filings/ingest` | Fetch/store SEC filing documents |
+| `POST /api/retrieval/index/filings` | Index stored filing chunks |
+| `POST /api/retrieval/search` | Search the local vector index |
+| `POST /api/sessions/{session_id}/cited-answer` | Ask with retrieved citations |
+| `POST /api/financial-report-analysis` | Analyze stored statements and filings |
+| `POST /api/stock-price-analysis` | Analyze stored market data |
+| `POST /api/context-analysis` | Analyze explicit source-linked context |
+| `POST /api/orchestrator/research` | Run the bounded research workflow |
+| `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
+
+Example orchestrated research request:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/orchestrator/research" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"query":"Apple financial situation","refresh":true}'
+```
+
+## Local Data
+
+Local runtime data is stored under `FRA_HOME`, which defaults to:
+
+```text
+~/.financial-research-agent
+```
+
+The local store includes chat sessions, provider caches, market data, financial statements,
+filing documents, extracted text, retrieval indexes, cited-answer runs, and orchestrator
+run state. Secrets are not written into ordinary JSON data stores.
+
+Use these commands to inspect or clean local state:
+
+```powershell
+python -m financial_research_agent storage-status --pretty
+python -m financial_research_agent cache-clear --pretty
+python -m financial_research_agent data-reset --yes --pretty
+```
+
+`cache-clear` removes clearable provider caches. `data-reset --yes` removes local
+chat/research data and caches while leaving logs alone.
+
+## Data Sources
+
+| Area | Primary source | Notes |
+| --- | --- | --- |
+| Company lookup | SEC company ticker list | SEC filer coverage only |
+| Market data | Alpha Vantage daily prices | Requires API key; delayed/provider-limited |
+| Financial statements | SEC companyfacts XBRL JSON | SEC filers only |
+| Filings | SEC EDGAR submissions and Archives | Primary HTML/TXT extraction only |
+| Retrieval | Local vector index | Derived from already stored filing chunks |
+| Context | Explicit user/API-provided source items | No automatic news scraping yet |
+
+Every research path is expected to preserve source URLs, retrieval timestamps, provider
+labels, and limitations. Fake data is only for tests and clearly labeled fixtures.
+
+## Financial Advice Policy
+
+This project is for research support only. It does not provide personalized financial
+advice, trading signals, price targets, or buy/sell/hold recommendations.
+
+Outputs should be treated as source-linked analysis drafts that require human review.
+Provider limits, stale data, missing filings, incomplete identifiers, and local model
+limitations must be considered before using any result.
+
+## Testing
+
+Run the local verification suite:
 
 ```powershell
 python -m pytest
@@ -385,3 +314,38 @@ python -m ruff format --check .
 python -m compileall -q src tests
 git diff --check
 ```
+
+Validate Docker Compose without starting services:
+
+```powershell
+docker compose config
+```
+
+## Project Status
+
+Financial Research Agent is in active early development. The current codebase is useful as
+a local research foundation and integration testbed, but it is not a production investment
+platform.
+
+Near-term direction:
+
+- stronger orchestrated synthesis over stored specialist outputs
+- more provider adapters
+- richer report generation
+- better identifier resolution
+- PDF and additional document formats
+- stronger persistence options
+- more complete retrieval workflows
+
+## References
+
+- [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+- [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)
+- [OpenAI API reference](https://developers.openai.com/api/reference/overview/)
+- [SEC EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
+- [SEC EDGAR access policy](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data)
+- [Alpha Vantage documentation](https://www.alphavantage.co/documentation/)
+
+## License
+
+Financial Research Agent is licensed under the [MIT License](LICENSE).
