@@ -59,6 +59,7 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     calculate_price_metrics,
 )
+from financial_research_agent.orchestration import OrchestratorRunStore
 from financial_research_agent.reports import CitedResearchRunStore
 from financial_research_agent.retrieval import (
     IndexedChunk,
@@ -164,6 +165,9 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["report_runs"]["stored_run_count"] == 0
     assert payload["context_analysis"]["source"] == "explicit_source_items"
     assert payload["context_analysis"]["recommendations"] == "disabled"
+    assert payload["orchestration"]["execution_policy"] == "sequential_local_safe"
+    assert payload["orchestration"]["stored_run_count"] == 0
+    assert payload["orchestration"]["recommendations"] == "disabled"
     assert payload["storage"]["provider"] == "local-json"
     assert "secret-value" not in json.dumps(payload)
 
@@ -890,6 +894,7 @@ def _client(
     filing_store=None,
     retrieval_index=None,
     report_run_store=None,
+    orchestrator_run_store=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -907,6 +912,7 @@ def _client(
             filing_store=filing_store or FilingStore(),
             retrieval_index=retrieval_index or LocalVectorIndex(),
             report_run_store=report_run_store or CitedResearchRunStore(),
+            orchestrator_run_store=orchestrator_run_store or OrchestratorRunStore(),
         )
     )
 

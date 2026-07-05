@@ -32,6 +32,7 @@ def test_storage_specs_cover_current_local_stores_and_have_no_secrets(tmp_path: 
         StorageDataset.FILING_EXTRACTED_TEXT,
         StorageDataset.RETRIEVAL_VECTOR_INDEX,
         StorageDataset.REPORT_RUNS,
+        StorageDataset.ORCHESTRATOR_RUNS,
         StorageDataset.STORAGE_MIGRATIONS,
     }
     assert all(not spec.contains_secrets for spec in specs)

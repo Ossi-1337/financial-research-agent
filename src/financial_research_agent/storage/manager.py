@@ -343,6 +343,15 @@ def default_storage_dataset_specs(settings: Settings) -> tuple[StorageDatasetSpe
             description="Stored cited-answer research runs with citations and evidence snippets.",
         ),
         StorageDatasetSpec(
+            dataset=StorageDataset.ORCHESTRATOR_RUNS,
+            label="Orchestrator research runs",
+            area=StorageArea.DATA,
+            relative_path="orchestrator_runs.json",
+            storage_format=StorageFormat.JSON,
+            schema_version=1,
+            description="Stored orchestrator workflow state with specialist handoffs.",
+        ),
+        StorageDatasetSpec(
             dataset=StorageDataset.STORAGE_MIGRATIONS,
             label="Storage migrations",
             area=StorageArea.DATA,

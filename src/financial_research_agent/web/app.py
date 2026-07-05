@@ -51,6 +51,11 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     create_default_market_data_provider,
 )
+from financial_research_agent.orchestration import (
+    OrchestratorResearchInput,
+    OrchestratorRunStore,
+    ResearchOrchestrator,
+)
 from financial_research_agent.report_analysis import (
     FinancialReportAnalysisAgent,
     FinancialReportAnalysisCompany,
@@ -200,6 +205,18 @@ class ContextAnalysisRequest(BaseModel):
     source_items: tuple[ContextSourceItemRequest, ...] = ()
 
 
+class OrchestratorResearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2_000)
+    refresh: bool = True
+    company_search_limit: int = Field(default=3, ge=1, le=10)
+    fiscal_years: int = Field(default=3, ge=1, le=10)
+    filing_forms: tuple[str, ...] = ("10-K", "10-Q")
+    filing_limit: int = Field(default=1, ge=1, le=5)
+    market_outputsize: str = Field(default="compact", pattern="^(compact|full)$")
+    benchmark_symbol: str | None = Field(default=None, min_length=1, max_length=32)
+    context_source_items: tuple[ContextSourceItemRequest, ...] = ()
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -215,6 +232,7 @@ def create_app(
     storage_manager: LocalStorageManager | None = None,
     retrieval_index: LocalVectorIndex | None = None,
     report_run_store: CitedResearchRunStore | None = None,
+    orchestrator_run_store: OrchestratorRunStore | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -233,6 +251,7 @@ def create_app(
     storage = storage_manager or LocalStorageManager.from_settings(app_settings)
     retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
     report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
+    orchestrator_runs = orchestrator_run_store or OrchestratorRunStore.from_settings(app_settings)
     financial_report_agent = FinancialReportAnalysisAgent(
         statement_store=statement_store,
         filing_store=filings,
@@ -244,6 +263,19 @@ def create_app(
         market_data_provider=app_settings.data_sources.market_data_provider,
     )
     context_agent = NewsMacroSectorAgent()
+    orchestrator = ResearchOrchestrator(
+        company_search_provider=company_search,
+        market_data_provider=market_provider,
+        market_data_store=market_store,
+        financial_statement_provider=statement_provider,
+        financial_statement_store=statement_store,
+        filing_provider=filing_source,
+        filing_store=filings,
+        financial_report_agent=financial_report_agent,
+        stock_price_agent=stock_price_agent,
+        context_agent=context_agent,
+        run_store=orchestrator_runs,
+    )
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -260,9 +292,11 @@ def create_app(
     app.state.storage_manager = storage
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
+    app.state.orchestrator_run_store = orchestrator_runs
     app.state.financial_report_agent = financial_report_agent
     app.state.stock_price_agent = stock_price_agent
     app.state.context_agent = context_agent
+    app.state.orchestrator = orchestrator
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -338,6 +372,11 @@ def create_app(
             },
             "context_analysis": {
                 "source": "explicit_source_items",
+                "recommendations": "disabled",
+            },
+            "orchestration": {
+                "execution_policy": "sequential_local_safe",
+                "stored_run_count": orchestrator_runs.count(),
                 "recommendations": "disabled",
             },
             "storage": {
@@ -556,6 +595,44 @@ def create_app(
                 detail={"error": "invalid_context_source", "message": str(exc)},
             ) from exc
         return {"analysis": result.to_dict()}
+
+    @app.post("/api/orchestrator/research")
+    async def run_orchestrator_research(
+        request: OrchestratorResearchRequest,
+    ) -> dict[str, Any]:
+        try:
+            run = await orchestrator.run(
+                OrchestratorResearchInput(
+                    query=request.query,
+                    refresh=request.refresh,
+                    company_search_limit=request.company_search_limit,
+                    fiscal_years=request.fiscal_years,
+                    filing_forms=request.filing_forms,
+                    filing_limit=request.filing_limit,
+                    market_outputsize=request.market_outputsize,
+                    benchmark_symbol=request.benchmark_symbol,
+                    context_source_items=tuple(
+                        _context_source_item(item) for item in request.context_source_items
+                    ),
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_orchestrator_request", "message": str(exc)},
+            ) from exc
+        return {"run": run.to_dict()}
+
+    @app.get("/api/orchestrator/runs")
+    def list_orchestrator_runs() -> dict[str, Any]:
+        return {"runs": [run.to_dict() for run in orchestrator_runs.list()]}
+
+    @app.get("/api/orchestrator/runs/{run_id}")
+    def get_orchestrator_run(run_id: str) -> dict[str, Any]:
+        run = orchestrator_runs.get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
+        return {"run": run.to_dict()}
 
     @app.get("/api/retrieval/index")
     def get_retrieval_index() -> dict[str, Any]:
