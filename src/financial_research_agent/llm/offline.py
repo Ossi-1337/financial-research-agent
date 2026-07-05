@@ -111,7 +111,9 @@ class OfflineTestProvider:
                 structured_output=response.structured_output,
             )
 
-        for delta in response.message.content.split():
+        for index, delta in enumerate(response.message.content.split()):
+            if index > 0:
+                delta = f" {delta}"
             yield StreamEvent(event_type=StreamEventType.MESSAGE_DELTA, delta=delta)
 
         yield StreamEvent(event_type=StreamEventType.COMPLETED, response=response)

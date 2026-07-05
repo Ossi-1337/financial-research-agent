@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -31,6 +33,7 @@ from financial_research_agent.llm import (
     MessageRole,
     ProviderError,
     ProviderErrorCode,
+    StreamEventType,
 )
 from financial_research_agent.llm.registry import ProviderRegistry, create_default_provider_registry
 from financial_research_agent.market_data import (
@@ -669,6 +672,101 @@ def create_app(
             },
         }
 
+    @app.post("/api/sessions/{session_id}/messages/stream")
+    async def stream_message(
+        session_id: str,
+        request: MessageRequest,
+    ) -> StreamingResponse:
+        session = sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+        content = _message_content(request.content)
+        mentions = _chat_mentions(request.mentions)
+        selection = app_settings.provider.selection_for_task(ProviderTask.STREAMING)
+        try:
+            provider = provider_registry.chat_provider(selection.provider)
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=_status_for_provider_error(exc.code),
+                detail=_provider_error_detail(exc),
+            ) from exc
+        chat_request = ChatRequest(
+            messages=_request_messages(
+                session.context_messages(
+                    recent_turns=sessions.recent_turns,
+                    summary_max_chars=sessions.summary_max_chars,
+                ),
+                content,
+                mentions,
+            ),
+            model=selection.model,
+        )
+
+        async def events() -> AsyncIterator[str]:
+            collected_content: list[str] = []
+            try:
+                async for event in provider.stream_chat(chat_request):
+                    if event.event_type == StreamEventType.MESSAGE_DELTA:
+                        delta = event.delta or ""
+                        collected_content.append(delta)
+                        yield _stream_line({"type": "delta", "delta": delta})
+                    elif event.event_type == StreamEventType.ERROR and event.error is not None:
+                        yield _stream_error_line(event.error)
+                        return
+                    elif event.event_type == StreamEventType.COMPLETED:
+                        if event.response is None:
+                            yield _stream_error_line(
+                                ProviderError(
+                                    code=ProviderErrorCode.MALFORMED_RESPONSE,
+                                    message="Streaming provider completed without a response.",
+                                    provider=selection.provider,
+                                    model=selection.model,
+                                )
+                            )
+                            return
+                        response = event.response
+                        assistant_content = response.message.content or "".join(collected_content)
+                        updated_session = sessions.append_exchange(
+                            session_id=session_id,
+                            user_content=content,
+                            assistant_content=assistant_content,
+                            provider=response.provider,
+                            model=response.model,
+                            mentions=mentions,
+                        )
+                        yield _stream_line(
+                            {
+                                "type": "completed",
+                                "session": updated_session.to_dict(),
+                                "assistant_message": updated_session.messages[-1].to_dict(),
+                                "provider": response.provider,
+                                "model": response.model,
+                                "finish_reason": response.finish_reason.value,
+                                "usage": {
+                                    "input_tokens": response.usage.input_tokens,
+                                    "output_tokens": response.usage.output_tokens,
+                                    "total_tokens": response.usage.total_tokens,
+                                },
+                            }
+                        )
+                        return
+                yield _stream_error_line(
+                    ProviderError(
+                        code=ProviderErrorCode.MALFORMED_RESPONSE,
+                        message="Streaming provider ended without a completion event.",
+                        provider=selection.provider,
+                        model=selection.model,
+                    )
+                )
+            except ProviderError as exc:
+                yield _stream_error_line(exc)
+
+        return StreamingResponse(
+            events(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     return app
 
 
@@ -804,6 +902,20 @@ def _provider_error_detail(error: ProviderError) -> dict[str, Any]:
         "model": error.model,
         "retryable": error.retryable,
     }
+
+
+def _stream_line(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, separators=(",", ":")) + "\n"
+
+
+def _stream_error_line(error: ProviderError) -> str:
+    return _stream_line(
+        {
+            "type": "error",
+            "status": _status_for_provider_error(error.code),
+            "detail": _provider_error_detail(error),
+        }
+    )
 
 
 def _status_for_company_search_error(code: CompanySearchErrorCode) -> int:

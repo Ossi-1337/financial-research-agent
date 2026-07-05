@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -43,6 +44,8 @@ from financial_research_agent.llm import (
     ProviderCapability,
     ProviderError,
     ProviderErrorCode,
+    StreamEvent,
+    StreamEventType,
     TokenUsage,
 )
 from financial_research_agent.llm.registry import ProviderRegistry, create_offline_provider_registry
@@ -117,6 +120,10 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "/api/company-search?query=" in response.text
     assert "mention-chip" in response.text
     assert "Stop response" in response.text
+    assert "/messages/stream" in response.text
+    assert "appendOptimisticExchange" in response.text
+    assert "readNdjsonStream" in response.text
+    assert "getReader" in response.text
     assert "renderLoadingIndicator" in response.text
     assert "renderMessageCitations" in response.text
     assert "safeExternalUrl" in response.text
@@ -331,6 +338,73 @@ def test_chat_request_accepts_mentions_and_adds_provider_context() -> None:
     assert "cik=320193" in request.messages[1].content
     assert "not live financial evidence" in request.messages[1].content
     assert request.messages[-1].content == "Summarize @AAPL."
+
+
+def test_streaming_chat_message_emits_deltas_and_updates_session() -> None:
+    provider = CapturingProvider()
+    registry = ProviderRegistry().register_chat_provider("capture", provider)
+    settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
+    client = _client(settings=settings, registry=registry)
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    with client.stream(
+        "POST",
+        f"/api/sessions/{session_id}/messages/stream",
+        json={"content": "Stream this answer."},
+    ) as response:
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
+
+    assert response.status_code == 200
+    assert [event["type"] for event in events] == ["delta", "delta", "completed"]
+    assert "".join(event["delta"] for event in events if event["type"] == "delta") == (
+        "captured response"
+    )
+    assert events[-1]["assistant_message"]["content"] == "captured response"
+    assert events[-1]["session"]["messages"] == retrieved["messages"]
+    assert provider.requests[0].messages[-1].content == "Stream this answer."
+
+
+def test_streaming_provider_error_event_does_not_mutate_session() -> None:
+    error = ProviderError(
+        code=ProviderErrorCode.PROVIDER_UNAVAILABLE,
+        message="Local endpoint is unavailable.",
+        provider="offline-test",
+        retryable=True,
+    )
+    registry = ProviderRegistry().register_chat_provider(
+        "offline-test",
+        OfflineTestProvider(fail_with=error),
+    )
+    client = _client(registry=registry)
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    with client.stream(
+        "POST",
+        f"/api/sessions/{session_id}/messages/stream",
+        json={"content": "Hello"},
+    ) as response:
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
+
+    assert response.status_code == 200
+    assert events == [
+        {
+            "type": "error",
+            "status": 503,
+            "detail": {
+                "error": "provider_error",
+                "code": "provider_unavailable",
+                "message": "Local endpoint is unavailable.",
+                "provider": "offline-test",
+                "model": None,
+                "retryable": True,
+            },
+        }
+    ]
+    assert retrieved["messages"] == []
 
 
 def test_chat_request_uses_bounded_recent_context_and_summary(tmp_path) -> None:
@@ -844,6 +918,12 @@ class CapturingProvider:
             provider="capture",
             model=request.model or "capture-model",
         )
+
+    async def stream_chat(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
+        response = await self.chat(request)
+        yield StreamEvent(event_type=StreamEventType.MESSAGE_DELTA, delta="captured")
+        yield StreamEvent(event_type=StreamEventType.MESSAGE_DELTA, delta=" response")
+        yield StreamEvent(event_type=StreamEventType.COMPLETED, response=response)
 
 
 class FakeCompanySearchProvider:

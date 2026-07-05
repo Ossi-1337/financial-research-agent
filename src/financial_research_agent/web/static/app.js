@@ -65,6 +65,12 @@ function safeExternalUrl(value) {
 }
 
 function renderMessageContent(container, message) {
+  if (message.role === "assistant" && message.streaming && !message.content) {
+    container.classList.add("pending");
+    container.textContent = "Thinking...";
+    return;
+  }
+
   if (message.role !== "user" || !message.mentions?.length) {
     container.textContent = message.content;
     return;
@@ -168,7 +174,8 @@ function renderMessages() {
     renderMessageCitations(item, message);
     messageList.append(item);
   }
-  if (state.busy) {
+  const hasStreamingMessage = state.messages.some((message) => message.streaming);
+  if (state.busy && !hasStreamingMessage) {
     messageList.append(renderLoadingIndicator());
   }
   messageList.scrollTop = messageList.scrollHeight;
@@ -283,6 +290,100 @@ async function requestJson(url, options = {}) {
     throw new Error(detail.message || detail.error || `Request failed with ${response.status}`);
   }
   return payload;
+}
+
+async function errorMessageFromResponse(response) {
+  try {
+    const payload = await response.json();
+    const detail = payload.detail || {};
+    return detail.message || detail.error || `Request failed with ${response.status}`;
+  } catch {
+    return `Request failed with ${response.status}`;
+  }
+}
+
+function pendingId(prefix) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function appendOptimisticExchange(content, mentions) {
+  const createdAt = new Date().toISOString();
+  const userId = pendingId("pending_user");
+  const assistantId = pendingId("pending_assistant");
+  state.messages = [
+    ...state.messages,
+    {
+      id: userId,
+      role: "user",
+      content,
+      created_at: createdAt,
+      provider: null,
+      model: null,
+      research_run_id: null,
+      mentions,
+      citations: [],
+      evidence_snippets: [],
+      pending: true,
+    },
+    {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      created_at: createdAt,
+      provider: null,
+      model: null,
+      research_run_id: null,
+      mentions: [],
+      citations: [],
+      evidence_snippets: [],
+      streaming: true,
+    },
+  ];
+  renderMessages();
+  return { userId, assistantId };
+}
+
+function removeOptimisticExchange(pending) {
+  state.messages = state.messages.filter(
+    (message) => message.id !== pending.userId && message.id !== pending.assistantId
+  );
+  renderMessages();
+}
+
+function appendAssistantDelta(assistantId, delta) {
+  const message = state.messages.find((item) => item.id === assistantId);
+  if (!message) {
+    return;
+  }
+  message.content += delta;
+  renderMessages();
+}
+
+async function readNdjsonStream(response, onEvent) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Streaming response is not readable.");
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (line.trim()) {
+        await onEvent(JSON.parse(line));
+      }
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    await onEvent(JSON.parse(buffer));
+  }
 }
 
 async function loadMentionSuggestions(query) {
@@ -488,17 +589,38 @@ async function clearSessions() {
   }
 }
 
-async function sendMessage(content, mentions) {
+async function sendMessage(content, mentions, assistantId) {
   state.abortController = new AbortController();
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/messages`, {
+  const response = await fetch(`/api/sessions/${state.sessionId}/messages/stream`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content, mentions }),
     signal: state.abortController.signal,
   });
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
+  let completed = false;
+  await readNdjsonStream(response, async (event) => {
+    if (event.type === "delta") {
+      appendAssistantDelta(assistantId, event.delta || "");
+      return;
+    }
+    if (event.type === "error") {
+      const detail = event.detail || {};
+      throw new Error(detail.message || detail.error || "Chat request failed.");
+    }
+    if (event.type === "completed") {
+      completed = true;
+      state.messages = event.session.messages;
+      await loadSessions();
+      renderMessages();
+    }
+  });
+  if (!completed) {
+    throw new Error("Chat stream ended before the response completed.");
+  }
   state.abortController = null;
-  state.messages = payload.session.messages;
-  await loadSessions();
-  renderMessages();
 }
 
 input.addEventListener("input", () => {
@@ -583,11 +705,13 @@ form.addEventListener("submit", async (event) => {
   }
   const mentions = editorMentions();
   clearError();
-  setBusy(true);
   input.innerHTML = "";
+  const pending = appendOptimisticExchange(content, mentions);
+  setBusy(true);
   try {
-    await sendMessage(content, mentions);
+    await sendMessage(content, mentions, pending.assistantId);
   } catch (error) {
+    removeOptimisticExchange(pending);
     if (error instanceof DOMException && error.name === "AbortError") {
       showError("Response stopped.");
     } else {
