@@ -8,6 +8,7 @@ param(
     [int] $AppPort = 8000,
     [int] $ContextSize = 32768,
     [int] $GpuLayers = 99,
+    [int] $DockerRunWaitSeconds = 120,
     [int] $LlamaWaitSeconds = 1800,
     [int] $AppWaitSeconds = 60,
     [string] $HuggingFaceCache = (Join-Path $env:USERPROFILE ".cache\huggingface"),
@@ -25,6 +26,9 @@ $LogDir = Join-Path $RepoRoot ".codex\logs"
 $AppOutLog = Join-Path $LogDir "chat-ui.out.log"
 $AppErrLog = Join-Path $LogDir "chat-ui.err.log"
 $AppPidFile = Join-Path $LogDir "chat-ui.pid"
+$DockerRunOutLog = Join-Path $LogDir "llama-docker-run.out.log"
+$DockerRunErrLog = Join-Path $LogDir "llama-docker-run.err.log"
+$script:ActiveContainerName = $ContainerName
 
 function Test-CommandAvailable {
     param([string] $Name)
@@ -34,12 +38,111 @@ function Test-CommandAvailable {
 function Get-ContainerRunning {
     param([string] $Name)
 
-    $running = & docker inspect --format "{{.State.Running}}" $Name 2>$null
+    $status = & docker ps -a --filter "name=^/$Name$" --format "{{.Status}}" 2>$null
     if ($LASTEXITCODE -ne 0) {
         return $null
     }
 
-    return $running.Trim() -eq "true"
+    $statusText = (($status | Select-Object -First 1) -as [string]).Trim()
+    if ($statusText -eq "") {
+        return $null
+    }
+
+    return $statusText.StartsWith("Up", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Remove-ContainerWithTimeout {
+    param(
+        [string] $Name,
+        [int] $TimeoutSeconds = 30
+    )
+
+    $process = Start-Process `
+        -FilePath "docker" `
+        -ArgumentList @("rm", "-f", $Name) `
+        -WindowStyle Hidden `
+        -PassThru
+
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    return $process.ExitCode -eq 0
+}
+
+function New-FallbackContainerName {
+    param([string] $BaseName)
+
+    return "$BaseName-$([DateTime]::UtcNow.ToString("yyyyMMddHHmmss"))"
+}
+
+function Start-DockerRunWithTimeout {
+    param([string[]] $Arguments)
+
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    Remove-Item -LiteralPath $DockerRunOutLog, $DockerRunErrLog -ErrorAction SilentlyContinue
+
+    $process = Start-Process `
+        -FilePath "docker" `
+        -ArgumentList $Arguments `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $DockerRunOutLog `
+        -RedirectStandardError $DockerRunErrLog `
+        -PassThru
+
+    if (-not $process.WaitForExit($DockerRunWaitSeconds * 1000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $errorTail = ""
+        if (Test-Path -LiteralPath $DockerRunErrLog) {
+            $errorTail = (Get-Content -LiteralPath $DockerRunErrLog -Tail 40 | Out-String).Trim()
+        }
+
+        $message = (
+            "Docker did not finish starting llama.cpp within $DockerRunWaitSeconds seconds. " +
+            "Docker Desktop or the NVIDIA container runtime may be stuck. " +
+            "Restart Docker Desktop and try again. Docker error log: $DockerRunErrLog"
+        )
+        if ($errorTail -ne "") {
+            $message += "`nDocker error log tail:`n$errorTail"
+        }
+        throw $message
+    }
+
+    if ($process.ExitCode -ne 0) {
+        $errorTail = ""
+        if (Test-Path -LiteralPath $DockerRunErrLog) {
+            $errorTail = (Get-Content -LiteralPath $DockerRunErrLog -Tail 40 | Out-String).Trim()
+        }
+
+        if ($errorTail -ne "") {
+            throw "Docker failed to start llama.cpp. Error log tail:`n$errorTail"
+        }
+
+        throw "Docker failed to start llama.cpp with exit code $($process.ExitCode)."
+    }
+
+    if (Test-Path -LiteralPath $DockerRunOutLog) {
+        $containerId = (Get-Content -LiteralPath $DockerRunOutLog -Raw).Trim()
+        if ($containerId -ne "") {
+            Write-Host $containerId
+        }
+    }
+}
+
+function Ensure-DockerImage {
+    param([string] $Image)
+
+    & docker image inspect $Image *> $null
+    if ($LASTEXITCODE -eq 0) {
+        return
+    }
+
+    Write-Host "Pulling Docker image: $Image"
+    & docker pull $Image | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not pull Docker image: $Image"
+    }
 }
 
 function Test-PortListening {
@@ -209,21 +312,32 @@ function Start-LlamaServer {
         throw "Docker is not running. Start Docker Desktop first."
     }
 
+    Ensure-DockerImage -Image $DockerImage
     New-Item -ItemType Directory -Force -Path $HuggingFaceCache | Out-Null
 
     if ($RestartLlama) {
         Write-Host "Restarting llama.cpp container '$ContainerName'..."
-        & docker rm -f $ContainerName *> $null
+        if (-not (Remove-ContainerWithTimeout -Name $ContainerName)) {
+            throw "Could not remove existing llama.cpp container '$ContainerName'. Restart Docker Desktop and try again."
+        }
     }
 
     $isRunning = Get-ContainerRunning -Name $ContainerName
     if ($isRunning -eq $true) {
+        $script:ActiveContainerName = $ContainerName
         Write-Host "llama.cpp container already running: $ContainerName"
         return
     }
 
     if ($isRunning -eq $false) {
-        & docker rm -f $ContainerName *> $null
+        Write-Host "Removing stale llama.cpp container '$ContainerName'..."
+        if (-not (Remove-ContainerWithTimeout -Name $ContainerName)) {
+            $script:ActiveContainerName = New-FallbackContainerName -BaseName $ContainerName
+            Write-Warning (
+                "Could not remove stale container '$ContainerName' within 30 seconds. " +
+                "Starting a new container named '$script:ActiveContainerName' instead."
+            )
+        }
     }
 
     if (Test-PortListening -Port $LlamaPort) {
@@ -238,7 +352,7 @@ function Start-LlamaServer {
         "--gpus",
         "all",
         "--name",
-        $ContainerName,
+        $script:ActiveContainerName,
         "-p",
         "${LlamaPort}:8080",
         "-v",
@@ -257,7 +371,7 @@ function Start-LlamaServer {
         "$GpuLayers"
     )
 
-    & docker @dockerArgs | Out-Host
+    Start-DockerRunWithTimeout -Arguments $dockerArgs
 }
 
 function Start-AppServer {
@@ -359,10 +473,10 @@ Write-Host "Ready."
 Write-Host "Open: $appUrl"
 Write-Host "App logs: $AppOutLog"
 Write-Host "App errors: $AppErrLog"
-Write-Host "Docker logs: docker logs -f $ContainerName"
+Write-Host "Docker logs: docker logs -f $script:ActiveContainerName"
 Write-Host ""
 Write-Host "Stop later:"
-Write-Host "  docker stop $ContainerName"
+Write-Host "  docker stop $script:ActiveContainerName"
 if (Test-Path -LiteralPath $AppPidFile) {
     $recordedPid = (Get-Content -LiteralPath $AppPidFile -Raw).Trim()
     if ($recordedPid -ne "") {
