@@ -1,0 +1,60 @@
+name: financial-research-agent
+
+services:
+  llama-cpp:
+    image: ${FRA_LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    container_name: fra-llama-cpp
+    gpus: all
+    ports:
+      - "${FRA_LLAMA_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: ${FRA_HUGGINGFACE_CACHE:-${USERPROFILE}/.cache/huggingface}
+        target: /root/.cache/huggingface
+    command:
+      - -hf
+      - ${FRA_LOCAL_MODEL:-unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --ctx-size
+      - ${FRA_LLAMA_CTX_SIZE:-32768}
+      - --jinja
+      - -ngl
+      - ${FRA_LLAMA_GPU_LAYERS:-99}
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fra-chat-ui
+    depends_on:
+      - llama-cpp
+    ports:
+      - "${FRA_APP_PORT:-8000}:8000"
+    environment:
+      FRA_ENV: local
+      FRA_HOME: /app/.financial-research-agent
+      FRA_LLM_PROVIDER: local-openai
+      FRA_LLM_MODEL: ${FRA_LOCAL_MODEL:-unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL}
+      FRA_LLM_BASE_URL: http://llama-cpp:8080/v1
+      FRA_LLM_LOCAL_RUNTIME: llama.cpp
+      FRA_LLM_TIMEOUT_SECONDS: ${FRA_LLM_TIMEOUT_SECONDS:-30}
+      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact-not-configured}
+      FRA_STORAGE_PROVIDER: local-json
+      FRA_RETRIEVAL_PROVIDER: local-vector
+    volumes:
+      - fra-data:/app/.financial-research-agent
+    command:
+      - python
+      - -m
+      - financial_research_agent
+      - serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+
+volumes:
+  fra-data:

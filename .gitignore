@@ -72,6 +72,7 @@ vite.svg
 # Local app data, databases, and cache
 .fra/
 .financial-research-agent/
+.docker/
 data/
 cache/
 .cache/
@@ -105,4 +106,3 @@ models/
 # Generated reports and exports
 exports/
 reports/generated/
-

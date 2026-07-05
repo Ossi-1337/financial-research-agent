@@ -59,11 +59,36 @@ The default provider is `offline-test`, so no API keys or local model server are
 
 ## Run Chat UI
 
+The recommended local setup is Docker Compose. It starts both the llama.cpp OpenAI-compatible
+server and the Financial Research Agent web UI:
+
+```powershell
+docker compose up --build
+```
+
+Then open `http://127.0.0.1:8000`. The default Compose model is
+`unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL`, cached through your
+Hugging Face cache path. Override it with `FRA_LOCAL_MODEL` if needed:
+
+```powershell
+$env:FRA_LOCAL_MODEL = "your-huggingface-gguf-repo:quant"
+docker compose up --build
+```
+
+Stop everything with:
+
+```powershell
+docker compose down
+```
+
+For Python-only development without the local model container, run the app directly:
+
 ```powershell
 python -m financial_research_agent serve --host 127.0.0.1 --port 8000
 ```
 
-Then open `http://127.0.0.1:8000`. The UI uses the configured chat provider and model.
+The UI uses the configured chat provider and model, shows submitted user messages
+immediately, and streams assistant responses into the chat.
 Sessions are persisted under `FRA_HOME` and can be reopened or cleared locally. The chat
 endpoint does not use live financial data tools, RAG, or multi-agent orchestration yet.
 Type `@company` in the composer to search SEC company tickers and insert a resolved
@@ -218,7 +243,16 @@ call providers, fetch data, or produce investment recommendations.
 ## Local Inference
 
 The first documented local runtime path is `llama.cpp` through its OpenAI-compatible
-server. Start `llama-server` with your own GGUF model file, then configure:
+server. The default path is Docker Compose:
+
+```powershell
+docker compose up --build
+```
+
+Compose exposes llama.cpp at `http://127.0.0.1:8080/v1` and the app at
+`http://127.0.0.1:8000`. Internally, the app uses `http://llama-cpp:8080/v1`.
+
+If you run `llama-server` yourself outside Compose, configure the app manually:
 
 ```powershell
 $env:FRA_LLM_PROVIDER = "local-openai"
@@ -228,9 +262,10 @@ $env:FRA_LLM_LOCAL_RUNTIME = "llama.cpp"
 python -m financial_research_agent --pretty
 ```
 
-The project does not bundle model files, download models automatically, or apply
-GPU-specific tuning. Tool calls, structured output, and embeddings depend on the local
-server, model, chat template, and runtime flags.
+The project does not bundle model files. The Compose llama.cpp service downloads the
+selected Hugging Face GGUF model on first run and reuses the configured Hugging Face cache.
+GPU-specific tuning is limited to the documented Compose defaults. Tool calls, structured
+output, and embeddings depend on the local server, model, chat template, and runtime flags.
 
 Ollama can also be used through its OpenAI-compatible endpoint by setting
 `FRA_LLM_BASE_URL` to `http://127.0.0.1:11434/v1` and
