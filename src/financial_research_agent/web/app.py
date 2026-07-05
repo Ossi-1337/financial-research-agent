@@ -74,6 +74,10 @@ from financial_research_agent.statements import (
     FinancialStatementStore,
     create_default_financial_statement_provider,
 )
+from financial_research_agent.stock_analysis import (
+    StockPriceAnalysisAgent,
+    StockPriceAnalysisSecurity,
+)
 from financial_research_agent.storage import LocalStorageManager
 from financial_research_agent.web.sessions import ChatMention, ChatSessionStore
 
@@ -154,6 +158,15 @@ class FinancialReportAnalysisRequest(BaseModel):
     legal_name: str | None = None
 
 
+class StockPriceAnalysisRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    security_id: str | None = None
+    exchange_mic: str | None = None
+    exchange_name: str | None = None
+    currency: str | None = None
+    benchmark_symbol: str | None = Field(default=None, min_length=1, max_length=32)
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -193,6 +206,10 @@ def create_app(
         statement_provider=app_settings.data_sources.financial_statement_provider,
         filing_provider=app_settings.data_sources.filing_provider,
     )
+    stock_price_agent = StockPriceAnalysisAgent(
+        market_data_store=market_store,
+        market_data_provider=app_settings.data_sources.market_data_provider,
+    )
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -210,6 +227,7 @@ def create_app(
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
     app.state.financial_report_agent = financial_report_agent
+    app.state.stock_price_agent = stock_price_agent
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -277,6 +295,10 @@ def create_app(
             },
             "financial_report_analysis": {
                 "source": "stored_financial_statements_and_filings",
+                "recommendations": "disabled",
+            },
+            "stock_price_analysis": {
+                "source": "stored_market_data",
                 "recommendations": "disabled",
             },
             "storage": {
@@ -462,6 +484,21 @@ def create_app(
             legal_name=request.legal_name,
         )
         result = financial_report_agent.analyze(company)
+        return {"analysis": result.to_dict()}
+
+    @app.post("/api/stock-price-analysis")
+    def analyze_stock_price(request: StockPriceAnalysisRequest) -> dict[str, Any]:
+        security = StockPriceAnalysisSecurity(
+            symbol=request.symbol,
+            security_id=request.security_id,
+            exchange_mic=request.exchange_mic,
+            exchange_name=request.exchange_name,
+            currency=request.currency,
+        )
+        result = stock_price_agent.analyze(
+            security,
+            benchmark_symbol=request.benchmark_symbol,
+        )
         return {"analysis": result.to_dict()}
 
     @app.get("/api/retrieval/index")

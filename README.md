@@ -10,7 +10,8 @@ A minimal local chat UI is available for direct LLM chat. Stored filing chunks c
 indexed into a local vector retrieval index when an embedding provider is configured, and
 explicit cited-answer requests can attach source snippets and citations to chat messages.
 It also has a first financial report analysis agent that summarizes stored statements and
-filings into evidence-backed sections.
+filings into evidence-backed sections, plus a stock price analysis agent over stored
+market data.
 
 ## Status
 
@@ -36,11 +37,12 @@ Implemented:
 - Local vector retrieval index for stored filing chunks with source-linked search results.
 - Cited-answer workflow that retrieves stored evidence, builds a source-limited prompt, stores citation research runs, and displays citations/snippets in chat messages.
 - Financial report analysis agent for stored statements and filing chunks with structured findings, citations, confidence labels, prior-period revenue comparison, and limitations.
+- Stock price analysis agent for stored market data with deterministic metrics, trend/volatility/drawdown/volume findings, benchmark comparison when available, and chart-ready data.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
-- Stock price, news/macro, synthesis, and orchestrator agent workflows.
+- News/macro, synthesis, and orchestrator agent workflows.
 - PDF, news, or macro ingestion.
 - SQLite/remote database or automatic chat RAG.
 
@@ -233,6 +235,22 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/financial-report-analysis" `
 
 The response includes sections for revenue, margins, cash flow, debt/liquidity, guidance,
 risks, and accounting caveats. Every finding includes cited evidence IDs or a limitation.
+
+## Stock Price Analysis
+
+Milestone 20 adds a specialist analysis agent for already-stored daily market data. It
+does not fetch prices by itself, produce trading signals, or integrate with brokers.
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/stock-price-analysis" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"symbol":"NVO","benchmark_symbol":"SPY"}'
+```
+
+The response includes deterministic metrics, findings for recent performance, trend,
+volatility, drawdown, volume, optional benchmark comparison, source/freshness warnings,
+and chart-ready close/volume series.
 
 ## Local Storage And Cache
 
