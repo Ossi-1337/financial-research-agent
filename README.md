@@ -317,6 +317,9 @@ Financial statements are controlled by `FRA_FINANCIAL_STATEMENT_PROVIDER` and
 `FRA_RETRIEVAL_PROVIDER`, `FRA_RETRIEVAL_TOP_K`, `FRA_RETRIEVAL_MIN_SCORE`,
 `FRA_EMBEDDING_PROVIDER`, and `FRA_EMBEDDING_MODEL`.
 `.env.example` is a reference file only; the app does not auto-load `.env` yet.
+SEC requests can return `403` when `FRA_SEC_USER_AGENT` does not include usable contact
+information. The default local value includes a project contact placeholder, but serious
+use should set a real contact string.
 
 ## Verify
 

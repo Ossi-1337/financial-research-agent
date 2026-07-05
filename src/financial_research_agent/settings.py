@@ -18,7 +18,9 @@ DEFAULT_CHAT_HISTORY_RECENT_TURNS = 6
 DEFAULT_CHAT_HISTORY_SUMMARY_MAX_CHARS = 1200
 DEFAULT_COMPANY_LOOKUP_PROVIDER = "sec"
 DEFAULT_COMPANY_LOOKUP_CACHE_TTL_DAYS = 30
-DEFAULT_SEC_USER_AGENT = "financial-research-agent/0.1 local-research contact-not-configured"
+DEFAULT_SEC_USER_AGENT = (
+    "financial-research-agent/0.1 local-research contact@financial-research-agent.local"
+)
 DEFAULT_MARKET_DATA_PROVIDER = "alpha-vantage"
 DEFAULT_MARKET_DATA_CACHE_TTL_DAYS = 1
 DEFAULT_FINANCIAL_STATEMENT_PROVIDER = "sec-companyfacts"

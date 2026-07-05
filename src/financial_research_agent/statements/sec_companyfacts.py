@@ -113,7 +113,9 @@ class SECCompanyFactsProvider:
         self,
         *,
         base_url: str = SEC_COMPANY_FACTS_BASE_URL,
-        user_agent: str = "financial-research-agent/0.1 local-research contact-not-configured",
+        user_agent: str = (
+            "financial-research-agent/0.1 local-research contact@financial-research-agent.local"
+        ),
         http_client: httpx.AsyncClient | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:

@@ -21,6 +21,8 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.provider.selection_for_task(ProviderTask.CHAT).model == "offline-test"
     assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
     assert settings.data_sources.financial_statement_cache_ttl_days == 30
+    assert "@" in settings.data_sources.sec_user_agent
+    assert "contact-not-configured" not in settings.data_sources.sec_user_agent
     assert settings.data_sources.filing_provider == "sec-edgar"
     assert settings.data_sources.filing_cache_ttl_days == 30
     assert settings.data_sources.filing_max_document_bytes == 8_000_000

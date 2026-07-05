@@ -41,7 +41,7 @@ services:
       FRA_LLM_BASE_URL: http://llama-cpp:8080/v1
       FRA_LLM_LOCAL_RUNTIME: llama.cpp
       FRA_LLM_TIMEOUT_SECONDS: ${FRA_LLM_TIMEOUT_SECONDS:-30}
-      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact-not-configured}
+      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
       FRA_STORAGE_PROVIDER: local-json
       FRA_RETRIEVAL_PROVIDER: local-vector
     volumes:

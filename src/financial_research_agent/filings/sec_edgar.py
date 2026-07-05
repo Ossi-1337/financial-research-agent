@@ -50,7 +50,9 @@ class SECEDGARFilingProvider:
         raw_documents_dir: Path | None = None,
         extracted_text_dir: Path | None = None,
         max_document_bytes: int = DEFAULT_MAX_DOCUMENT_BYTES,
-        user_agent: str = "financial-research-agent/0.1 local-research contact-not-configured",
+        user_agent: str = (
+            "financial-research-agent/0.1 local-research contact@financial-research-agent.local"
+        ),
         http_client: httpx.AsyncClient | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:

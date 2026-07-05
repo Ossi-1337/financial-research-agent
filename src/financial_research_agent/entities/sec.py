@@ -71,7 +71,9 @@ class SECCompanyTickerProvider:
         *,
         cache_path: Path | None = None,
         cache_ttl: timedelta = timedelta(days=30),
-        user_agent: str = "financial-research-agent/0.1 local-research contact-not-configured",
+        user_agent: str = (
+            "financial-research-agent/0.1 local-research contact@financial-research-agent.local"
+        ),
         http_client: httpx.AsyncClient | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
