@@ -19,6 +19,8 @@ def test_health_report_has_no_external_requirements() -> None:
     assert report["data_sources"]["filing_provider"] == "sec-edgar"
     assert report["storage"]["provider"] == "local-json"
     assert report["storage"]["dataset_count"] >= 1
+    assert report["retrieval"]["provider"] == "local-vector"
+    assert report["retrieval"]["embedding_provider"] == "disabled"
     assert report["notes"][0] == "Foundation health check only."
     assert "offline-test by default" in report["notes"][1]
     assert "companyfacts financial statement ingestion" in report["notes"][3]

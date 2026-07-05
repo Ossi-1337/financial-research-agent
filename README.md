@@ -6,7 +6,8 @@ an offline test provider, an OpenAI-compatible local endpoint adapter, and an op
 hosted OpenAI adapter. It also has a deterministic tool registry foundation, but it does
 not run multi-agent research yet. It ingests daily market data when a provider key is
 configured, SEC financial statements for SEC filers, and SEC HTML/TXT filing documents.
-A minimal local chat UI is available for direct LLM chat.
+A minimal local chat UI is available for direct LLM chat. Stored filing chunks can be
+indexed into a local vector retrieval index when an embedding provider is configured.
 
 ## Status
 
@@ -29,13 +30,14 @@ Implemented:
 - SEC companyfacts financial statement ingestion with normalized statements, key ratios, local JSON storage, and source metadata.
 - SEC EDGAR filing/document ingestion for primary HTML/TXT filings with local raw document, extracted text, chunk metadata, and source metadata storage.
 - Local storage manifest, migration, cache inspection, cache clear, and local data reset commands for `FRA_HOME`.
+- Local vector retrieval index for stored filing chunks with source-linked search results.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
 - Agent runtime and orchestration.
 - PDF, news, or macro ingestion.
-- SQLite/remote database, vector search, or RAG.
+- SQLite/remote database or automatic chat RAG.
 
 ## Setup
 
@@ -136,8 +138,35 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/filings/ingest" `
 
 Raw documents, extracted text, chunks, and metadata are stored locally under
 `FRA_HOME/data/filings/`. Only SEC primary HTML/TXT documents are extracted at runtime.
-PDF extraction, vector search, RAG, document interpretation, and redistribution are
+PDF extraction, automatic chat RAG, document interpretation, and redistribution are
 deferred.
+
+## Retrieval
+
+Milestone 17 adds a small local vector index for already-ingested filing chunks. It does
+not fetch documents, run agents, or add retrieved snippets to chat automatically. Configure
+an embedding provider first, such as a local OpenAI-compatible embedding endpoint:
+
+```powershell
+$env:FRA_EMBEDDING_PROVIDER = "local-openai"
+$env:FRA_EMBEDDING_MODEL = "your-embedding-model"
+Invoke-RestMethod "http://127.0.0.1:8000/api/retrieval/index/filings" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"cik":"0000320193","rebuild":true}'
+Invoke-RestMethod "http://127.0.0.1:8000/api/retrieval/search" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"query":"revenue growth","top_k":5}'
+```
+
+The index is derived local data stored under `FRA_HOME/data/retrieval/vector_index.json`.
+It can be inspected or cleared without deleting the original filings:
+
+```powershell
+python -m financial_research_agent retrieval-status --pretty
+python -m financial_research_agent retrieval-clear --pretty
+```
 
 ## Local Storage And Cache
 
@@ -227,7 +256,9 @@ streaming. Local storage is controlled by `FRA_HOME` and
 Financial statements are controlled by `FRA_FINANCIAL_STATEMENT_PROVIDER` and
 `FRA_FINANCIAL_STATEMENT_CACHE_TTL_DAYS`. Filing ingestion is controlled by
 `FRA_FILING_PROVIDER`, `FRA_FILING_CACHE_TTL_DAYS`, and
-`FRA_FILING_MAX_DOCUMENT_BYTES`.
+`FRA_FILING_MAX_DOCUMENT_BYTES`. Retrieval is controlled by
+`FRA_RETRIEVAL_PROVIDER`, `FRA_RETRIEVAL_TOP_K`, `FRA_RETRIEVAL_MIN_SCORE`,
+`FRA_EMBEDDING_PROVIDER`, and `FRA_EMBEDDING_MODEL`.
 `.env.example` is a reference file only; the app does not auto-load `.env` yet.
 
 ## Verify

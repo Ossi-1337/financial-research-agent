@@ -105,3 +105,33 @@ def test_data_reset_command_removes_local_data(monkeypatch, tmp_path: Path, caps
     assert exit_code == 0
     assert payload["operation"] == "reset_local_data"
     assert not data_path.exists()
+
+
+def test_retrieval_status_command_outputs_index_metadata(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+
+    exit_code = main(["retrieval-status"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["provider"] == "local-vector"
+    assert payload["record_count"] == 0
+    assert payload["storage_path"] == str(tmp_path / "data" / "retrieval" / "vector_index.json")
+
+
+def test_retrieval_clear_command_removes_index_file(monkeypatch, tmp_path: Path, capsys) -> None:
+    index_path = tmp_path / "data" / "retrieval" / "vector_index.json"
+    index_path.parent.mkdir(parents=True)
+    index_path.write_text('{"version":1,"records":[]}', encoding="utf-8")
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+
+    exit_code = main(["retrieval-clear"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["cleared_records"] == 0
+    assert not index_path.exists()

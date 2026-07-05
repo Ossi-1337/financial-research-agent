@@ -39,6 +39,14 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     create_default_market_data_provider,
 )
+from financial_research_agent.retrieval import (
+    LocalVectorIndex,
+    RetrievalError,
+    RetrievalErrorCode,
+    RetrievalQuery,
+    index_filing_result,
+    search_index,
+)
 from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.statements import (
     FinancialStatementCompany,
@@ -103,6 +111,18 @@ class FilingIngestionRequest(BaseModel):
     refresh: bool = False
 
 
+class RetrievalIndexFilingRequest(BaseModel):
+    cik: str = Field(min_length=1, max_length=10, pattern="^[0-9]+$")
+    rebuild: bool = True
+
+
+class RetrievalSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2_000)
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+    filters: dict[str, str] = Field(default_factory=dict)
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -116,6 +136,7 @@ def create_app(
     filing_provider: FilingProvider | None = None,
     filing_store: FilingStore | None = None,
     storage_manager: LocalStorageManager | None = None,
+    retrieval_index: LocalVectorIndex | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -132,6 +153,7 @@ def create_app(
     filing_source = filing_provider or create_default_filing_provider(app_settings)
     filings = filing_store or FilingStore.from_settings(app_settings)
     storage = storage_manager or LocalStorageManager.from_settings(app_settings)
+    retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -146,6 +168,7 @@ def create_app(
     app.state.filing_provider = filing_source
     app.state.filing_store = filings
     app.state.storage_manager = storage
+    app.state.retrieval_index = retrieval
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -156,6 +179,7 @@ def create_app(
     @app.get("/api/status")
     def status() -> dict[str, Any]:
         selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
+        embedding_selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
         return {
             "app": "financial-research-agent",
             "environment": app_settings.environment,
@@ -194,6 +218,17 @@ def create_app(
                 "cache_ttl_days": app_settings.data_sources.filing_cache_ttl_days,
                 "max_document_bytes": app_settings.data_sources.filing_max_document_bytes,
                 "stored_result_count": filings.count(),
+            },
+            "retrieval": {
+                "provider": app_settings.retrieval.provider,
+                "top_k": app_settings.retrieval.top_k,
+                "min_score": app_settings.retrieval.min_score,
+                "index": retrieval.metadata().to_dict(),
+                "embedding_provider": embedding_selection.provider,
+                "embedding_model": embedding_selection.model,
+                "embedding_provider_registered": provider_registry.has_embedding_provider(
+                    embedding_selection.provider
+                ),
             },
             "storage": {
                 "provider": app_settings.storage.provider,
@@ -369,6 +404,78 @@ def create_app(
             ) from exc
         stored_result = filings.save_result(result)
         return {"filings": stored_result.to_dict(), "stored": False}
+
+    @app.get("/api/retrieval/index")
+    def get_retrieval_index() -> dict[str, Any]:
+        return {"index": retrieval.metadata().to_dict()}
+
+    @app.post("/api/retrieval/index/filings")
+    async def index_stored_filings(request: RetrievalIndexFilingRequest) -> dict[str, Any]:
+        stored = filings.get_result(
+            cik=request.cik,
+            provider=app_settings.data_sources.filing_provider,
+        )
+        if stored is None:
+            raise HTTPException(status_code=404, detail={"error": "filings_not_found"})
+        selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+        try:
+            embedding_provider = provider_registry.embedding_provider(selection.provider)
+            result = await index_filing_result(
+                stored,
+                index=retrieval,
+                embedding_provider=embedding_provider,
+                embedding_model=selection.model,
+                replace_company=request.rebuild,
+            )
+        except RetrievalError as exc:
+            raise HTTPException(
+                status_code=_status_for_retrieval_error(exc.code),
+                detail=exc.to_dict(),
+            ) from exc
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=_status_for_provider_error(exc.code),
+                detail=_provider_error_detail(exc),
+            ) from exc
+        return {"result": result.to_dict(), "index": retrieval.metadata().to_dict()}
+
+    @app.delete("/api/retrieval/index")
+    def clear_retrieval_index() -> dict[str, Any]:
+        cleared_records = retrieval.clear()
+        return {"cleared_records": cleared_records, "index": retrieval.metadata().to_dict()}
+
+    @app.post("/api/retrieval/search")
+    async def search_retrieval_index(request: RetrievalSearchRequest) -> dict[str, Any]:
+        selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+        query = RetrievalQuery(
+            query=_message_content(request.query),
+            top_k=request.top_k or app_settings.retrieval.top_k,
+            min_score=(
+                request.min_score
+                if request.min_score is not None
+                else app_settings.retrieval.min_score
+            ),
+            filters=request.filters,
+        )
+        try:
+            embedding_provider = provider_registry.embedding_provider(selection.provider)
+            result = await search_index(
+                query,
+                index=retrieval,
+                embedding_provider=embedding_provider,
+                embedding_model=selection.model,
+            )
+        except RetrievalError as exc:
+            raise HTTPException(
+                status_code=_status_for_retrieval_error(exc.code),
+                detail=exc.to_dict(),
+            ) from exc
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=_status_for_provider_error(exc.code),
+                detail=_provider_error_detail(exc),
+            ) from exc
+        return {"result": result.to_dict()}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def post_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
@@ -559,6 +666,16 @@ def _status_for_filing_error(code: FilingErrorCode) -> int:
         return 400
     if code == FilingErrorCode.NOT_FOUND:
         return 404
+    return 503
+
+
+def _status_for_retrieval_error(code: RetrievalErrorCode) -> int:
+    if code == RetrievalErrorCode.INVALID_REQUEST:
+        return 400
+    if code in {RetrievalErrorCode.INDEX_EMPTY, RetrievalErrorCode.INDEX_NOT_FOUND}:
+        return 404
+    if code == RetrievalErrorCode.VECTOR_DIMENSION_MISMATCH:
+        return 400
     return 503
 
 

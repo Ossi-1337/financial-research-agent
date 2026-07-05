@@ -7,12 +7,17 @@ from typing import Any
 from financial_research_agent import __version__
 from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
 from financial_research_agent.llm.openai import OpenAIProvider
-from financial_research_agent.settings import Settings
+from financial_research_agent.llm.registry import create_default_provider_registry
+from financial_research_agent.retrieval import LocalVectorIndex
+from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.storage import LocalStorageManager
 
 
 def build_health_report(settings: Settings) -> dict[str, Any]:
     storage = LocalStorageManager.from_settings(settings).inspect()
+    provider_registry = create_default_provider_registry(settings.provider)
+    embedding_selection = settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+    retrieval_index = LocalVectorIndex.from_settings(settings)
     report: dict[str, Any] = {
         "app": "financial-research-agent",
         "version": __version__,
@@ -30,6 +35,17 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
             "existing_dataset_count": sum(1 for entry in storage.datasets if entry.exists),
             "migration_count": len(storage.migrations),
             "warnings": list(storage.warnings),
+        },
+        "retrieval": {
+            "provider": settings.retrieval.provider,
+            "top_k": settings.retrieval.top_k,
+            "min_score": settings.retrieval.min_score,
+            "index": retrieval_index.metadata().to_dict(),
+            "embedding_provider": embedding_selection.provider,
+            "embedding_model": embedding_selection.model,
+            "embedding_provider_registered": provider_registry.has_embedding_provider(
+                embedding_selection.provider
+            ),
         },
         "paths": settings.local_paths.to_dict(),
         "environment": settings.environment,
@@ -50,6 +66,10 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
             (
                 "SEC EDGAR filing ingestion is available for HTML/TXT primary documents "
                 "with local raw and extracted-text storage."
+            ),
+            (
+                "Local vector retrieval can index stored filing chunks when an embedding "
+                "provider is explicitly configured."
             ),
         ],
     }

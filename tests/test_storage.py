@@ -30,6 +30,7 @@ def test_storage_specs_cover_current_local_stores_and_have_no_secrets(tmp_path: 
         StorageDataset.FILINGS_INDEX,
         StorageDataset.FILING_RAW_DOCUMENTS,
         StorageDataset.FILING_EXTRACTED_TEXT,
+        StorageDataset.RETRIEVAL_VECTOR_INDEX,
         StorageDataset.STORAGE_MIGRATIONS,
     }
     assert all(not spec.contains_secrets for spec in specs)
@@ -61,6 +62,7 @@ def test_storage_migrate_creates_layout_and_is_idempotent(tmp_path: Path) -> Non
     assert settings.local_paths.cache_dir.exists()
     assert settings.local_paths.logs_dir.exists()
     assert settings.local_paths.data_dir.joinpath("filings").exists()
+    assert settings.local_paths.data_dir.joinpath("retrieval").exists()
     assert result.applied_migrations[0].id == "0001_local_json_storage_layout"
     assert second.applied_migrations == ()
     assert second.skipped_migrations == ("0001_local_json_storage_layout",)

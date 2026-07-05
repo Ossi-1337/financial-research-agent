@@ -27,6 +27,9 @@ DEFAULT_FILING_PROVIDER = "sec-edgar"
 DEFAULT_FILING_CACHE_TTL_DAYS = 30
 DEFAULT_FILING_MAX_DOCUMENT_BYTES = 8_000_000
 DEFAULT_STORAGE_PROVIDER = "local-json"
+DEFAULT_RETRIEVAL_PROVIDER = "local-vector"
+DEFAULT_RETRIEVAL_TOP_K = 5
+DEFAULT_RETRIEVAL_MIN_SCORE = 0.0
 
 
 class ProviderTask(StrEnum):
@@ -253,6 +256,27 @@ class StorageSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RetrievalSettings:
+    provider: str = DEFAULT_RETRIEVAL_PROVIDER
+    top_k: int = DEFAULT_RETRIEVAL_TOP_K
+    min_score: float = DEFAULT_RETRIEVAL_MIN_SCORE
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "provider", _require_text(self.provider))
+        if self.top_k <= 0:
+            raise ValueError("retrieval top_k must be positive")
+        if self.min_score < -1.0 or self.min_score > 1.0:
+            raise ValueError("retrieval min_score must be between -1 and 1")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "provider": self.provider,
+            "top_k": self.top_k,
+            "min_score": self.min_score,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     environment: str
     local_paths: LocalPaths
@@ -260,6 +284,7 @@ class Settings:
     chat: ChatSettings
     data_sources: DataSourceSettings
     storage: StorageSettings
+    retrieval: RetrievalSettings
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Self:
@@ -374,6 +399,17 @@ class Settings:
             storage=StorageSettings(
                 provider=_env_value(env, "FRA_STORAGE_PROVIDER", DEFAULT_STORAGE_PROVIDER),
             ),
+            retrieval=RetrievalSettings(
+                provider=_env_value(env, "FRA_RETRIEVAL_PROVIDER", DEFAULT_RETRIEVAL_PROVIDER),
+                top_k=_env_int_value(env, "FRA_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K),
+                min_score=_env_float_between_value(
+                    env,
+                    "FRA_RETRIEVAL_MIN_SCORE",
+                    DEFAULT_RETRIEVAL_MIN_SCORE,
+                    minimum=-1.0,
+                    maximum=1.0,
+                ),
+            ),
         )
 
 
@@ -422,6 +458,26 @@ def _env_int_value(environ: Mapping[str, str], name: str, default: int) -> int:
         raise ValueError(f"{name} must be an integer") from exc
     if result <= 0:
         raise ValueError(f"{name} must be positive")
+    return result
+
+
+def _env_float_between_value(
+    environ: Mapping[str, str],
+    name: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    value = environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        result = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if result < minimum or result > maximum:
+        raise ValueError(f"{name} must be between {minimum:g} and {maximum:g}")
     return result
 
 

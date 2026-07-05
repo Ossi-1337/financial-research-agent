@@ -35,11 +35,15 @@ from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
+    EmbeddingRequest,
+    EmbeddingResponse,
     MessageRole,
     ModelMetadata,
     OfflineTestProvider,
+    ProviderCapability,
     ProviderError,
     ProviderErrorCode,
+    TokenUsage,
 )
 from financial_research_agent.llm.registry import ProviderRegistry, create_offline_provider_registry
 from financial_research_agent.market_data import (
@@ -52,6 +56,7 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     calculate_price_metrics,
 )
+from financial_research_agent.retrieval import LocalVectorIndex
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements import (
     FinancialStatementCompany,
@@ -129,6 +134,9 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["company_search"]["provider"] == "sec"
     assert payload["financial_statements"]["provider"] == "sec-companyfacts"
     assert payload["filings"]["provider"] == "sec-edgar"
+    assert payload["retrieval"]["provider"] == "local-vector"
+    assert payload["retrieval"]["index"]["record_count"] == 0
+    assert payload["retrieval"]["embedding_provider"] == "disabled"
     assert payload["storage"]["provider"] == "local-json"
     assert "secret-value" not in json.dumps(payload)
 
@@ -609,6 +617,69 @@ def test_filing_errors_map_to_http_status() -> None:
     assert response.json()["detail"]["code"] == "unsupported_format"
 
 
+def test_retrieval_index_endpoint_reports_metadata() -> None:
+    client = _client()
+
+    response = client.get("/api/retrieval/index")
+    payload = response.json()["index"]
+
+    assert response.status_code == 200
+    assert payload["provider"] == "local-vector"
+    assert payload["record_count"] == 0
+
+
+def test_retrieval_index_stored_filings_and_searches_chunks(tmp_path) -> None:
+    filing_store = FilingStore(storage_path=tmp_path / "filings_index.json")
+    filing_store.save_result(FakeFilingProvider.result())
+    retrieval_index = LocalVectorIndex(storage_path=tmp_path / "vector_index.json")
+    registry = create_offline_provider_registry().register_embedding_provider(
+        "keyword-fixture", KeywordEmbeddingProvider()
+    )
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
+            "FRA_EMBEDDING_MODEL": "keyword-model",
+        }
+    )
+    client = _client(
+        settings=settings,
+        registry=registry,
+        filing_store=filing_store,
+        retrieval_index=retrieval_index,
+    )
+
+    indexed = client.post("/api/retrieval/index/filings", json={"cik": "320193"})
+    searched = client.post("/api/retrieval/search", json={"query": "filing", "top_k": 1})
+
+    assert indexed.status_code == 200
+    assert indexed.json()["result"]["indexed_count"] == 1
+    assert indexed.json()["index"]["record_count"] == 1
+    assert searched.status_code == 200
+    match = searched.json()["result"]["matches"][0]
+    assert match["chunk"]["metadata"]["cik"] == "320193"
+    assert match["chunk"]["source_url"] == "https://example.invalid/aapl-20251231.htm"
+    assert match["score"] > 0
+
+
+def test_retrieval_search_empty_index_maps_to_not_found(tmp_path) -> None:
+    registry = create_offline_provider_registry().register_embedding_provider(
+        "keyword-fixture", KeywordEmbeddingProvider()
+    )
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
+        }
+    )
+    client = _client(settings=settings, registry=registry, retrieval_index=LocalVectorIndex())
+
+    response = client.post("/api/retrieval/search", json={"query": "filing"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "index_empty"
+
+
 def _client(
     *,
     settings: Settings | None = None,
@@ -621,6 +692,7 @@ def _client(
     financial_statement_store=None,
     filing_provider=None,
     filing_store=None,
+    retrieval_index=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -636,6 +708,7 @@ def _client(
             financial_statement_store=financial_statement_store or FinancialStatementStore(),
             filing_provider=filing_provider or FakeFilingProvider(),
             filing_store=filing_store or FilingStore(),
+            retrieval_index=retrieval_index or LocalVectorIndex(),
         )
     )
 
@@ -948,3 +1021,30 @@ class FailingFilingProvider:
             provider="sec-edgar",
             retryable=True,
         )
+
+
+class KeywordEmbeddingProvider:
+    @property
+    def metadata(self) -> ModelMetadata:
+        return ModelMetadata(
+            provider="keyword-fixture",
+            model="keyword-model",
+            capabilities=(ProviderCapability.EMBEDDINGS,),
+        )
+
+    async def embed(self, request: EmbeddingRequest) -> EmbeddingResponse:
+        return EmbeddingResponse(
+            embeddings=tuple(_keyword_vector(text) for text in request.input_texts),
+            provider="keyword-fixture",
+            model=request.model or "keyword-model",
+            usage=TokenUsage(input_tokens=sum(len(text.split()) for text in request.input_texts)),
+        )
+
+
+def _keyword_vector(text: str) -> tuple[float, ...]:
+    lowered = text.lower()
+    return (
+        float(lowered.count("filing")),
+        float(lowered.count("risk")),
+        float(lowered.count("cash")),
+    )

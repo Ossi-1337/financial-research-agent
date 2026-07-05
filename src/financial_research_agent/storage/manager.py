@@ -119,6 +119,7 @@ class LocalStorageManager:
             self.settings.local_paths.cache_dir,
             self.settings.local_paths.logs_dir,
             self.settings.local_paths.data_dir / "filings",
+            self.settings.local_paths.data_dir / "retrieval",
         ):
             if not path.exists():
                 created.append(path)
@@ -320,6 +321,17 @@ def default_storage_dataset_specs(settings: Settings) -> tuple[StorageDatasetSpe
             storage_format=StorageFormat.FILE_TREE,
             ttl_days=data_sources.filing_cache_ttl_days,
             description="Extracted text files produced from SEC primary documents.",
+        ),
+        StorageDatasetSpec(
+            dataset=StorageDataset.RETRIEVAL_VECTOR_INDEX,
+            label="Retrieval vector index",
+            area=StorageArea.DATA,
+            relative_path="retrieval/vector_index.json",
+            storage_format=StorageFormat.JSON,
+            schema_version=1,
+            description=(
+                "Derived local vector index for filing chunks and selected evidence snippets."
+            ),
         ),
         StorageDatasetSpec(
             dataset=StorageDataset.STORAGE_MIGRATIONS,

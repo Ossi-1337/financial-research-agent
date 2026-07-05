@@ -25,6 +25,9 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.data_sources.filing_cache_ttl_days == 30
     assert settings.data_sources.filing_max_document_bytes == 8_000_000
     assert settings.storage.provider == "local-json"
+    assert settings.retrieval.provider == "local-vector"
+    assert settings.retrieval.top_k == 5
+    assert settings.retrieval.min_score == 0.0
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -64,6 +67,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_FILING_CACHE_TTL_DAYS": "12",
             "FRA_FILING_MAX_DOCUMENT_BYTES": "5000000",
             "FRA_STORAGE_PROVIDER": "local-json",
+            "FRA_RETRIEVAL_PROVIDER": "local-vector",
+            "FRA_RETRIEVAL_TOP_K": "7",
+            "FRA_RETRIEVAL_MIN_SCORE": "0.25",
         }
     )
 
@@ -105,6 +111,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.data_sources.filing_cache_ttl_days == 12
     assert settings.data_sources.filing_max_document_bytes == 5_000_000
     assert settings.storage.provider == "local-json"
+    assert settings.retrieval.provider == "local-vector"
+    assert settings.retrieval.top_k == 7
+    assert settings.retrieval.min_score == 0.25
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -229,6 +238,34 @@ def test_filing_settings_are_read_and_validated() -> None:
         assert "FRA_FILING_MAX_DOCUMENT_BYTES must be positive" in str(exc)
     else:
         raise AssertionError("Expected invalid filing max bytes to be rejected")
+
+
+def test_retrieval_settings_are_read_and_validated() -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_RETRIEVAL_PROVIDER": "local-vector",
+            "FRA_RETRIEVAL_TOP_K": "3",
+            "FRA_RETRIEVAL_MIN_SCORE": "0.1",
+        }
+    )
+
+    assert settings.retrieval.provider == "local-vector"
+    assert settings.retrieval.top_k == 3
+    assert settings.retrieval.min_score == 0.1
+
+    try:
+        Settings.from_env({"FRA_RETRIEVAL_TOP_K": "0"})
+    except ValueError as exc:
+        assert "FRA_RETRIEVAL_TOP_K must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid retrieval top_k to be rejected")
+
+    try:
+        Settings.from_env({"FRA_RETRIEVAL_MIN_SCORE": "2"})
+    except ValueError as exc:
+        assert "FRA_RETRIEVAL_MIN_SCORE must be between -1 and 1" in str(exc)
+    else:
+        raise AssertionError("Expected invalid retrieval min score to be rejected")
 
 
 def test_alpha_vantage_key_supports_standard_alias() -> None:

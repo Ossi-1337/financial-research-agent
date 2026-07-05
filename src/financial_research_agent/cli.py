@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import uvicorn
 
 from financial_research_agent.health import build_health_report
+from financial_research_agent.retrieval import LocalVectorIndex
 from financial_research_agent.settings import Settings
 from financial_research_agent.storage import LocalStorageManager
 
@@ -26,6 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
             "storage-migrate",
             "cache-clear",
             "data-reset",
+            "retrieval-status",
+            "retrieval-clear",
         ],
         default="health",
         help="Command to run. Defaults to health.",
@@ -60,7 +63,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_json(health, pretty=args.pretty)
         return 0
 
-    if args.command in {"storage-status", "storage-migrate", "cache-clear", "data-reset"}:
+    if args.command in {
+        "storage-status",
+        "storage-migrate",
+        "cache-clear",
+        "data-reset",
+        "retrieval-status",
+        "retrieval-clear",
+    }:
         settings = Settings.from_env()
         storage = LocalStorageManager.from_settings(settings)
         if args.command == "storage-status":
@@ -71,6 +81,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "cache-clear":
             _print_json(storage.clear_cache().to_dict(), pretty=args.pretty)
+            return 0
+        if args.command == "retrieval-status":
+            _print_json(
+                LocalVectorIndex.from_settings(settings).metadata().to_dict(),
+                pretty=args.pretty,
+            )
+            return 0
+        if args.command == "retrieval-clear":
+            index = LocalVectorIndex.from_settings(settings)
+            cleared_records = index.clear()
+            _print_json(
+                {
+                    "cleared_records": cleared_records,
+                    "index": index.metadata().to_dict(),
+                },
+                pretty=args.pretty,
+            )
             return 0
         if not args.yes:
             parser.error("data-reset requires --yes")
