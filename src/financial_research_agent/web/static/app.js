@@ -7,6 +7,7 @@ const state = {
   selectedSuggestionIndex: 0,
   suggestionQuery: "",
   suggestionRequestId: 0,
+  abortController: null,
 };
 
 const form = document.querySelector("#chat-form");
@@ -14,7 +15,6 @@ const input = document.querySelector("#message-input");
 const mentionMenu = document.querySelector("#mention-menu");
 const sendButton = document.querySelector("#send-button");
 const messageList = document.querySelector("#message-list");
-const loadingRow = document.querySelector("#loading-row");
 const errorBanner = document.querySelector("#error-banner");
 const providerPill = document.querySelector("#provider-pill");
 const sessionLabel = document.querySelector("#session-label");
@@ -24,14 +24,21 @@ const clearSessionsButton = document.querySelector("#clear-sessions-button");
 
 function setBusy(value) {
   state.busy = value;
-  sendButton.disabled = value;
   input.contentEditable = value ? "false" : "true";
   newSessionButton.disabled = value;
   clearSessionsButton.disabled = value;
-  loadingRow.hidden = !value;
+  sendButton.textContent = value ? "Stop" : "↑";
+  sendButton.setAttribute("aria-label", value ? "Stop response" : "Send message");
+  sendButton.classList.toggle("busy", value);
+  updateSendButtonState();
+  renderMessages();
   if (value) {
     hideMentionMenu();
   }
+}
+
+function updateSendButtonState() {
+  sendButton.disabled = !state.busy && editorText().length === 0;
 }
 
 function showError(message) {
@@ -87,21 +94,30 @@ function renderMessages() {
     const item = document.createElement("li");
     item.className = `message ${message.role}`;
 
-    const meta = document.createElement("div");
-    meta.className = "message-meta";
-    meta.textContent =
-      message.role === "assistant" && message.provider
-        ? `${message.provider} / ${message.model}`
-        : message.role;
-
     const content = document.createElement("div");
     content.className = "message-content";
     renderMessageContent(content, message);
 
-    item.append(meta, content);
+    if (message.role === "user") {
+      const meta = document.createElement("div");
+      meta.className = "message-meta";
+      meta.textContent = "user";
+      item.append(meta);
+    }
+    item.append(content);
     messageList.append(item);
   }
+  if (state.busy) {
+    messageList.append(renderLoadingIndicator());
+  }
   messageList.scrollTop = messageList.scrollHeight;
+}
+
+function renderLoadingIndicator() {
+  const item = document.createElement("li");
+  item.className = "loading-row";
+  item.textContent = "Thinking...";
+  return item;
 }
 
 function sessionTitle(session) {
@@ -412,16 +428,20 @@ async function clearSessions() {
 }
 
 async function sendMessage(content, mentions) {
+  state.abortController = new AbortController();
   const payload = await requestJson(`/api/sessions/${state.sessionId}/messages`, {
     method: "POST",
     body: JSON.stringify({ content, mentions }),
+    signal: state.abortController.signal,
   });
+  state.abortController = null;
   state.messages = payload.session.messages;
   await loadSessions();
   renderMessages();
 }
 
 input.addEventListener("input", () => {
+  updateSendButtonState();
   updateMentionQuery();
 });
 
@@ -462,6 +482,14 @@ input.addEventListener("blur", () => {
   window.setTimeout(hideMentionMenu, 120);
 });
 
+sendButton.addEventListener("click", (event) => {
+  if (!state.busy) {
+    return;
+  }
+  event.preventDefault();
+  state.abortController?.abort();
+});
+
 newSessionButton.addEventListener("click", async () => {
   if (state.busy) {
     return;
@@ -484,6 +512,10 @@ clearSessionsButton.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (state.busy) {
+    state.abortController?.abort();
+    return;
+  }
   const content = editorText();
   if (!content || state.busy || !state.sessionId) {
     return;
@@ -495,9 +527,14 @@ form.addEventListener("submit", async (event) => {
   try {
     await sendMessage(content, mentions);
   } catch (error) {
-    input.textContent = content;
-    showError(error instanceof Error ? error.message : "Chat request failed.");
+    if (error instanceof DOMException && error.name === "AbortError") {
+      showError("Response stopped.");
+    } else {
+      input.textContent = content;
+      showError(error instanceof Error ? error.message : "Chat request failed.");
+    }
   } finally {
+    state.abortController = null;
     setBusy(false);
     input.focus();
   }

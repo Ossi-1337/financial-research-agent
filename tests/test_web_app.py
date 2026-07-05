@@ -76,12 +76,23 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert root_response.status_code == 200
     assert "Financial Research Agent" in root_response.text
     assert 'id="mention-menu"' in root_response.text
+    assert 'id="send-button"' in root_response.text
+    assert 'class="composer-action"' in root_response.text
     assert 'id="company-search-form"' not in root_response.text
     assert 'id="selected-company"' not in root_response.text
     assert css_response.status_code == 200
     assert "text/css" in css_response.headers["content-type"]
     assert ".mention-menu[hidden]" in css_response.text
     assert "display: none" in css_response.text
+    assert "--accent: #2563eb" in css_response.text
+    assert "resize: none" in css_response.text
+    assert "overflow-wrap: anywhere" in css_response.text
+    assert "html {" in css_response.text
+    assert "overflow: hidden" in css_response.text
+    assert "height: 100vh" in css_response.text
+    assert ".message.assistant" in css_response.text
+    assert "width: 100%" in css_response.text
+    assert "border-top: 1px solid var(--border)" in css_response.text
 
 
 def test_static_script_contains_mention_autocomplete_wiring() -> None:
@@ -92,6 +103,10 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert response.status_code == 200
     assert "/api/company-search?query=" in response.text
     assert "mention-chip" in response.text
+    assert "Stop response" in response.text
+    assert "renderLoadingIndicator" in response.text
+    assert 'item.className = "loading-row"' in response.text
+    assert "message.provider" not in response.text
 
 
 def test_status_returns_chat_provider_without_secrets() -> None:

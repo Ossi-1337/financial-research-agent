@@ -6,11 +6,12 @@
   --border: #d5dae2;
   --text: #17202a;
   --muted: #5e6b7a;
-  --accent: #0b6e69;
-  --accent-strong: #07524f;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-soft: #eff6ff;
   --danger: #b3261e;
   --danger-bg: #fff0ee;
-  --assistant: #f0f5f4;
+  --assistant: #f8fafc;
   --user: #e8eef8;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -20,9 +21,16 @@
   box-sizing: border-box;
 }
 
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
+  height: 100%;
   min-width: 320px;
   margin: 0;
+  overflow: hidden;
   color: var(--text);
   background: var(--background);
 }
@@ -31,7 +39,8 @@ body {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: min(1180px, calc(100vw - 32px));
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   margin: 0 auto;
   padding: 18px 0;
   gap: 16px;
@@ -128,7 +137,7 @@ h1 {
 
 .session-button.active {
   border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-  background: var(--assistant);
+  background: var(--accent-soft);
   color: var(--accent-strong);
 }
 
@@ -157,22 +166,31 @@ h1 {
 .message {
   display: grid;
   gap: 5px;
-  width: min(760px, 92%);
-  padding: 12px 13px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  max-width: min(760px, 92%);
   line-height: 1.45;
   white-space: pre-wrap;
 }
 
 .message.user {
   align-self: flex-end;
+  width: fit-content;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
   background: var(--user);
 }
 
 .message.assistant {
   align-self: flex-start;
-  background: var(--assistant);
+  width: 100%;
+  max-width: none;
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+
+.message.assistant .message-content {
+  width: min(760px, 92%);
 }
 
 .message-meta {
@@ -182,6 +200,7 @@ h1 {
 
 .message-content {
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mention-chip {
@@ -212,19 +231,17 @@ h1 {
 }
 
 .loading-row {
-  z-index: 2;
-  grid-row: 1;
-  align-self: end;
-  padding: 0 18px 12px;
+  align-self: flex-start;
+  width: 100%;
+  padding: 14px 0 4px;
+  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.9rem;
+  list-style: none;
 }
 
 .composer {
   grid-row: 2;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
   padding: 14px;
   border-top: 1px solid var(--border);
   background: var(--surface-muted);
@@ -240,8 +257,9 @@ h1 {
   min-height: 132px;
   max-height: 240px;
   overflow-y: auto;
-  resize: vertical;
-  padding: 11px 12px;
+  overflow-wrap: anywhere;
+  resize: none;
+  padding: 13px 58px 48px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -249,6 +267,7 @@ h1 {
   font: inherit;
   line-height: 1.45;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message-input:empty::before {
@@ -260,6 +279,30 @@ h1 {
 .message-input:focus {
   border-color: var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.composer-action {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  border-radius: 999px;
+  background: var(--accent);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.composer-action.busy {
+  width: auto;
+  min-width: 62px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 0.84rem;
 }
 
 .mention-menu {
@@ -301,7 +344,7 @@ h1 {
 .mention-option:hover,
 .mention-option.active {
   border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  background: var(--assistant);
+  background: var(--accent-soft);
 }
 
 .mention-option-title {
@@ -361,6 +404,7 @@ button:disabled {
 @media (max-width: 680px) {
   .app-shell {
     width: 100vw;
+    height: 100vh;
     padding: 0;
   }
 
@@ -394,14 +438,14 @@ button:disabled {
   }
 
   .composer {
-    grid-template-columns: 1fr;
+    padding: 10px;
   }
 
   .message-list {
     padding: 16px 12px;
   }
 
-  button {
+  .session-actions button {
     width: 100%;
   }
 }

@@ -28,7 +28,6 @@
         <section class="chat-panel" aria-label="Chat">
           <div id="error-banner" class="error-banner" role="alert" hidden></div>
           <ol id="message-list" class="message-list"></ol>
-          <div id="loading-row" class="loading-row" hidden>Thinking...</div>
           <form id="chat-form" class="composer">
             <label class="sr-only" for="message-input">Message</label>
             <div class="composer-shell">
@@ -46,8 +45,16 @@
                 aria-label="Company mention suggestions"
                 hidden
               ></ol>
+              <button
+                id="send-button"
+                class="composer-action"
+                type="submit"
+                aria-label="Send message"
+                disabled
+              >
+                ↑
+              </button>
             </div>
-            <button id="send-button" type="submit">Send</button>
           </form>
         </section>
       </div>
