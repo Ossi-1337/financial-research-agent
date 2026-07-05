@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from financial_research_agent.llm import MessageRole
+from financial_research_agent.reports import Citation, EvidenceSnippet
 from financial_research_agent.web.sessions import ChatMention, ChatSessionStore, summarize_messages
 
 
@@ -32,6 +34,24 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
                 source_provider="sec",
             ),
         ),
+        citations=(
+            Citation(
+                id="C1",
+                evidence_id="evidence:1",
+                source_url="https://example.invalid/source.htm",
+                retrieved_at=datetime_from_text("2026-07-05T00:00:00+00:00"),
+            ),
+        ),
+        evidence_snippets=(
+            EvidenceSnippet(
+                id="evidence:1",
+                citation_id="C1",
+                text="TEST TOOL OUTPUT evidence",
+                source_url="https://example.invalid/source.htm",
+                retrieved_at=datetime_from_text("2026-07-05T00:00:00+00:00"),
+                score=0.9,
+            ),
+        ),
     )
     reloaded = ChatSessionStore(storage_path=storage_path, recent_turns=2, summary_max_chars=200)
     loaded = reloaded.get(session.id)
@@ -45,6 +65,8 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
     assert loaded.messages[0].mentions[0].label == "AAPL"
     assert loaded.messages[0].mentions[0].cik == "320193"
     assert loaded.messages[1].provider == "offline-test"
+    assert loaded.messages[1].citations[0].marker == "[C1]"
+    assert loaded.messages[1].evidence_snippets[0].citation_id == "C1"
 
 
 def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> None:
@@ -82,6 +104,8 @@ def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> No
 
     assert session is not None
     assert session.messages[0].mentions == ()
+    assert session.messages[0].citations == ()
+    assert session.messages[0].evidence_snippets == ()
 
 
 def test_session_list_sorts_by_updated_at_and_clear_removes_persisted_sessions(
@@ -182,3 +206,7 @@ def test_session_store_rejects_unsupported_storage_version(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="Could not load chat session store"):
         ChatSessionStore(storage_path=storage_path)
+
+
+def datetime_from_text(value: str):
+    return datetime.fromisoformat(value)

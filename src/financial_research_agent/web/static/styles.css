@@ -203,6 +203,53 @@ h1 {
   word-break: break-word;
 }
 
+.citation-list {
+  display: grid;
+  gap: 8px;
+  width: min(760px, 92%);
+  margin-top: 12px;
+}
+
+.citation-item {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.citation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.citation-marker {
+  color: var(--accent-strong);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.citation-marker:hover {
+  text-decoration: underline;
+}
+
+.citation-location {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-snippet {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
 .mention-chip {
   display: inline-flex;
   align-items: center;

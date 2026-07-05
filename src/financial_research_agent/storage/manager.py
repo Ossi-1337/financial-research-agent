@@ -334,6 +334,15 @@ def default_storage_dataset_specs(settings: Settings) -> tuple[StorageDatasetSpe
             ),
         ),
         StorageDatasetSpec(
+            dataset=StorageDataset.REPORT_RUNS,
+            label="Cited research runs",
+            area=StorageArea.DATA,
+            relative_path="report_runs.json",
+            storage_format=StorageFormat.JSON,
+            schema_version=1,
+            description="Stored cited-answer research runs with citations and evidence snippets.",
+        ),
+        StorageDatasetSpec(
             dataset=StorageDataset.STORAGE_MIGRATIONS,
             label="Storage migrations",
             area=StorageArea.DATA,
@@ -390,7 +399,7 @@ def _read_json_payload(path: Path) -> tuple[dict[str, Any] | None, str | None]:
 
 
 def _payload_record_count(payload: dict[str, Any]) -> int | None:
-    for key in ("sessions", "series", "results", "records"):
+    for key in ("sessions", "series", "results", "records", "runs"):
         value = payload.get(key)
         if isinstance(value, list):
             return len(value)

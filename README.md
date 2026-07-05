@@ -7,7 +7,8 @@ hosted OpenAI adapter. It also has a deterministic tool registry foundation, but
 not run multi-agent research yet. It ingests daily market data when a provider key is
 configured, SEC financial statements for SEC filers, and SEC HTML/TXT filing documents.
 A minimal local chat UI is available for direct LLM chat. Stored filing chunks can be
-indexed into a local vector retrieval index when an embedding provider is configured.
+indexed into a local vector retrieval index when an embedding provider is configured, and
+explicit cited-answer requests can attach source snippets and citations to chat messages.
 
 ## Status
 
@@ -31,6 +32,7 @@ Implemented:
 - SEC EDGAR filing/document ingestion for primary HTML/TXT filings with local raw document, extracted text, chunk metadata, and source metadata storage.
 - Local storage manifest, migration, cache inspection, cache clear, and local data reset commands for `FRA_HOME`.
 - Local vector retrieval index for stored filing chunks with source-linked search results.
+- Cited-answer workflow that retrieves stored evidence, builds a source-limited prompt, stores citation research runs, and displays citations/snippets in chat messages.
 
 Not implemented yet:
 
@@ -144,8 +146,9 @@ deferred.
 ## Retrieval
 
 Milestone 17 adds a small local vector index for already-ingested filing chunks. It does
-not fetch documents, run agents, or add retrieved snippets to chat automatically. Configure
-an embedding provider first, such as a local OpenAI-compatible embedding endpoint:
+not fetch documents, run agents, or add retrieved snippets to ordinary chat automatically.
+Configure an embedding provider first, such as a local OpenAI-compatible embedding
+endpoint:
 
 ```powershell
 $env:FRA_EMBEDDING_PROVIDER = "local-openai"
@@ -167,6 +170,25 @@ It can be inspected or cleared without deleting the original filings:
 python -m financial_research_agent retrieval-status --pretty
 python -m financial_research_agent retrieval-clear --pretty
 ```
+
+## Cited Answers
+
+Milestone 18 adds an explicit cited-answer endpoint for report-style retrieval. It searches
+the local retrieval index, sends only the selected evidence snippets to the configured chat
+provider, and stores the resulting citation run under `FRA_HOME/data/report_runs.json`.
+If no supporting evidence is retrieved, the API returns a limitation note instead of asking
+the model to invent support.
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/sessions/$sessionId/cited-answer" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"content":"What does the latest filing say about revenue?","top_k":5}'
+```
+
+Citations include source URL, chunk/source identifiers, section heading when available,
+retrieval timestamp, quote bounds, and a short quote/snippet. This is still not a
+multi-agent report workflow and does not provide buy/sell/hold recommendations.
 
 ## Local Storage And Cache
 

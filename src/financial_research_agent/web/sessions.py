@@ -9,6 +9,7 @@ from typing import Any, Self
 from uuid import uuid4
 
 from financial_research_agent.llm import ChatMessage, MessageRole
+from financial_research_agent.reports import Citation, EvidenceSnippet
 from financial_research_agent.settings import Settings
 
 SESSION_STORE_VERSION = 1
@@ -68,6 +69,8 @@ class ChatSessionMessage:
     model: str | None = None
     research_run_id: str | None = None
     mentions: tuple[ChatMention, ...] = ()
+    citations: tuple[Citation, ...] = ()
+    evidence_snippets: tuple[EvidenceSnippet, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "role", MessageRole(self.role))
@@ -79,6 +82,12 @@ class ChatSessionMessage:
         object.__setattr__(self, "model", _optional_text(self.model))
         object.__setattr__(self, "research_run_id", _optional_text(self.research_run_id))
         object.__setattr__(self, "mentions", _mention_tuple(self.mentions))
+        object.__setattr__(self, "citations", _citation_tuple(self.citations))
+        object.__setattr__(
+            self,
+            "evidence_snippets",
+            _evidence_snippet_tuple(self.evidence_snippets),
+        )
         object.__setattr__(self, "created_at", _aware_datetime("created_at", self.created_at))
 
     @classmethod
@@ -95,6 +104,14 @@ class ChatSessionMessage:
                 ChatMention.from_dict(_payload_mapping(item, "mention"))
                 for item in _payload_list(payload, "mentions")
             ),
+            citations=tuple(
+                Citation.from_dict(_payload_mapping(item, "citation"))
+                for item in _payload_list(payload, "citations")
+            ),
+            evidence_snippets=tuple(
+                EvidenceSnippet.from_dict(_payload_mapping(item, "evidence_snippet"))
+                for item in _payload_list(payload, "evidence_snippets")
+            ),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -107,6 +124,8 @@ class ChatSessionMessage:
             "model": self.model,
             "research_run_id": self.research_run_id,
             "mentions": [mention.to_dict() for mention in self.mentions],
+            "citations": [citation.to_dict() for citation in self.citations],
+            "evidence_snippets": [snippet.to_dict() for snippet in self.evidence_snippets],
         }
 
     def to_provider_message(self) -> ChatMessage:
@@ -252,6 +271,8 @@ class ChatSessionStore:
         model: str,
         research_run_id: str | None = None,
         mentions: tuple[ChatMention, ...] = (),
+        citations: tuple[Citation, ...] = (),
+        evidence_snippets: tuple[EvidenceSnippet, ...] = (),
     ) -> ChatSession:
         with self._lock:
             session = self._sessions[_require_text("session_id", session_id)]
@@ -274,6 +295,8 @@ class ChatSessionStore:
                     provider=provider,
                     model=model,
                     research_run_id=research_run_id,
+                    citations=citations,
+                    evidence_snippets=evidence_snippets,
                 ),
             )
             updated = ChatSession(
@@ -382,6 +405,22 @@ def _mention_tuple(mentions: tuple[ChatMention, ...]) -> tuple[ChatMention, ...]
     for index, mention in enumerate(result):
         if not isinstance(mention, ChatMention):
             raise ValueError(f"mentions[{index}] must be a ChatMention")
+    return result
+
+
+def _citation_tuple(citations: tuple[Citation, ...]) -> tuple[Citation, ...]:
+    result = tuple(citations)
+    for index, citation in enumerate(result):
+        if not isinstance(citation, Citation):
+            raise ValueError(f"citations[{index}] must be a Citation")
+    return result
+
+
+def _evidence_snippet_tuple(snippets: tuple[EvidenceSnippet, ...]) -> tuple[EvidenceSnippet, ...]:
+    result = tuple(snippets)
+    for index, snippet in enumerate(result):
+        if not isinstance(snippet, EvidenceSnippet):
+            raise ValueError(f"evidence_snippets[{index}] must be an EvidenceSnippet")
     return result
 
 

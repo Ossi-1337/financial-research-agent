@@ -56,7 +56,13 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     calculate_price_metrics,
 )
-from financial_research_agent.retrieval import LocalVectorIndex
+from financial_research_agent.reports import CitedResearchRunStore
+from financial_research_agent.retrieval import (
+    IndexedChunk,
+    LocalVectorIndex,
+    RetrievalChunk,
+    RetrievalSourceKind,
+)
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements import (
     FinancialStatementCompany,
@@ -98,6 +104,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".message.assistant" in css_response.text
     assert "width: 100%" in css_response.text
     assert "border-top: 1px solid var(--border)" in css_response.text
+    assert ".citation-list" in css_response.text
+    assert ".evidence-snippet" in css_response.text
 
 
 def test_static_script_contains_mention_autocomplete_wiring() -> None:
@@ -110,6 +118,9 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "mention-chip" in response.text
     assert "Stop response" in response.text
     assert "renderLoadingIndicator" in response.text
+    assert "renderMessageCitations" in response.text
+    assert "safeExternalUrl" in response.text
+    assert "citation-list" in response.text
     assert 'item.className = "loading-row"' in response.text
     assert "message.provider" not in response.text
 
@@ -137,6 +148,7 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["retrieval"]["provider"] == "local-vector"
     assert payload["retrieval"]["index"]["record_count"] == 0
     assert payload["retrieval"]["embedding_provider"] == "disabled"
+    assert payload["report_runs"]["stored_run_count"] == 0
     assert payload["storage"]["provider"] == "local-json"
     assert "secret-value" not in json.dumps(payload)
 
@@ -680,6 +692,108 @@ def test_retrieval_search_empty_index_maps_to_not_found(tmp_path) -> None:
     assert response.json()["detail"]["code"] == "index_empty"
 
 
+def test_cited_answer_endpoint_stores_run_and_session_citations(tmp_path) -> None:
+    provider = CapturingProvider()
+    registry = (
+        ProviderRegistry()
+        .register_chat_provider("capture", provider)
+        .register_embedding_provider("keyword-fixture", KeywordEmbeddingProvider())
+    )
+    index = LocalVectorIndex(storage_path=tmp_path / "vector_index.json")
+    index.upsert(
+        (
+            IndexedChunk(
+                chunk=RetrievalChunk(
+                    id="retrieval:chunk-1",
+                    text="TEST TOOL OUTPUT filing revenue evidence.",
+                    source_kind=RetrievalSourceKind.FILING_CHUNK,
+                    source_id="filing-chunk-1",
+                    source_url="https://example.invalid/aapl-10k.htm",
+                    document_id="filing-1",
+                    section_heading="Item 7. Management Discussion",
+                    metadata={"cik": "320193", "char_start": "42"},
+                ),
+                embedding=(1.0, 0.0, 0.0),
+                embedding_provider="keyword-fixture",
+                embedding_model="keyword-model",
+                indexed_at=datetime(2026, 7, 5, tzinfo=UTC),
+            ),
+        )
+    )
+    report_store = CitedResearchRunStore(storage_path=tmp_path / "report_runs.json")
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_LLM_PROVIDER": "capture",
+            "FRA_LLM_MODEL": "capture-model",
+            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
+            "FRA_EMBEDDING_MODEL": "keyword-model",
+        }
+    )
+    client = _client(
+        settings=settings,
+        registry=registry,
+        retrieval_index=index,
+        report_run_store=report_store,
+    )
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/cited-answer",
+        json={"content": "What does the filing say about revenue?", "top_k": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assistant = payload["assistant_message"]
+    assert assistant["research_run_id"].startswith("research_run_")
+    assert assistant["content"].endswith("Sources: [C1]")
+    assert assistant["citations"][0]["marker"] == "[C1]"
+    assert assistant["citations"][0]["quote_start"] == 42
+    assert assistant["evidence_snippets"][0]["text"].startswith("TEST TOOL OUTPUT filing")
+    assert payload["research_run"]["citations"][0]["source_url"].endswith("aapl-10k.htm")
+    assert "[C1]" in provider.requests[0].messages[-1].content
+    stored = client.get(f"/api/research-runs/{assistant['research_run_id']}")
+    assert stored.status_code == 200
+    assert stored.json()["research_run"]["citations"][0]["id"] == "C1"
+
+
+def test_cited_answer_missing_evidence_adds_limitation_without_llm_call(tmp_path) -> None:
+    provider = CapturingProvider()
+    registry = (
+        ProviderRegistry()
+        .register_chat_provider("capture", provider)
+        .register_embedding_provider("keyword-fixture", KeywordEmbeddingProvider())
+    )
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_LLM_PROVIDER": "capture",
+            "FRA_LLM_MODEL": "capture-model",
+            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
+        }
+    )
+    client = _client(
+        settings=settings,
+        registry=registry,
+        retrieval_index=LocalVectorIndex(),
+        report_run_store=CitedResearchRunStore(storage_path=tmp_path / "report_runs.json"),
+    )
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/cited-answer",
+        json={"content": "Find unsupported facts."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["research_run"]["status"] == "limited"
+    assert payload["research_run"]["citations"] == []
+    assert "could not find stored evidence" in payload["assistant_message"]["content"]
+    assert provider.requests == []
+
+
 def _client(
     *,
     settings: Settings | None = None,
@@ -693,6 +807,7 @@ def _client(
     filing_provider=None,
     filing_store=None,
     retrieval_index=None,
+    report_run_store=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -709,6 +824,7 @@ def _client(
             filing_provider=filing_provider or FakeFilingProvider(),
             filing_store=filing_store or FilingStore(),
             retrieval_index=retrieval_index or LocalVectorIndex(),
+            report_run_store=report_run_store or CitedResearchRunStore(),
         )
     )
 

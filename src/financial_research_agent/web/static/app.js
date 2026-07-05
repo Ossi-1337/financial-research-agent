@@ -55,6 +55,15 @@ function mentionText(mention) {
   return `@${mention.label}`;
 }
 
+function safeExternalUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function renderMessageContent(container, message) {
   if (message.role !== "user" || !message.mentions?.length) {
     container.textContent = message.content;
@@ -77,6 +86,57 @@ function renderMessageContent(container, message) {
   if (cursor < message.content.length) {
     container.append(document.createTextNode(message.content.slice(cursor)));
   }
+}
+
+function renderMessageCitations(container, message) {
+  if (!message.citations?.length) {
+    return;
+  }
+  const snippets = new Map(
+    (message.evidence_snippets || []).map((snippet) => [snippet.citation_id, snippet])
+  );
+  const wrapper = document.createElement("div");
+  wrapper.className = "citation-list";
+  for (const citation of message.citations) {
+    const snippet = snippets.get(citation.id);
+    const item = document.createElement("article");
+    item.className = "citation-item";
+
+    const header = document.createElement("div");
+    header.className = "citation-header";
+
+    const safeUrl = safeExternalUrl(citation.source_url);
+    const marker = document.createElement(safeUrl ? "a" : "span");
+    marker.className = "citation-marker";
+    if (safeUrl) {
+      marker.href = safeUrl;
+      marker.target = "_blank";
+      marker.rel = "noreferrer";
+    }
+    marker.textContent = citation.marker || `[${citation.id}]`;
+
+    const location = document.createElement("span");
+    location.className = "citation-location";
+    location.textContent = citation.section || citation.document_id || citation.chunk_id || "Source";
+
+    header.append(marker, location);
+    item.append(header);
+
+    if (snippet?.text) {
+      const excerpt = document.createElement("p");
+      excerpt.className = "evidence-snippet";
+      excerpt.textContent = snippet.text;
+      item.append(excerpt);
+    } else if (citation.quote) {
+      const quote = document.createElement("p");
+      quote.className = "evidence-snippet";
+      quote.textContent = citation.quote;
+      item.append(quote);
+    }
+
+    wrapper.append(item);
+  }
+  container.append(wrapper);
 }
 
 function renderMentionChip(mention) {
@@ -105,6 +165,7 @@ function renderMessages() {
       item.append(meta);
     }
     item.append(content);
+    renderMessageCitations(item, message);
     messageList.append(item);
   }
   if (state.busy) {

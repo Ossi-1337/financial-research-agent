@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -38,6 +40,15 @@ from financial_research_agent.market_data import (
     MarketDataStore,
     MarketSecurity,
     create_default_market_data_provider,
+)
+from financial_research_agent.reports import (
+    CitedResearchRun,
+    CitedResearchRunStatus,
+    CitedResearchRunStore,
+    build_rag_messages,
+    citation_artifacts_from_retrieval,
+    ensure_citation_marker,
+    missing_evidence_limitation,
 )
 from financial_research_agent.retrieval import (
     LocalVectorIndex,
@@ -123,6 +134,13 @@ class RetrievalSearchRequest(BaseModel):
     filters: dict[str, str] = Field(default_factory=dict)
 
 
+class CitedAnswerRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=20_000)
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+    filters: dict[str, str] = Field(default_factory=dict)
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -137,6 +155,7 @@ def create_app(
     filing_store: FilingStore | None = None,
     storage_manager: LocalStorageManager | None = None,
     retrieval_index: LocalVectorIndex | None = None,
+    report_run_store: CitedResearchRunStore | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -154,6 +173,7 @@ def create_app(
     filings = filing_store or FilingStore.from_settings(app_settings)
     storage = storage_manager or LocalStorageManager.from_settings(app_settings)
     retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
+    report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -169,6 +189,7 @@ def create_app(
     app.state.filing_store = filings
     app.state.storage_manager = storage
     app.state.retrieval_index = retrieval
+    app.state.report_run_store = report_runs
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -229,6 +250,10 @@ def create_app(
                 "embedding_provider_registered": provider_registry.has_embedding_provider(
                     embedding_selection.provider
                 ),
+            },
+            "report_runs": {
+                "stored_run_count": report_runs.count(),
+                "persistent": report_runs.storage_path is not None,
             },
             "storage": {
                 "provider": app_settings.storage.provider,
@@ -477,6 +502,123 @@ def create_app(
             ) from exc
         return {"result": result.to_dict()}
 
+    @app.get("/api/research-runs/{run_id}")
+    def get_research_run(run_id: str) -> dict[str, Any]:
+        run = report_runs.get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail={"error": "research_run_not_found"})
+        return {"research_run": run.to_dict()}
+
+    @app.post("/api/sessions/{session_id}/cited-answer")
+    async def post_cited_answer(
+        session_id: str,
+        request: CitedAnswerRequest,
+    ) -> dict[str, Any]:
+        session = sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+        content = _message_content(request.content)
+        retrieval_query = RetrievalQuery(
+            query=content,
+            top_k=request.top_k or app_settings.retrieval.top_k,
+            min_score=(
+                request.min_score
+                if request.min_score is not None
+                else app_settings.retrieval.min_score
+            ),
+            filters=request.filters,
+        )
+        try:
+            embedding_selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+            embedding_provider = provider_registry.embedding_provider(embedding_selection.provider)
+            retrieval_result = await search_index(
+                retrieval_query,
+                index=retrieval,
+                embedding_provider=embedding_provider,
+                embedding_model=embedding_selection.model,
+            )
+        except RetrievalError as exc:
+            if exc.code not in {RetrievalErrorCode.INDEX_EMPTY, RetrievalErrorCode.INDEX_NOT_FOUND}:
+                raise HTTPException(
+                    status_code=_status_for_retrieval_error(exc.code),
+                    detail=exc.to_dict(),
+                ) from exc
+            return _append_limited_cited_answer(
+                sessions=sessions,
+                report_runs=report_runs,
+                session_id=session_id,
+                query=content,
+                limitation=missing_evidence_limitation(content),
+            )
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=_status_for_provider_error(exc.code),
+                detail=_provider_error_detail(exc),
+            ) from exc
+
+        citations, evidence = citation_artifacts_from_retrieval(retrieval_result)
+        if not citations:
+            return _append_limited_cited_answer(
+                sessions=sessions,
+                report_runs=report_runs,
+                session_id=session_id,
+                query=content,
+                limitation=missing_evidence_limitation(content),
+            )
+
+        chat_selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
+        try:
+            provider = provider_registry.chat_provider(chat_selection.provider)
+            response = await provider.chat(
+                ChatRequest(
+                    messages=build_rag_messages(content, evidence),
+                    model=chat_selection.model,
+                )
+            )
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=_status_for_provider_error(exc.code),
+                detail=_provider_error_detail(exc),
+            ) from exc
+
+        answer = ensure_citation_marker(response.message.content, citations)
+        run = report_runs.save(
+            CitedResearchRun(
+                id=_new_research_run_id(),
+                query=content,
+                answer=answer,
+                status=CitedResearchRunStatus.ANSWERED,
+                created_at=datetime.now(UTC),
+                citations=citations,
+                evidence=evidence,
+                provider=response.provider,
+                model=response.model,
+            )
+        )
+        updated_session = sessions.append_exchange(
+            session_id=session_id,
+            user_content=content,
+            assistant_content=answer,
+            provider=response.provider,
+            model=response.model,
+            research_run_id=run.id,
+            citations=citations,
+            evidence_snippets=evidence,
+        )
+        return {
+            "session": updated_session.to_dict(),
+            "assistant_message": updated_session.messages[-1].to_dict(),
+            "research_run": run.to_dict(),
+            "provider": response.provider,
+            "model": response.model,
+            "finish_reason": response.finish_reason.value,
+            "usage": {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        }
+
     @app.post("/api/sessions/{session_id}/messages")
     async def post_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
         session = sessions.get(session_id)
@@ -588,6 +730,53 @@ def _mention_context_messages(mentions: tuple[ChatMention, ...]) -> tuple[ChatMe
             fields.append(f"source_provider={mention.source_provider}")
         lines.append(f"{index}. " + "; ".join(fields))
     return (ChatMessage(role=MessageRole.SYSTEM, content="\n".join(lines)),)
+
+
+def _append_limited_cited_answer(
+    *,
+    sessions: ChatSessionStore,
+    report_runs: CitedResearchRunStore,
+    session_id: str,
+    query: str,
+    limitation: str,
+) -> dict[str, Any]:
+    run = report_runs.save(
+        CitedResearchRun(
+            id=_new_research_run_id(),
+            query=query,
+            answer=limitation,
+            status=CitedResearchRunStatus.LIMITED,
+            created_at=datetime.now(UTC),
+            provider="retrieval",
+            model="no-evidence",
+            limitations=(limitation,),
+        )
+    )
+    updated_session = sessions.append_exchange(
+        session_id=session_id,
+        user_content=query,
+        assistant_content=limitation,
+        provider="retrieval",
+        model="no-evidence",
+        research_run_id=run.id,
+    )
+    return {
+        "session": updated_session.to_dict(),
+        "assistant_message": updated_session.messages[-1].to_dict(),
+        "research_run": run.to_dict(),
+        "provider": "retrieval",
+        "model": "no-evidence",
+        "finish_reason": "stop",
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
+def _new_research_run_id() -> str:
+    return f"research_run_{uuid4().hex}"
 
 
 def _status_for_provider_error(code: ProviderErrorCode) -> int:
