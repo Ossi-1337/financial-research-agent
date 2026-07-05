@@ -143,7 +143,7 @@ h1 {
 
 .chat-panel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -161,6 +161,62 @@ h1 {
   padding: 28px 28px 18px;
   overflow-y: auto;
   list-style: none;
+}
+
+.context-panel {
+  grid-row: 2;
+  display: grid;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.context-panel[hidden] {
+  display: none;
+}
+
+.context-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.context-panel h2 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.context-source-list {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.context-source-link {
+  display: inline-flex;
+  max-width: 260px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.context-source-link:hover {
+  text-decoration: underline;
 }
 
 .message {
@@ -293,7 +349,7 @@ h1 {
 }
 
 .composer {
-  grid-row: 2;
+  grid-row: 3;
   padding: 14px;
   border-top: 1px solid var(--border);
   background: var(--surface-muted);

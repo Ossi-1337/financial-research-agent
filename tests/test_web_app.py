@@ -91,6 +91,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "Financial Research Agent" in root_response.text
     assert 'id="mention-menu"' in root_response.text
     assert 'id="send-button"' in root_response.text
+    assert 'id="context-panel"' in root_response.text
+    assert 'id="context-source-list"' in root_response.text
     assert 'class="composer-action"' in root_response.text
     assert 'id="company-search-form"' not in root_response.text
     assert 'id="selected-company"' not in root_response.text
@@ -107,6 +109,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".message.assistant" in css_response.text
     assert "width: 100%" in css_response.text
     assert "border-top: 1px solid var(--border)" in css_response.text
+    assert ".context-panel[hidden]" in css_response.text
+    assert ".context-source-link" in css_response.text
     assert ".citation-list" in css_response.text
     assert ".evidence-snippet" in css_response.text
 
@@ -126,6 +130,8 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "getReader" in response.text
     assert "renderLoadingIndicator" in response.text
     assert "renderMessageCitations" in response.text
+    assert "renderContextPanel" in response.text
+    assert "contextSourcesFromMessages" in response.text
     assert "safeExternalUrl" in response.text
     assert "citation-list" in response.text
     assert 'item.className = "loading-row"' in response.text
@@ -156,6 +162,8 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["retrieval"]["index"]["record_count"] == 0
     assert payload["retrieval"]["embedding_provider"] == "disabled"
     assert payload["report_runs"]["stored_run_count"] == 0
+    assert payload["context_analysis"]["source"] == "explicit_source_items"
+    assert payload["context_analysis"]["recommendations"] == "disabled"
     assert payload["storage"]["provider"] == "local-json"
     assert "secret-value" not in json.dumps(payload)
 

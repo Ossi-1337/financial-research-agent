@@ -19,6 +19,8 @@ const errorBanner = document.querySelector("#error-banner");
 const providerPill = document.querySelector("#provider-pill");
 const sessionLabel = document.querySelector("#session-label");
 const sessionList = document.querySelector("#session-list");
+const contextPanel = document.querySelector("#context-panel");
+const contextSourceList = document.querySelector("#context-source-list");
 const newSessionButton = document.querySelector("#new-session-button");
 const clearSessionsButton = document.querySelector("#clear-sessions-button");
 
@@ -178,7 +180,47 @@ function renderMessages() {
   if (state.busy && !hasStreamingMessage) {
     messageList.append(renderLoadingIndicator());
   }
+  renderContextPanel();
   messageList.scrollTop = messageList.scrollHeight;
+}
+
+function renderContextPanel() {
+  const sources = contextSourcesFromMessages();
+  contextSourceList.innerHTML = "";
+  contextPanel.hidden = sources.length === 0;
+  for (const source of sources) {
+    const item = document.createElement("li");
+    const link = document.createElement("a");
+    link.className = "context-source-link";
+    link.href = source.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = source.label;
+    item.append(link);
+    contextSourceList.append(item);
+  }
+}
+
+function contextSourcesFromMessages() {
+  const sources = [];
+  const seen = new Set();
+  for (const message of [...state.messages].reverse()) {
+    for (const citation of message.citations || []) {
+      const url = safeExternalUrl(citation.source_url);
+      if (!url || seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      sources.push({
+        url,
+        label: citation.section || citation.document_id || citation.marker || citation.id,
+      });
+      if (sources.length >= 8) {
+        return sources;
+      }
+    }
+  }
+  return sources;
 }
 
 function renderLoadingIndicator() {

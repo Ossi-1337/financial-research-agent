@@ -11,7 +11,7 @@ indexed into a local vector retrieval index when an embedding provider is config
 explicit cited-answer requests can attach source snippets and citations to chat messages.
 It also has a first financial report analysis agent that summarizes stored statements and
 filings into evidence-backed sections, plus a stock price analysis agent over stored
-market data.
+market data and a context agent for source-linked news, macro, and sector inputs.
 
 ## Status
 
@@ -38,12 +38,13 @@ Implemented:
 - Cited-answer workflow that retrieves stored evidence, builds a source-limited prompt, stores citation research runs, and displays citations/snippets in chat messages.
 - Financial report analysis agent for stored statements and filing chunks with structured findings, citations, confidence labels, prior-period revenue comparison, and limitations.
 - Stock price analysis agent for stored market data with deterministic metrics, trend/volatility/drawdown/volume findings, benchmark comparison when available, and chart-ready data.
+- News, macro, and sector context agent for explicit source-linked inputs with recency, reliability, deduplication, and separate company/macro/sector findings.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
-- News/macro, synthesis, and orchestrator agent workflows.
-- PDF, news, or macro ingestion.
+- Synthesis and orchestrator agent workflows.
+- PDF, automatic news, or macro ingestion.
 - SQLite/remote database or automatic chat RAG.
 
 ## Setup
@@ -251,6 +252,23 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/stock-price-analysis" `
 The response includes deterministic metrics, findings for recent performance, trend,
 volatility, drawdown, volume, optional benchmark comparison, source/freshness warnings,
 and chart-ready close/volume series.
+
+## News, Macro, And Sector Context
+
+Milestone 21 adds a deterministic context agent for explicit source-linked news, macro,
+and sector inputs. It does not fetch articles, scrape the web, score sentiment, or mix
+macro/sector context into company fundamentals without source evidence.
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/context-analysis" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"query":"What is the current macro context?","region":"US","source_items":[{"id":"fed-rates","title":"Federal Reserve rate release","summary":"Official rate context.","source_url":"https://example.com/fed-rates","source_name":"Federal Reserve","source_type":"rates","reliability":"official","scope":"macro","retrieved_at":"2026-07-05T12:00:00+00:00","published_at":"2026-07-04T12:00:00+00:00","region":"US"}]}'
+```
+
+Responses include source URLs, publication/retrieval timestamps, source reliability,
+recency labels, deduplication warnings, and limitations when no reliable recent source is
+available.
 
 ## Local Storage And Cache
 

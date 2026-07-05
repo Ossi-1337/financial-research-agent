@@ -28,6 +28,12 @@
         <section class="chat-panel" aria-label="Chat">
           <div id="error-banner" class="error-banner" role="alert" hidden></div>
           <ol id="message-list" class="message-list"></ol>
+          <section id="context-panel" class="context-panel" aria-label="Current context" hidden>
+            <div class="context-panel-header">
+              <h2>Current context</h2>
+            </div>
+            <ol id="context-source-list" class="context-source-list"></ol>
+          </section>
           <form id="chat-form" class="composer">
             <label class="sr-only" for="message-input">Message</label>
             <div class="composer-shell">

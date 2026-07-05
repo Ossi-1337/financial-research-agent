@@ -13,6 +13,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from financial_research_agent.context_analysis import (
+    ContextScope,
+    ContextSourceItem,
+    ContextSourceType,
+    NewsMacroSectorAgent,
+    SourceReliability,
+)
 from financial_research_agent.entities import (
     CompanySearchError,
     CompanySearchErrorCode,
@@ -167,6 +174,32 @@ class StockPriceAnalysisRequest(BaseModel):
     benchmark_symbol: str | None = Field(default=None, min_length=1, max_length=32)
 
 
+class ContextSourceItemRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    summary: str = Field(min_length=1, max_length=2_000)
+    source_url: str = Field(min_length=1, max_length=2_000)
+    source_name: str = Field(min_length=1, max_length=200)
+    source_type: ContextSourceType
+    reliability: SourceReliability
+    scope: ContextScope
+    retrieved_at: datetime
+    published_at: datetime | None = None
+    company_symbols: tuple[str, ...] = ()
+    sector: str | None = None
+    region: str | None = None
+    topics: tuple[str, ...] = ()
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ContextAnalysisRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2_000)
+    company_symbols: tuple[str, ...] = ()
+    sector: str | None = None
+    region: str | None = None
+    source_items: tuple[ContextSourceItemRequest, ...] = ()
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -210,6 +243,7 @@ def create_app(
         market_data_store=market_store,
         market_data_provider=app_settings.data_sources.market_data_provider,
     )
+    context_agent = NewsMacroSectorAgent()
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -228,6 +262,7 @@ def create_app(
     app.state.report_run_store = report_runs
     app.state.financial_report_agent = financial_report_agent
     app.state.stock_price_agent = stock_price_agent
+    app.state.context_agent = context_agent
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -299,6 +334,10 @@ def create_app(
             },
             "stock_price_analysis": {
                 "source": "stored_market_data",
+                "recommendations": "disabled",
+            },
+            "context_analysis": {
+                "source": "explicit_source_items",
                 "recommendations": "disabled",
             },
             "storage": {
@@ -499,6 +538,23 @@ def create_app(
             security,
             benchmark_symbol=request.benchmark_symbol,
         )
+        return {"analysis": result.to_dict()}
+
+    @app.post("/api/context-analysis")
+    def analyze_context(request: ContextAnalysisRequest) -> dict[str, Any]:
+        try:
+            result = context_agent.analyze(
+                query=request.query,
+                source_items=tuple(_context_source_item(item) for item in request.source_items),
+                company_symbols=request.company_symbols,
+                sector=request.sector,
+                region=request.region,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_context_source", "message": str(exc)},
+            ) from exc
         return {"analysis": result.to_dict()}
 
     @app.get("/api/retrieval/index")
@@ -896,6 +952,26 @@ def _mention_context_messages(mentions: tuple[ChatMention, ...]) -> tuple[ChatMe
             fields.append(f"source_provider={mention.source_provider}")
         lines.append(f"{index}. " + "; ".join(fields))
     return (ChatMessage(role=MessageRole.SYSTEM, content="\n".join(lines)),)
+
+
+def _context_source_item(request: ContextSourceItemRequest) -> ContextSourceItem:
+    return ContextSourceItem(
+        id=request.id,
+        title=request.title,
+        summary=request.summary,
+        source_url=request.source_url,
+        source_name=request.source_name,
+        source_type=request.source_type,
+        reliability=request.reliability,
+        scope=request.scope,
+        retrieved_at=request.retrieved_at,
+        published_at=request.published_at,
+        company_symbols=request.company_symbols,
+        sector=request.sector,
+        region=request.region,
+        topics=request.topics,
+        metadata=request.metadata,
+    )
 
 
 def _append_limited_cited_answer(
