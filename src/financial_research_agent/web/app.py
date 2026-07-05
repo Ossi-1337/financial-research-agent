@@ -44,6 +44,10 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     create_default_market_data_provider,
 )
+from financial_research_agent.report_analysis import (
+    FinancialReportAnalysisAgent,
+    FinancialReportAnalysisCompany,
+)
 from financial_research_agent.reports import (
     CitedResearchRun,
     CitedResearchRunStatus,
@@ -144,6 +148,12 @@ class CitedAnswerRequest(BaseModel):
     filters: dict[str, str] = Field(default_factory=dict)
 
 
+class FinancialReportAnalysisRequest(BaseModel):
+    cik: str = Field(min_length=1, max_length=10, pattern="^[0-9]+$")
+    company_id: str | None = None
+    legal_name: str | None = None
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -177,6 +187,12 @@ def create_app(
     storage = storage_manager or LocalStorageManager.from_settings(app_settings)
     retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
     report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
+    financial_report_agent = FinancialReportAnalysisAgent(
+        statement_store=statement_store,
+        filing_store=filings,
+        statement_provider=app_settings.data_sources.financial_statement_provider,
+        filing_provider=app_settings.data_sources.filing_provider,
+    )
     static_dir = Path(__file__).with_name("static")
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
@@ -193,6 +209,7 @@ def create_app(
     app.state.storage_manager = storage
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
+    app.state.financial_report_agent = financial_report_agent
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -257,6 +274,10 @@ def create_app(
             "report_runs": {
                 "stored_run_count": report_runs.count(),
                 "persistent": report_runs.storage_path is not None,
+            },
+            "financial_report_analysis": {
+                "source": "stored_financial_statements_and_filings",
+                "recommendations": "disabled",
             },
             "storage": {
                 "provider": app_settings.storage.provider,
@@ -432,6 +453,16 @@ def create_app(
             ) from exc
         stored_result = filings.save_result(result)
         return {"filings": stored_result.to_dict(), "stored": False}
+
+    @app.post("/api/financial-report-analysis")
+    def analyze_financial_report(request: FinancialReportAnalysisRequest) -> dict[str, Any]:
+        company = FinancialReportAnalysisCompany(
+            cik=request.cik,
+            company_id=request.company_id,
+            legal_name=request.legal_name,
+        )
+        result = financial_report_agent.analyze(company)
+        return {"analysis": result.to_dict()}
 
     @app.get("/api/retrieval/index")
     def get_retrieval_index() -> dict[str, Any]:

@@ -9,6 +9,8 @@ configured, SEC financial statements for SEC filers, and SEC HTML/TXT filing doc
 A minimal local chat UI is available for direct LLM chat. Stored filing chunks can be
 indexed into a local vector retrieval index when an embedding provider is configured, and
 explicit cited-answer requests can attach source snippets and citations to chat messages.
+It also has a first financial report analysis agent that summarizes stored statements and
+filings into evidence-backed sections.
 
 ## Status
 
@@ -33,11 +35,12 @@ Implemented:
 - Local storage manifest, migration, cache inspection, cache clear, and local data reset commands for `FRA_HOME`.
 - Local vector retrieval index for stored filing chunks with source-linked search results.
 - Cited-answer workflow that retrieves stored evidence, builds a source-limited prompt, stores citation research runs, and displays citations/snippets in chat messages.
+- Financial report analysis agent for stored statements and filing chunks with structured findings, citations, confidence labels, prior-period revenue comparison, and limitations.
 
 Not implemented yet:
 
 - Anthropic, Gemini, or gateway provider integrations.
-- Agent runtime and orchestration.
+- Stock price, news/macro, synthesis, and orchestrator agent workflows.
 - PDF, news, or macro ingestion.
 - SQLite/remote database or automatic chat RAG.
 
@@ -214,6 +217,22 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/sessions/$sessionId/cited-answer" `
 Citations include source URL, chunk/source identifiers, section heading when available,
 retrieval timestamp, quote bounds, and a short quote/snippet. This is still not a
 multi-agent report workflow and does not provide buy/sell/hold recommendations.
+
+## Financial Report Analysis
+
+Milestone 19 adds a first specialist analysis agent for already-stored SEC statements and
+filing chunks. It does not fetch data by itself, analyze stock prices, use news/macro data,
+or produce an investment conclusion.
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/financial-report-analysis" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"cik":"0000320193","company_id":"sec:company:320193","legal_name":"Apple Inc."}'
+```
+
+The response includes sections for revenue, margins, cash flow, debt/liquidity, guidance,
+risks, and accounting caveats. Every finding includes cited evidence IDs or a limitation.
 
 ## Local Storage And Cache
 
