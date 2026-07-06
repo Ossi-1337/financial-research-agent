@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -33,6 +33,13 @@ from financial_research_agent.filings import (
     FilingProvider,
     FilingStore,
     create_default_filing_provider,
+)
+from financial_research_agent.interop import (
+    InteropAccessDecision,
+    InteropAccessPolicy,
+    MCPReadOnlyDispatcher,
+    create_agent_card,
+    create_sanitized_status_payload,
 )
 from financial_research_agent.llm import (
     ChatMessage,
@@ -301,9 +308,59 @@ def create_app(
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+    def sanitized_interop_status() -> dict[str, object]:
+        selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
+        return create_sanitized_status_payload(
+            environment=app_settings.environment,
+            chat_provider=selection.provider,
+            chat_model=selection.model,
+            chat_registered=provider_registry.has_chat_provider(selection.provider),
+            storage_provider=app_settings.storage.provider,
+            retrieval_provider=app_settings.retrieval.provider,
+            interop_policy=_interop_policy(app_settings),
+        )
+
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/.well-known/agent.json")
+    @app.get("/.well-known/agent-card.json")
+    def a2a_agent_card(
+        request: Request,
+        authorization: str | None = Header(default=None),
+        x_fra_interop_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        _require_interop_access(request, app_settings, authorization, x_fra_interop_key)
+        return create_agent_card(
+            base_url=str(request.base_url),
+            version=app.version,
+            api_key_required=app_settings.interoperability.api_key is not None,
+        ).to_dict()
+
+    @app.post("/api/interop/mcp")
+    async def mcp_read_only_endpoint(
+        request: Request,
+        authorization: str | None = Header(default=None),
+        x_fra_interop_key: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        _require_interop_access(request, app_settings, authorization, x_fra_interop_key)
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            }
+        if not isinstance(payload, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Invalid JSON-RPC request."},
+            }
+        dispatcher = MCPReadOnlyDispatcher(status_payload=sanitized_interop_status())
+        return dispatcher.handle(payload)
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:
@@ -384,6 +441,7 @@ def create_app(
                 "source": "orchestrator_specialist_handoffs",
                 "recommendations": "disabled",
             },
+            "interoperability": app_settings.interoperability.to_dict(),
             "storage": {
                 "provider": app_settings.storage.provider,
                 "app_home": str(app_settings.local_paths.app_home),
@@ -1002,6 +1060,33 @@ def create_app(
         )
 
     return app
+
+
+def _interop_policy(settings: Settings) -> InteropAccessPolicy:
+    return InteropAccessPolicy(
+        enabled=settings.interoperability.enabled,
+        local_only=settings.interoperability.local_only,
+        api_key=settings.interoperability.api_key,
+    )
+
+
+def _require_interop_access(
+    request: Request,
+    settings: Settings,
+    authorization: str | None,
+    api_key_header: str | None,
+) -> None:
+    policy = _interop_policy(settings)
+    result = policy.evaluate(
+        client_host=request.client.host if request.client is not None else None,
+        authorization=authorization,
+        api_key_header=api_key_header,
+    )
+    if result.allowed:
+        return
+    if result.decision == InteropAccessDecision.DISABLED:
+        raise HTTPException(status_code=404, detail={"error": result.reason})
+    raise HTTPException(status_code=401, detail={"error": result.reason})
 
 
 def _orchestrator_input(request: OrchestratorResearchRequest) -> OrchestratorResearchInput:

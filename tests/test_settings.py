@@ -30,6 +30,9 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.retrieval.provider == "local-vector"
     assert settings.retrieval.top_k == 5
     assert settings.retrieval.min_score == 0.0
+    assert settings.interoperability.enabled is False
+    assert settings.interoperability.local_only is True
+    assert settings.interoperability.api_key is None
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -72,6 +75,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_RETRIEVAL_PROVIDER": "local-vector",
             "FRA_RETRIEVAL_TOP_K": "7",
             "FRA_RETRIEVAL_MIN_SCORE": "0.25",
+            "FRA_INTEROP_ENABLED": "true",
+            "FRA_INTEROP_LOCAL_ONLY": "false",
+            "FRA_INTEROP_API_KEY": "interop-key",
         }
     )
 
@@ -116,6 +122,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.retrieval.provider == "local-vector"
     assert settings.retrieval.top_k == 7
     assert settings.retrieval.min_score == 0.25
+    assert settings.interoperability.enabled is True
+    assert settings.interoperability.local_only is False
+    assert settings.interoperability.api_key == "interop-key"
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -294,3 +303,48 @@ def test_task_provider_settings_fall_back_to_global_llm_settings() -> None:
     assert chat_selection.base_url == "http://127.0.0.1:8080/v1"
     assert tool_selection.provider == "local-openai"
     assert tool_selection.model == "qwen3:8b"
+
+
+def test_interoperability_settings_are_read_and_validated() -> None:
+    local_settings = Settings.from_env(
+        {
+            "FRA_INTEROP_ENABLED": "1",
+            "FRA_INTEROP_LOCAL_ONLY": "yes",
+        }
+    )
+
+    assert local_settings.interoperability.enabled is True
+    assert local_settings.interoperability.local_only is True
+    assert local_settings.interoperability.api_key is None
+    assert local_settings.interoperability.to_dict()["api_key_configured"] is False
+
+    remote_settings = Settings.from_env(
+        {
+            "FRA_INTEROP_ENABLED": "true",
+            "FRA_INTEROP_LOCAL_ONLY": "false",
+            "FRA_INTEROP_API_KEY": "secret",
+        }
+    )
+
+    assert remote_settings.interoperability.enabled is True
+    assert remote_settings.interoperability.local_only is False
+    assert remote_settings.interoperability.api_key == "secret"
+
+    try:
+        Settings.from_env({"FRA_INTEROP_ENABLED": "maybe"})
+    except ValueError as exc:
+        assert "FRA_INTEROP_ENABLED must be a boolean" in str(exc)
+    else:
+        raise AssertionError("Expected invalid interop boolean to be rejected")
+
+    try:
+        Settings.from_env(
+            {
+                "FRA_INTEROP_ENABLED": "true",
+                "FRA_INTEROP_LOCAL_ONLY": "false",
+            }
+        )
+    except ValueError as exc:
+        assert "FRA_INTEROP_API_KEY is required" in str(exc)
+    else:
+        raise AssertionError("Expected remote interop without API key to be rejected")

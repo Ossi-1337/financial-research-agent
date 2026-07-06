@@ -174,8 +174,109 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["orchestration"]["recommendations"] == "disabled"
     assert payload["synthesis"]["source"] == "orchestrator_specialist_handoffs"
     assert payload["synthesis"]["recommendations"] == "disabled"
+    assert payload["interoperability"]["enabled"] is False
+    assert payload["interoperability"]["api_key_configured"] is False
     assert payload["storage"]["provider"] == "local-json"
     assert "secret-value" not in json.dumps(payload)
+
+
+def test_interop_endpoints_are_disabled_by_default() -> None:
+    client = _client()
+
+    card = client.get("/.well-known/agent.json")
+    mcp = client.post("/api/interop/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+
+    assert card.status_code == 404
+    assert card.json()["detail"]["error"] == "interoperability_disabled"
+    assert mcp.status_code == 404
+    assert mcp.json()["detail"]["error"] == "interoperability_disabled"
+
+
+def test_local_interop_agent_card_and_mcp_status_tool_are_read_only() -> None:
+    settings = Settings.from_env({"FRA_INTEROP_ENABLED": "true"})
+    client = _client(settings=settings)
+
+    card_response = client.get("/.well-known/agent-card.json")
+    initialize_response = client.post(
+        "/api/interop/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+    )
+    list_response = client.post(
+        "/api/interop/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    )
+    call_response = client.post(
+        "/api/interop/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "financial_research_agent.status", "arguments": {}},
+        },
+    )
+
+    card = card_response.json()
+    tool_text = call_response.json()["result"]["content"][0]["text"]
+    tool_payload = json.loads(tool_text)
+
+    assert card_response.status_code == 200
+    assert card["name"] == "financial-research-agent"
+    assert card["skills"][0]["id"] == "read_sanitized_status"
+    assert card["capabilities"]["streaming"] is False
+    assert initialize_response.json()["result"]["capabilities"]["tools"]["listChanged"] is False
+    assert list_response.json()["result"]["tools"][0]["name"] == "financial_research_agent.status"
+    assert tool_payload["app"] == "financial-research-agent"
+    assert tool_payload["capabilities"]["recommendations"] == "disabled"
+    assert "secret-key" not in json.dumps(card_response.json()).casefold()
+    assert "secret" not in tool_text.casefold()
+
+
+def test_interop_remote_mode_requires_api_key_and_accepts_bearer_or_header() -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_INTEROP_ENABLED": "true",
+            "FRA_INTEROP_LOCAL_ONLY": "false",
+            "FRA_INTEROP_API_KEY": "secret-key",
+        }
+    )
+    client = _client(settings=settings)
+
+    denied = client.get("/.well-known/agent.json")
+    header_allowed = client.post(
+        "/api/interop/mcp",
+        headers={"X-FRA-Interop-Key": "secret-key"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+    bearer_allowed = client.get(
+        "/.well-known/agent.json",
+        headers={"Authorization": "Bearer secret-key"},
+    )
+
+    assert denied.status_code == 401
+    assert denied.json()["detail"]["error"] == "invalid_interop_key"
+    assert header_allowed.status_code == 200
+    assert bearer_allowed.status_code == 200
+    assert "secret-key" not in json.dumps(header_allowed.json())
+
+
+def test_interop_mcp_returns_json_rpc_errors_for_unknown_tool() -> None:
+    settings = Settings.from_env({"FRA_INTEROP_ENABLED": "true"})
+    client = _client(settings=settings)
+
+    response = client.post(
+        "/api/interop/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": "bad-tool",
+            "method": "tools/call",
+            "params": {"name": "shell.exec", "arguments": {}},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "bad-tool"
+    assert payload["error"]["code"] == -32602
 
 
 def test_storage_status_endpoint_reports_local_datasets(tmp_path) -> None:

@@ -114,12 +114,15 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - Deterministic synthesis reports with current situation, strengths, weaknesses,
   opportunities, risks, upside/downside scenarios, unknowns, confidence, and evidence
   coverage indicators.
+- Optional interoperability spike with A2A discovery metadata and one local-safe,
+  read-only MCP-style status tool. It is disabled by default.
 
 ## Not Built Yet
 
 - Anthropic, Gemini, and gateway provider adapters.
 - LLM-generated narrative report writing beyond deterministic source-backed synthesis.
 - Automatic news or macro ingestion.
+- Production A2A agent server or broad MCP tool server.
 - PDF extraction.
 - SQLite or remote database storage.
 - Automatic chat RAG for every message.
@@ -251,6 +254,7 @@ Core endpoints:
 | `POST /api/orchestrator/research` | Run the bounded research workflow |
 | `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
 | `POST /api/sessions/{session_id}/synthesis-report` | Append a rendered synthesis report to a chat session |
+| `POST /api/interop/mcp` | Optional disabled-by-default read-only MCP-style spike endpoint |
 
 Example orchestrated research request:
 
@@ -264,6 +268,20 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/orchestrator/research" `
 In the chat UI, an explicit `/research Apple financial situation` message runs the same
 bounded workflow and renders the synthesis report in the conversation. Ordinary chat
 messages remain direct LLM chat and do not automatically run research tools.
+
+Optional interoperability spike:
+
+```powershell
+$env:FRA_INTEROP_ENABLED = "true"
+$env:FRA_INTEROP_LOCAL_ONLY = "true"
+python -m financial_research_agent serve --host 127.0.0.1 --port 8000
+```
+
+When enabled for local use, A2A-style discovery metadata is available at
+`/.well-known/agent.json` and `/.well-known/agent-card.json`. The MCP-style endpoint supports
+`initialize`, `tools/list`, and `tools/call` for `financial_research_agent.status` only. Remote
+interop requires `FRA_INTEROP_API_KEY`; do not expose this endpoint publicly without an
+explicit deployment security review.
 
 ## Local Data
 
@@ -353,6 +371,8 @@ Near-term direction:
 - [SEC EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
 - [SEC EDGAR access policy](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data)
 - [Alpha Vantage documentation](https://www.alphavantage.co/documentation/)
+- [Agent2Agent Protocol](https://github.com/a2aproject/A2A)
+- [Model Context Protocol](https://modelcontextprotocol.io/specification/2025-03-26/)
 
 ## License
 
