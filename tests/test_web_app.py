@@ -115,6 +115,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".citation-list" in css_response.text
     assert ".evidence-snippet" in css_response.text
     assert ".synthesis-report" in css_response.text
+    assert ".trace-timeline" in css_response.text
 
 
 def test_static_script_contains_mention_autocomplete_wiring() -> None:
@@ -134,7 +135,10 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "renderMessageCitations" in response.text
     assert "renderContextPanel" in response.text
     assert "renderSynthesisReport" in response.text
+    assert "renderTraceTimeline" in response.text
+    assert "loadRunTrace" in response.text
     assert "/synthesis-report" in response.text
+    assert "/trace" in response.text
     assert "researchCommand" in response.text
     assert "contextSourcesFromMessages" in response.text
     assert "safeExternalUrl" in response.text
@@ -174,6 +178,9 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["orchestration"]["recommendations"] == "disabled"
     assert payload["synthesis"]["source"] == "orchestrator_specialist_handoffs"
     assert payload["synthesis"]["recommendations"] == "disabled"
+    assert payload["observability"]["source"] == "stored_orchestrator_runs"
+    assert payload["observability"]["hosted_telemetry"] == "disabled"
+    assert payload["observability"]["debug_bundle"] == "redacted_local_json"
     assert payload["interoperability"]["enabled"] is False
     assert payload["interoperability"]["api_key_configured"] is False
     assert payload["storage"]["provider"] == "local-json"
@@ -999,6 +1006,11 @@ def test_session_synthesis_report_endpoint_runs_orchestrator_and_stores_report()
     assistant = payload["assistant_message"]
     retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
     stored_run = client.get(f"/api/orchestrator/runs/{assistant['research_run_id']}").json()
+    trace = client.get(f"/api/orchestrator/runs/{assistant['research_run_id']}/trace").json()
+    replay = client.post(f"/api/orchestrator/runs/{assistant['research_run_id']}/replay").json()
+    debug_bundle = client.get(
+        f"/api/orchestrator/runs/{assistant['research_run_id']}/debug-bundle"
+    ).json()
 
     assert response.status_code == 200
     assert payload["provider"] == "orchestrator"
@@ -1009,6 +1021,53 @@ def test_session_synthesis_report_endpoint_runs_orchestrator_and_stores_report()
     assert "does not provide buy, sell, hold" in assistant["content"]
     assert retrieved["messages"][-1]["synthesis_report"] == assistant["synthesis_report"]
     assert stored_run["synthesis_report"]["id"] == assistant["synthesis_report"]["id"]
+    assert trace["trace"]["run_id"] == assistant["research_run_id"]
+    assert trace["trace"]["events"][0]["kind"] == "provider_call"
+    assert any(event["kind"] == "agent_output" for event in trace["trace"]["events"])
+    assert replay["replay"]["replayable"] is True
+    assert replay["replay"]["steps"][0]["mode"] == "stored_result"
+    assert debug_bundle["debug_bundle"]["trace"]["run_id"] == assistant["research_run_id"]
+    assert "raw provider credentials" in debug_bundle["debug_bundle"]["excluded_items"]
+
+
+def test_orchestrator_trace_debug_bundle_redacts_failed_run(tmp_path) -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path / "home"),
+            "FRA_OPENAI_API_KEY": "sk-test-secret",
+        }
+    )
+    client = _client(
+        settings=settings,
+        company_search_provider=FailingCompanySearchProvider(
+            CompanySearchErrorCode.PROVIDER_UNAVAILABLE,
+        ),
+        orchestrator_run_store=OrchestratorRunStore(
+            storage_path=tmp_path / "orchestrator_runs.json",
+        ),
+    )
+
+    response = client.post(
+        "/api/orchestrator/research",
+        json={"query": "sk-test-secret company", "refresh": True},
+    )
+    run = response.json()["run"]
+    trace_response = client.get(f"/api/orchestrator/runs/{run['id']}/trace")
+    debug_response = client.get(f"/api/orchestrator/runs/{run['id']}/debug-bundle")
+
+    assert response.status_code == 200
+    assert run["status"] == "failed"
+    assert trace_response.status_code == 200
+    trace = trace_response.json()["trace"]
+    event = trace["events"][0]
+    assert event["kind"] == "provider_call"
+    assert event["status"] == "failed"
+    assert event["error_code"] == "provider_unavailable"
+    dumped_trace = json.dumps(trace)
+    dumped_bundle = json.dumps(debug_response.json())
+    assert "sk-test-secret" not in dumped_trace
+    assert "sk-test-secret" not in dumped_bundle
+    assert str(tmp_path / "home") not in dumped_bundle
 
 
 def _client(

@@ -400,6 +400,75 @@ h1 {
   border-left: 3px solid color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
+.trace-card {
+  display: grid;
+  gap: 10px;
+  width: min(760px, 92%);
+  margin-top: 14px;
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--border);
+}
+
+.trace-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.trace-card h2 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.trace-button {
+  min-width: 72px;
+  min-height: 34px;
+  font-size: 0.8rem;
+}
+
+.trace-timeline {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-event {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.trace-event.failed {
+  border-left-color: var(--danger);
+}
+
+.trace-event-title {
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.trace-muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.trace-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.82rem;
+}
+
 .mention-chip {
   display: inline-flex;
   align-items: center;

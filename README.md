@@ -114,6 +114,8 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - Deterministic synthesis reports with current situation, strengths, weaknesses,
   opportunities, risks, upside/downside scenarios, unknowns, confidence, and evidence
   coverage indicators.
+- Local observability for orchestrator runs, including redacted trace timelines,
+  stored-result replay plans, and exportable debug bundles without hosted telemetry.
 - Optional interoperability spike with A2A discovery metadata and one local-safe,
   read-only MCP-style status tool. It is disabled by default.
 
@@ -126,6 +128,7 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - PDF extraction.
 - SQLite or remote database storage.
 - Automatic chat RAG for every message.
+- Hosted telemetry, production audit logging, or remote observability exports.
 - Trading, broker integration, alerts, monitoring, or buy/sell/hold recommendations.
 
 ## Architecture
@@ -253,6 +256,9 @@ Core endpoints:
 | `POST /api/context-analysis` | Analyze explicit source-linked context |
 | `POST /api/orchestrator/research` | Run the bounded research workflow |
 | `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
+| `GET /api/orchestrator/runs/{run_id}/trace` | Inspect a redacted run timeline |
+| `POST /api/orchestrator/runs/{run_id}/replay` | Build a stored-result replay plan |
+| `GET /api/orchestrator/runs/{run_id}/debug-bundle` | Export a redacted local debug bundle |
 | `POST /api/sessions/{session_id}/synthesis-report` | Append a rendered synthesis report to a chat session |
 | `POST /api/interop/mcp` | Optional disabled-by-default read-only MCP-style spike endpoint |
 
@@ -268,6 +274,10 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/orchestrator/research" `
 In the chat UI, an explicit `/research Apple financial situation` message runs the same
 bounded workflow and renders the synthesis report in the conversation. Ordinary chat
 messages remain direct LLM chat and do not automatically run research tools.
+
+Synthesis messages include an optional run trace inspector. Trace and debug-bundle
+payloads redact configured secrets and sensitive local paths, and replay plans use stored
+handoff outputs only; they do not call providers, LLMs, tools, or data sources.
 
 Optional interoperability spike:
 

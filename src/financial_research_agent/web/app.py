@@ -58,6 +58,12 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     create_default_market_data_provider,
 )
+from financial_research_agent.observability import (
+    RedactionPolicy,
+    build_debug_bundle,
+    build_replay_plan,
+    build_trace_from_orchestrator_run,
+)
 from financial_research_agent.orchestration import (
     OrchestratedResearchRun,
     OrchestratorResearchInput,
@@ -441,6 +447,11 @@ def create_app(
                 "source": "orchestrator_specialist_handoffs",
                 "recommendations": "disabled",
             },
+            "observability": {
+                "source": "stored_orchestrator_runs",
+                "hosted_telemetry": "disabled",
+                "debug_bundle": "redacted_local_json",
+            },
             "interoperability": app_settings.interoperability.to_dict(),
             "storage": {
                 "provider": app_settings.storage.provider,
@@ -724,6 +735,30 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
         return {"run": run.to_dict(), "synthesis_report": _synthesis_report_from_run(run)}
+
+    @app.get("/api/orchestrator/runs/{run_id}/trace")
+    def get_orchestrator_run_trace(run_id: str) -> dict[str, Any]:
+        run = _orchestrator_run_or_404(orchestrator_runs, run_id)
+        trace = build_trace_from_orchestrator_run(
+            run,
+            redaction_policy=RedactionPolicy.from_settings(app_settings),
+        )
+        return {"trace": trace.to_dict()}
+
+    @app.post("/api/orchestrator/runs/{run_id}/replay")
+    def replay_orchestrator_run(run_id: str) -> dict[str, Any]:
+        run = _orchestrator_run_or_404(orchestrator_runs, run_id)
+        replay = build_replay_plan(
+            run,
+            redaction_policy=RedactionPolicy.from_settings(app_settings),
+        )
+        return {"replay": replay.to_dict()}
+
+    @app.get("/api/orchestrator/runs/{run_id}/debug-bundle")
+    def get_orchestrator_debug_bundle(run_id: str) -> dict[str, Any]:
+        run = _orchestrator_run_or_404(orchestrator_runs, run_id)
+        bundle = build_debug_bundle(run, settings=app_settings)
+        return {"debug_bundle": bundle.to_dict()}
 
     @app.get("/api/retrieval/index")
     def get_retrieval_index() -> dict[str, Any]:
@@ -1112,6 +1147,16 @@ def _synthesis_report_from_run(run: OrchestratedResearchRun) -> dict[str, object
         report = handoff.output.get("report")
         return report if isinstance(report, dict) else None
     return None
+
+
+def _orchestrator_run_or_404(
+    orchestrator_runs: OrchestratorRunStore,
+    run_id: str,
+) -> OrchestratedResearchRun:
+    run = orchestrator_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
+    return run
 
 
 def _synthesis_message_content(
