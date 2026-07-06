@@ -114,6 +114,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".context-source-link" in css_response.text
     assert ".citation-list" in css_response.text
     assert ".evidence-snippet" in css_response.text
+    assert ".synthesis-report" in css_response.text
 
 
 def test_static_script_contains_mention_autocomplete_wiring() -> None:
@@ -132,6 +133,9 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "renderLoadingIndicator" in response.text
     assert "renderMessageCitations" in response.text
     assert "renderContextPanel" in response.text
+    assert "renderSynthesisReport" in response.text
+    assert "/synthesis-report" in response.text
+    assert "researchCommand" in response.text
     assert "contextSourcesFromMessages" in response.text
     assert "safeExternalUrl" in response.text
     assert "citation-list" in response.text
@@ -168,6 +172,8 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["orchestration"]["execution_policy"] == "sequential_local_safe"
     assert payload["orchestration"]["stored_run_count"] == 0
     assert payload["orchestration"]["recommendations"] == "disabled"
+    assert payload["synthesis"]["source"] == "orchestrator_specialist_handoffs"
+    assert payload["synthesis"]["recommendations"] == "disabled"
     assert payload["storage"]["provider"] == "local-json"
     assert "secret-value" not in json.dumps(payload)
 
@@ -878,6 +884,30 @@ def test_cited_answer_missing_evidence_adds_limitation_without_llm_call(tmp_path
     assert payload["research_run"]["citations"] == []
     assert "could not find stored evidence" in payload["assistant_message"]["content"]
     assert provider.requests == []
+
+
+def test_session_synthesis_report_endpoint_runs_orchestrator_and_stores_report() -> None:
+    client = _client()
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    response = client.post(
+        f"/api/sessions/{session_id}/synthesis-report",
+        json={"query": "Novo Nordisk financial situation", "refresh": True},
+    )
+    payload = response.json()
+    assistant = payload["assistant_message"]
+    retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
+    stored_run = client.get(f"/api/orchestrator/runs/{assistant['research_run_id']}").json()
+
+    assert response.status_code == 200
+    assert payload["provider"] == "orchestrator"
+    assert assistant["role"] == "assistant"
+    assert assistant["research_run_id"].startswith("orchestrator_run_")
+    assert assistant["synthesis_report"]["sections"]["current_situation"]
+    assert assistant["synthesis_report"]["scenarios"]["upside"]["direction"] == "upside"
+    assert "does not provide buy, sell, hold" in assistant["content"]
+    assert retrieved["messages"][-1]["synthesis_report"] == assistant["synthesis_report"]
+    assert stored_run["synthesis_report"]["id"] == assistant["synthesis_report"]["id"]
 
 
 def _client(

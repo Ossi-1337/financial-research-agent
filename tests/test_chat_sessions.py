@@ -52,6 +52,11 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
                 score=0.9,
             ),
         ),
+        synthesis_report={
+            "id": "synthesis_report_1",
+            "sections": {"current_situation": []},
+            "scenarios": {},
+        },
     )
     reloaded = ChatSessionStore(storage_path=storage_path, recent_turns=2, summary_max_chars=200)
     loaded = reloaded.get(session.id)
@@ -67,6 +72,7 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
     assert loaded.messages[1].provider == "offline-test"
     assert loaded.messages[1].citations[0].marker == "[C1]"
     assert loaded.messages[1].evidence_snippets[0].citation_id == "C1"
+    assert loaded.messages[1].synthesis_report["id"] == "synthesis_report_1"
 
 
 def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> None:
@@ -106,6 +112,7 @@ def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> No
     assert session.messages[0].mentions == ()
     assert session.messages[0].citations == ()
     assert session.messages[0].evidence_snippets == ()
+    assert session.messages[0].synthesis_report is None
 
 
 def test_session_list_sorts_by_updated_at_and_clear_removes_persisted_sessions(

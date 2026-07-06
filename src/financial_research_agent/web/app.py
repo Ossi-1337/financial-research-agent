@@ -52,6 +52,7 @@ from financial_research_agent.market_data import (
     create_default_market_data_provider,
 )
 from financial_research_agent.orchestration import (
+    OrchestratedResearchRun,
     OrchestratorResearchInput,
     OrchestratorRunStore,
     ResearchOrchestrator,
@@ -379,6 +380,10 @@ def create_app(
                 "stored_run_count": orchestrator_runs.count(),
                 "recommendations": "disabled",
             },
+            "synthesis": {
+                "source": "orchestrator_specialist_handoffs",
+                "recommendations": "disabled",
+            },
             "storage": {
                 "provider": app_settings.storage.provider,
                 "app_home": str(app_settings.local_paths.app_home),
@@ -601,38 +606,66 @@ def create_app(
         request: OrchestratorResearchRequest,
     ) -> dict[str, Any]:
         try:
-            run = await orchestrator.run(
-                OrchestratorResearchInput(
-                    query=request.query,
-                    refresh=request.refresh,
-                    company_search_limit=request.company_search_limit,
-                    fiscal_years=request.fiscal_years,
-                    filing_forms=request.filing_forms,
-                    filing_limit=request.filing_limit,
-                    market_outputsize=request.market_outputsize,
-                    benchmark_symbol=request.benchmark_symbol,
-                    context_source_items=tuple(
-                        _context_source_item(item) for item in request.context_source_items
-                    ),
-                )
-            )
+            run = await orchestrator.run(_orchestrator_input(request))
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "invalid_orchestrator_request", "message": str(exc)},
             ) from exc
-        return {"run": run.to_dict()}
+        return {"run": run.to_dict(), "synthesis_report": _synthesis_report_from_run(run)}
+
+    @app.post("/api/sessions/{session_id}/synthesis-report")
+    async def post_session_synthesis_report(
+        session_id: str,
+        request: OrchestratorResearchRequest,
+    ) -> dict[str, Any]:
+        if sessions.get(session_id) is None:
+            raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+        try:
+            run = await orchestrator.run(_orchestrator_input(request))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_orchestrator_request", "message": str(exc)},
+            ) from exc
+        report = _synthesis_report_from_run(run)
+        assistant_content = _synthesis_message_content(run, report)
+        updated_session = sessions.append_exchange(
+            session_id=session_id,
+            user_content=request.query,
+            assistant_content=assistant_content,
+            provider="orchestrator",
+            model=run.execution_policy.value,
+            research_run_id=run.id,
+            synthesis_report=report,
+        )
+        return {
+            "session": updated_session.to_dict(),
+            "assistant_message": updated_session.messages[-1].to_dict(),
+            "run": run.to_dict(),
+            "synthesis_report": report,
+            "provider": "orchestrator",
+            "model": run.execution_policy.value,
+        }
 
     @app.get("/api/orchestrator/runs")
     def list_orchestrator_runs() -> dict[str, Any]:
-        return {"runs": [run.to_dict() for run in orchestrator_runs.list()]}
+        return {
+            "runs": [
+                {
+                    **run.to_dict(),
+                    "synthesis_report": _synthesis_report_from_run(run),
+                }
+                for run in orchestrator_runs.list()
+            ]
+        }
 
     @app.get("/api/orchestrator/runs/{run_id}")
     def get_orchestrator_run(run_id: str) -> dict[str, Any]:
         run = orchestrator_runs.get(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
-        return {"run": run.to_dict()}
+        return {"run": run.to_dict(), "synthesis_report": _synthesis_report_from_run(run)}
 
     @app.get("/api/retrieval/index")
     def get_retrieval_index() -> dict[str, Any]:
@@ -969,6 +1002,45 @@ def create_app(
         )
 
     return app
+
+
+def _orchestrator_input(request: OrchestratorResearchRequest) -> OrchestratorResearchInput:
+    return OrchestratorResearchInput(
+        query=_message_content(request.query),
+        refresh=request.refresh,
+        company_search_limit=request.company_search_limit,
+        fiscal_years=request.fiscal_years,
+        filing_forms=request.filing_forms,
+        filing_limit=request.filing_limit,
+        market_outputsize=request.market_outputsize,
+        benchmark_symbol=request.benchmark_symbol,
+        context_source_items=tuple(
+            _context_source_item(item) for item in request.context_source_items
+        ),
+    )
+
+
+def _synthesis_report_from_run(run: OrchestratedResearchRun) -> dict[str, object] | None:
+    for handoff in reversed(run.handoffs):
+        if handoff.kind.value != "synthesis":
+            continue
+        report = handoff.output.get("report")
+        return report if isinstance(report, dict) else None
+    return None
+
+
+def _synthesis_message_content(
+    run: OrchestratedResearchRun,
+    report: dict[str, object] | None,
+) -> str:
+    if report is None:
+        return run.synthesis_summary or "Synthesis report is unavailable."
+    summary = report.get("summary")
+    notice = report.get("no_recommendation_notice")
+    parts = [str(summary)] if isinstance(summary, str) and summary.strip() else []
+    if isinstance(notice, str) and notice.strip():
+        parts.append(notice)
+    return "\n\n".join(parts) if parts else "Synthesis report generated."
 
 
 def _message_content(content: str) -> str:

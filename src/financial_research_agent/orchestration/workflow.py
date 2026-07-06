@@ -60,6 +60,7 @@ from financial_research_agent.stock_analysis import (
     StockPriceAnalysisSecurity,
     StockPriceAnalysisStatus,
 )
+from financial_research_agent.synthesis import SynthesisAgent, SynthesisReportStatus
 
 
 class ResearchOrchestrator:
@@ -78,6 +79,7 @@ class ResearchOrchestrator:
         financial_report_agent: FinancialReportAnalysisAgent,
         stock_price_agent: StockPriceAnalysisAgent,
         context_agent: NewsMacroSectorAgent,
+        synthesis_agent: SynthesisAgent | None = None,
         run_store: OrchestratorRunStore | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -91,6 +93,7 @@ class ResearchOrchestrator:
         self._financial_report_agent = financial_report_agent
         self._stock_price_agent = stock_price_agent
         self._context_agent = context_agent
+        self._synthesis_agent = synthesis_agent or SynthesisAgent()
         self._run_store = run_store
         self._now = now or (lambda: datetime.now(UTC))
 
@@ -547,15 +550,33 @@ class ResearchOrchestrator:
                 OrchestratorStepKind.CONTEXT_ANALYSIS,
             }
         )
-        summary = _synthesis_summary(specialist_handoffs)
+        report = self._synthesis_agent.synthesize(
+            query=run.query,
+            handoffs=run.handoffs,
+            selected_company=run.selected_company,
+            selected_security=run.selected_security,
+            created_at=started_at,
+        )
+        report_unknown_limitations = tuple(
+            limitation for point in report.unknowns for limitation in point.limitations
+        )
         limitations = tuple(
             dict.fromkeys(
-                limitation for handoff in specialist_handoffs for limitation in handoff.limitations
+                (
+                    *report.limitations,
+                    *report_unknown_limitations,
+                )
             )
+        )
+        specialist_warnings = tuple(
+            warning for handoff in specialist_handoffs for warning in handoff.warnings
         )
         warnings = tuple(
             dict.fromkeys(
-                warning for handoff in specialist_handoffs for warning in handoff.warnings
+                (
+                    *report.warnings,
+                    *specialist_warnings,
+                )
             )
         )
         return _handoff(
@@ -563,18 +584,20 @@ class ResearchOrchestrator:
             step_id="synthesis",
             status=(
                 OrchestratorHandoffStatus.SUCCEEDED
-                if not limitations
+                if report.status == SynthesisReportStatus.COMPLETE
                 else OrchestratorHandoffStatus.PARTIAL
             ),
             started_at=started_at,
             completed_at=_aware_now(self._now()),
             input_summary={"specialist_handoff_count": str(len(specialist_handoffs))},
             output={
-                "summary": summary,
+                "summary": report.summary,
+                "report": report.to_dict(),
                 "specialist_statuses": {
                     handoff.kind.value: handoff.status.value for handoff in specialist_handoffs
                 },
             },
+            evidence_ids=report.evidence_ids,
             warnings=warnings,
             limitations=limitations,
             confidence=(

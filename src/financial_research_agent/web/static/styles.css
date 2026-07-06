@@ -311,6 +311,95 @@ h1 {
   font-size: 0.86rem;
 }
 
+.synthesis-report {
+  display: grid;
+  gap: 14px;
+  width: min(860px, 96%);
+  margin-top: 14px;
+  padding: 16px 0 2px;
+  border-top: 1px solid var(--border);
+}
+
+.synthesis-report-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.synthesis-report h2,
+.synthesis-report h3,
+.synthesis-report p {
+  margin: 0;
+}
+
+.synthesis-report h2 {
+  font-size: 1rem;
+}
+
+.synthesis-report h3 {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.synthesis-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.synthesis-badge {
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.synthesis-notice {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.synthesis-section {
+  display: grid;
+  gap: 7px;
+}
+
+.synthesis-section ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.synthesis-section li {
+  padding-left: 2px;
+}
+
+.synthesis-empty,
+.synthesis-evidence-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.synthesis-evidence-meta {
+  display: block;
+  margin-top: 3px;
+}
+
+.synthesis-scenario {
+  display: grid;
+  gap: 5px;
+  padding-left: 12px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
 .mention-chip {
   display: inline-flex;
   align-items: center;

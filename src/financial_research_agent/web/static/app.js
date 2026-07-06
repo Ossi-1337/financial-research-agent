@@ -147,6 +147,149 @@ function renderMessageCitations(container, message) {
   container.append(wrapper);
 }
 
+function titleFromKey(value) {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function renderSynthesisReport(container, message) {
+  const report = message.synthesis_report;
+  if (!report) {
+    return;
+  }
+  const wrapper = document.createElement("article");
+  wrapper.className = "synthesis-report";
+
+  const header = document.createElement("header");
+  header.className = "synthesis-report-header";
+
+  const title = document.createElement("h2");
+  title.textContent = report.company_name || report.security_symbol || "Synthesis Report";
+
+  const badges = document.createElement("div");
+  badges.className = "synthesis-badges";
+  for (const [label, value] of [
+    ["Status", report.status],
+    ["Coverage", report.evidence_coverage],
+    ["Confidence", report.overall_confidence],
+  ]) {
+    if (!value) {
+      continue;
+    }
+    const badge = document.createElement("span");
+    badge.className = "synthesis-badge";
+    badge.textContent = `${label}: ${value}`;
+    badges.append(badge);
+  }
+
+  header.append(title, badges);
+  wrapper.append(header);
+
+  const notice = document.createElement("p");
+  notice.className = "synthesis-notice";
+  notice.textContent = report.no_recommendation_notice || "Not financial advice.";
+  wrapper.append(notice);
+
+  const sections = report.sections || {};
+  for (const key of [
+    "current_situation",
+    "strengths",
+    "weaknesses",
+    "opportunities",
+    "risks",
+    "unknowns",
+  ]) {
+    wrapper.append(renderSynthesisSection(titleFromKey(key), sections[key] || []));
+  }
+
+  const scenarios = report.scenarios || {};
+  const scenarioSection = document.createElement("section");
+  scenarioSection.className = "synthesis-section";
+  const scenarioTitle = document.createElement("h3");
+  scenarioTitle.textContent = "Scenarios";
+  scenarioSection.append(scenarioTitle);
+  scenarioSection.append(renderScenario("Upside", scenarios.upside));
+  scenarioSection.append(renderScenario("Downside", scenarios.downside));
+  wrapper.append(scenarioSection);
+
+  container.append(wrapper);
+}
+
+function renderSynthesisSection(titleText, points) {
+  const section = document.createElement("section");
+  section.className = "synthesis-section";
+  const title = document.createElement("h3");
+  title.textContent = titleText;
+  section.append(title);
+
+  if (!points.length) {
+    const empty = document.createElement("p");
+    empty.className = "synthesis-empty";
+    empty.textContent = "No supported points.";
+    section.append(empty);
+    return section;
+  }
+
+  const list = document.createElement("ul");
+  for (const point of points) {
+    const item = document.createElement("li");
+    const heading = document.createElement("strong");
+    heading.textContent = point.title || "Finding";
+    const summary = document.createElement("span");
+    summary.textContent = ` ${point.summary || ""}`;
+    item.append(heading, summary);
+    item.append(renderEvidenceMeta(point));
+    list.append(item);
+  }
+  section.append(list);
+  return section;
+}
+
+function renderScenario(titleText, scenario) {
+  const item = document.createElement("div");
+  item.className = "synthesis-scenario";
+  const title = document.createElement("strong");
+  title.textContent = titleText;
+  item.append(title);
+  if (!scenario) {
+    const empty = document.createElement("p");
+    empty.textContent = "No scenario available.";
+    item.append(empty);
+    return item;
+  }
+  for (const text of [scenario.condition, scenario.potential_development]) {
+    if (!text) {
+      continue;
+    }
+    const paragraph = document.createElement("p");
+    paragraph.textContent = text;
+    item.append(paragraph);
+  }
+  item.append(renderEvidenceMeta(scenario));
+  return item;
+}
+
+function renderEvidenceMeta(item) {
+  const meta = document.createElement("small");
+  meta.className = "synthesis-evidence-meta";
+  const evidenceIds = item.evidence_ids || [];
+  const handoffIds = item.source_handoff_ids || [];
+  const parts = [];
+  if (item.confidence) {
+    parts.push(`confidence: ${item.confidence}`);
+  }
+  if (evidenceIds.length) {
+    parts.push(`evidence: ${evidenceIds.join(", ")}`);
+  }
+  if (handoffIds.length) {
+    parts.push(`handoffs: ${handoffIds.length}`);
+  }
+  meta.textContent = parts.join(" / ");
+  return meta;
+}
+
 function renderMentionChip(mention) {
   const chip = document.createElement("span");
   chip.className = "mention-chip";
@@ -174,6 +317,7 @@ function renderMessages() {
     }
     item.append(content);
     renderMessageCitations(item, message);
+    renderSynthesisReport(item, message);
     messageList.append(item);
   }
   const hasStreamingMessage = state.messages.some((message) => message.streaming);
@@ -665,6 +809,34 @@ async function sendMessage(content, mentions, assistantId) {
   state.abortController = null;
 }
 
+async function sendSynthesisReport(query) {
+  const response = await fetch(`/api/sessions/${state.sessionId}/synthesis-report`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      refresh: true,
+      context_source_items: [],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorMessageFromResponse(response));
+  }
+  const payload = await response.json();
+  state.messages = payload.session.messages;
+  await loadSessions();
+  renderMessages();
+}
+
+function researchCommand(content) {
+  const match = content.match(/^\/research\s+(.+)$/i);
+  if (!match) {
+    return null;
+  }
+  const query = match[1].trim();
+  return query ? { query } : null;
+}
+
 input.addEventListener("input", () => {
   updateSendButtonState();
   updateMentionQuery();
@@ -751,7 +923,12 @@ form.addEventListener("submit", async (event) => {
   const pending = appendOptimisticExchange(content, mentions);
   setBusy(true);
   try {
-    await sendMessage(content, mentions, pending.assistantId);
+    const research = researchCommand(content);
+    if (research) {
+      await sendSynthesisReport(research.query);
+    } else {
+      await sendMessage(content, mentions, pending.assistantId);
+    }
   } catch (error) {
     removeOptimisticExchange(pending);
     if (error instanceof DOMException && error.name === "AbortError") {

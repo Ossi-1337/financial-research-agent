@@ -118,10 +118,26 @@ def test_orchestrator_runs_workflow_and_persists_specialist_handoffs(tmp_path: P
     assert reloaded is not None
     assert reloaded.to_dict() == run.to_dict()
     kinds = [handoff.kind for handoff in run.handoffs]
+    synthesis = run.handoffs[-1]
+    synthesis_report = synthesis.output["report"]
     assert OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS in kinds
     assert OrchestratorStepKind.STOCK_PRICE_ANALYSIS in kinds
     assert OrchestratorStepKind.CONTEXT_ANALYSIS in kinds
     assert kinds[-1] == OrchestratorStepKind.SYNTHESIS
+    assert synthesis_report["sections"]["current_situation"]
+    assert synthesis_report["sections"]["strengths"]
+    assert synthesis_report["sections"]["risks"]
+    assert synthesis_report["scenarios"]["upside"]["direction"] == "upside"
+    assert synthesis_report["scenarios"]["downside"]["direction"] == "downside"
+    assert any(
+        evidence_id.startswith("statement:") for evidence_id in synthesis_report["evidence_ids"]
+    )
+    assert any(
+        point["source_handoff_ids"]
+        for section_points in synthesis_report["sections"].values()
+        for point in section_points
+    )
+    assert "does not provide buy, sell, hold" in synthesis_report["no_recommendation_notice"]
     assert any(_has_specialists_before_synthesis(snapshot) for snapshot in run_store.snapshots)
 
 
@@ -246,13 +262,16 @@ def test_orchestrator_web_endpoint_runs_and_returns_stored_run(tmp_path: Path) -
     )
     run = response.json()["run"]
     listed = client.get("/api/orchestrator/runs").json()["runs"]
-    stored = client.get(f"/api/orchestrator/runs/{run['id']}").json()["run"]
+    stored_response = client.get(f"/api/orchestrator/runs/{run['id']}").json()
+    stored = stored_response["run"]
     status = client.get("/api/status").json()
 
     assert response.status_code == 200
     assert run["id"].startswith("orchestrator_run_")
     assert listed[0]["id"] == run["id"]
     assert stored["id"] == run["id"]
+    assert response.json()["synthesis_report"]["sections"]["current_situation"]
+    assert stored_response["synthesis_report"]["scenarios"]["upside"]["direction"] == "upside"
     assert status["orchestration"]["stored_run_count"] == 1
     assert status["orchestration"]["recommendations"] == "disabled"
 

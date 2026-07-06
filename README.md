@@ -111,11 +111,14 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
   news/macro/sector context.
 - Bounded orchestrator workflow that coordinates company resolution, data refresh,
   specialist runs, handoffs, and inspectable research run state.
+- Deterministic synthesis reports with current situation, strengths, weaknesses,
+  opportunities, risks, upside/downside scenarios, unknowns, confidence, and evidence
+  coverage indicators.
 
 ## Not Built Yet
 
 - Anthropic, Gemini, and gateway provider adapters.
-- LLM-generated final research report synthesis.
+- LLM-generated narrative report writing beyond deterministic source-backed synthesis.
 - Automatic news or macro ingestion.
 - PDF extraction.
 - SQLite or remote database storage.
@@ -247,6 +250,7 @@ Core endpoints:
 | `POST /api/context-analysis` | Analyze explicit source-linked context |
 | `POST /api/orchestrator/research` | Run the bounded research workflow |
 | `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
+| `POST /api/sessions/{session_id}/synthesis-report` | Append a rendered synthesis report to a chat session |
 
 Example orchestrated research request:
 
@@ -256,6 +260,10 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/orchestrator/research" `
   -ContentType "application/json" `
   -Body '{"query":"Apple financial situation","refresh":true}'
 ```
+
+In the chat UI, an explicit `/research Apple financial situation` message runs the same
+bounded workflow and renders the synthesis report in the conversation. Ordinary chat
+messages remain direct LLM chat and do not automatically run research tools.
 
 ## Local Data
 

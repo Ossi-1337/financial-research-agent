@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
+from types import MappingProxyType
 from typing import Any, Self
 from uuid import uuid4
 
@@ -71,6 +73,7 @@ class ChatSessionMessage:
     mentions: tuple[ChatMention, ...] = ()
     citations: tuple[Citation, ...] = ()
     evidence_snippets: tuple[EvidenceSnippet, ...] = ()
+    synthesis_report: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "role", MessageRole(self.role))
@@ -87,6 +90,11 @@ class ChatSessionMessage:
             self,
             "evidence_snippets",
             _evidence_snippet_tuple(self.evidence_snippets),
+        )
+        object.__setattr__(
+            self,
+            "synthesis_report",
+            _optional_object_mapping(self.synthesis_report),
         )
         object.__setattr__(self, "created_at", _aware_datetime("created_at", self.created_at))
 
@@ -112,6 +120,7 @@ class ChatSessionMessage:
                 EvidenceSnippet.from_dict(_payload_mapping(item, "evidence_snippet"))
                 for item in _payload_list(payload, "evidence_snippets")
             ),
+            synthesis_report=_payload_optional_mapping(payload, "synthesis_report"),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -126,6 +135,9 @@ class ChatSessionMessage:
             "mentions": [mention.to_dict() for mention in self.mentions],
             "citations": [citation.to_dict() for citation in self.citations],
             "evidence_snippets": [snippet.to_dict() for snippet in self.evidence_snippets],
+            "synthesis_report": (
+                dict(self.synthesis_report) if self.synthesis_report is not None else None
+            ),
         }
 
     def to_provider_message(self) -> ChatMessage:
@@ -273,6 +285,7 @@ class ChatSessionStore:
         mentions: tuple[ChatMention, ...] = (),
         citations: tuple[Citation, ...] = (),
         evidence_snippets: tuple[EvidenceSnippet, ...] = (),
+        synthesis_report: Mapping[str, object] | None = None,
     ) -> ChatSession:
         with self._lock:
             session = self._sessions[_require_text("session_id", session_id)]
@@ -297,6 +310,7 @@ class ChatSessionStore:
                     research_run_id=research_run_id,
                     citations=citations,
                     evidence_snippets=evidence_snippets,
+                    synthesis_report=synthesis_report,
                 ),
             )
             updated = ChatSession(
@@ -504,3 +518,22 @@ def _payload_mapping(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
+
+
+def _payload_optional_mapping(payload: dict[str, Any], name: str) -> Mapping[str, object] | None:
+    value = payload.get(name)
+    if value is None:
+        return None
+    return _object_mapping(value, name)
+
+
+def _optional_object_mapping(value: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    return _object_mapping(value, "synthesis_report")
+
+
+def _object_mapping(value: Any, name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be an object")
+    return MappingProxyType({str(key): item for key, item in value.items()})
