@@ -157,6 +157,7 @@ def test_cited_research_run_store_persists_citation_data(tmp_path: Path) -> None
         ),
         provider="offline-test",
         model="offline-test",
+        usage={"provider_call": {"total_tokens": 42}},
     )
 
     CitedResearchRunStore(storage_path=path).save(run)
@@ -166,4 +167,5 @@ def test_cited_research_run_store_persists_citation_data(tmp_path: Path) -> None
     assert loaded is not None
     assert loaded.citations[0].marker == "[C1]"
     assert loaded.evidence[0].text == "TEST TOOL OUTPUT evidence"
+    assert loaded.usage["provider_call"]["total_tokens"] == 42
     assert reloaded.count() == 1

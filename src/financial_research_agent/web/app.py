@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter_ns
 from typing import Any
 from uuid import uuid4
 
@@ -81,6 +82,15 @@ from financial_research_agent.orchestration import (
     OrchestratorRunStore,
     ResearchOrchestrator,
     default_orchestrator_plan,
+)
+from financial_research_agent.performance import (
+    CachingEmbeddingProvider,
+    LocalEmbeddingCache,
+    ProviderCallKind,
+    call_metrics_from_response,
+    default_local_model_profiles,
+    measured_chat,
+    prompt_budgets_for_limits,
 )
 from financial_research_agent.report_analysis import (
     FinancialReportAnalysisAgent,
@@ -306,6 +316,7 @@ def create_app(
     orchestrator_run_store: OrchestratorRunStore | None = None,
     background_runner: BackgroundResearchRunner | None = None,
     runtime_settings_store: RuntimeSettingsStore | None = None,
+    embedding_cache: LocalEmbeddingCache | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -326,6 +337,7 @@ def create_app(
     report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
     orchestrator_runs = orchestrator_run_store or OrchestratorRunStore.from_settings(app_settings)
     runtime_settings = runtime_settings_store or RuntimeSettingsStore.from_settings(app_settings)
+    embeddings_cache = embedding_cache or LocalEmbeddingCache.from_settings(app_settings)
     background_research = background_runner or BackgroundResearchRunner(
         max_concurrent_runs=app_settings.background.max_concurrent_research_runs,
     )
@@ -368,6 +380,7 @@ def create_app(
     app.state.filing_store = filings
     app.state.storage_manager = storage
     app.state.runtime_settings_store = runtime_settings
+    app.state.embedding_cache = embeddings_cache
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
     app.state.orchestrator_run_store = orchestrator_runs
@@ -545,6 +558,7 @@ def create_app(
                 "app_home": str(settings_for_request.local_paths.app_home),
                 "dataset_count": len(storage.dataset_specs),
             },
+            "performance": _performance_status_payload(settings_for_request, embeddings_cache),
         }
 
     @app.get("/api/settings")
@@ -556,6 +570,7 @@ def create_app(
             runtime_settings.get(),
             registry_for_request,
             storage,
+            embeddings_cache,
         )
 
     @app.put("/api/settings")
@@ -574,6 +589,7 @@ def create_app(
             runtime_settings.get(),
             registry_for_request,
             storage,
+            embeddings_cache,
         )
 
     @app.delete("/api/settings")
@@ -586,6 +602,7 @@ def create_app(
             runtime_settings.get(),
             registry_for_request,
             storage,
+            embeddings_cache,
         )
 
     @app.get("/api/settings/provider-health")
@@ -995,7 +1012,12 @@ def create_app(
         registry_for_request = current_registry()
         selection = settings_for_request.provider.selection_for_task(ProviderTask.EMBEDDINGS)
         try:
-            embedding_provider = registry_for_request.embedding_provider(selection.provider)
+            embedding_provider = _embedding_provider_for_request(
+                registry_for_request,
+                settings_for_request,
+                embeddings_cache,
+                selection.provider,
+            )
             result = await index_filing_result(
                 stored,
                 index=retrieval,
@@ -1036,7 +1058,12 @@ def create_app(
             filters=request.filters,
         )
         try:
-            embedding_provider = registry_for_request.embedding_provider(selection.provider)
+            embedding_provider = _embedding_provider_for_request(
+                registry_for_request,
+                settings_for_request,
+                embeddings_cache,
+                selection.provider,
+            )
             result = await search_index(
                 query,
                 index=retrieval,
@@ -1087,8 +1114,11 @@ def create_app(
             embedding_selection = settings_for_request.provider.selection_for_task(
                 ProviderTask.EMBEDDINGS
             )
-            embedding_provider = registry_for_request.embedding_provider(
-                embedding_selection.provider
+            embedding_provider = _embedding_provider_for_request(
+                registry_for_request,
+                settings_for_request,
+                embeddings_cache,
+                embedding_selection.provider,
             )
             retrieval_result = await search_index(
                 retrieval_query,
@@ -1128,12 +1158,16 @@ def create_app(
         chat_selection = settings_for_request.provider.selection_for_task(ProviderTask.CHAT)
         try:
             provider = registry_for_request.chat_provider(chat_selection.provider)
-            response = await provider.chat(
+            chat_request = _budgeted_chat_request(
                 ChatRequest(
                     messages=build_rag_messages(content, evidence),
                     model=chat_selection.model,
-                )
+                ),
+                settings_for_request,
+                budget_name="cited_answer",
             )
+            measured = await measured_chat(provider, chat_request)
+            response = measured.value
         except ProviderError as exc:
             raise HTTPException(
                 status_code=_status_for_provider_error(exc.code),
@@ -1152,6 +1186,7 @@ def create_app(
                 evidence=evidence,
                 provider=response.provider,
                 model=response.model,
+                usage={"provider_call": measured.metrics.to_dict()},
             )
         )
         updated_session = sessions.append_exchange(
@@ -1176,6 +1211,7 @@ def create_app(
                 "output_tokens": response.usage.output_tokens,
                 "total_tokens": response.usage.total_tokens,
             },
+            "performance": measured.metrics.to_dict(),
         }
 
     @app.post("/api/sessions/{session_id}/messages")
@@ -1190,7 +1226,7 @@ def create_app(
         selection = settings_for_request.provider.selection_for_task(ProviderTask.CHAT)
         try:
             provider = registry_for_request.chat_provider(selection.provider)
-            response = await provider.chat(
+            chat_request = _budgeted_chat_request(
                 ChatRequest(
                     messages=_request_messages(
                         session.context_messages(
@@ -1201,8 +1237,12 @@ def create_app(
                         mentions,
                     ),
                     model=selection.model,
-                )
+                ),
+                settings_for_request,
+                budget_name="chat",
             )
+            measured = await measured_chat(provider, chat_request)
+            response = measured.value
         except ProviderError as exc:
             raise HTTPException(
                 status_code=_status_for_provider_error(exc.code),
@@ -1228,6 +1268,7 @@ def create_app(
                 "output_tokens": response.usage.output_tokens,
                 "total_tokens": response.usage.total_tokens,
             },
+            "performance": measured.metrics.to_dict(),
         }
 
     @app.post("/api/sessions/{session_id}/messages/stream")
@@ -1250,20 +1291,25 @@ def create_app(
                 status_code=_status_for_provider_error(exc.code),
                 detail=_provider_error_detail(exc),
             ) from exc
-        chat_request = ChatRequest(
-            messages=_request_messages(
-                session.context_messages(
-                    recent_turns=sessions.recent_turns,
-                    summary_max_chars=sessions.summary_max_chars,
+        chat_request = _budgeted_chat_request(
+            ChatRequest(
+                messages=_request_messages(
+                    session.context_messages(
+                        recent_turns=sessions.recent_turns,
+                        summary_max_chars=sessions.summary_max_chars,
+                    ),
+                    content,
+                    mentions,
                 ),
-                content,
-                mentions,
+                model=selection.model,
             ),
-            model=selection.model,
+            settings_for_request,
+            budget_name="chat",
         )
 
         async def events() -> AsyncIterator[str]:
             collected_content: list[str] = []
+            started_ns = perf_counter_ns()
             try:
                 async for event in provider.stream_chat(chat_request):
                     if event.event_type == StreamEventType.MESSAGE_DELTA:
@@ -1285,6 +1331,13 @@ def create_app(
                             )
                             return
                         response = event.response
+                        completed_ns = perf_counter_ns()
+                        metrics = call_metrics_from_response(
+                            response,
+                            call_kind=ProviderCallKind.STREAMING_CHAT,
+                            started_ns=started_ns,
+                            completed_ns=completed_ns,
+                        )
                         assistant_content = response.message.content or "".join(collected_content)
                         updated_session = sessions.append_exchange(
                             session_id=session_id,
@@ -1307,6 +1360,7 @@ def create_app(
                                     "output_tokens": response.usage.output_tokens,
                                     "total_tokens": response.usage.total_tokens,
                                 },
+                                "performance": metrics.to_dict(),
                             }
                         )
                         return
@@ -1335,6 +1389,7 @@ def _settings_payload(
     overrides: RuntimeSettingsOverrides,
     registry: ProviderRegistry,
     storage: LocalStorageManager,
+    embedding_cache: LocalEmbeddingCache,
 ) -> dict[str, Any]:
     return {
         "settings": {
@@ -1343,6 +1398,7 @@ def _settings_payload(
             "data_sources": settings.data_sources.to_dict(),
             "retrieval": settings.retrieval.to_dict(),
             "background": settings.background.to_dict(),
+            "performance": settings.performance.to_dict(),
         },
         "overrides": overrides.to_dict(),
         "providers": _provider_options_payload(settings, registry),
@@ -1364,6 +1420,30 @@ def _settings_payload(
             "data_reset_command": "python -m financial_research_agent data-reset --yes --pretty",
             "settings_storage_path": str(settings.local_paths.data_dir / "settings_overrides.json"),
             "storage_dataset_count": len(storage.dataset_specs),
+            "embedding_cache": embedding_cache.to_dict(),
+        },
+        "performance": _performance_status_payload(settings, embedding_cache),
+    }
+
+
+def _performance_status_payload(
+    settings: Settings,
+    embedding_cache: LocalEmbeddingCache,
+) -> dict[str, Any]:
+    return {
+        **settings.performance.to_dict(),
+        "prompt_budgets": {
+            name: budget.to_dict()
+            for name, budget in prompt_budgets_for_limits(
+                max_input_tokens=settings.performance.prompt_budget_input_tokens,
+                max_output_tokens=settings.performance.prompt_budget_output_tokens,
+            ).items()
+        },
+        "local_model_profiles": [profile.to_dict() for profile in default_local_model_profiles()],
+        "embedding_cache": embedding_cache.to_dict(),
+        "cost_tracking": {
+            "local_and_offline_costs": "zero_dollar_provider_call_estimate",
+            "hosted_costs": "usage_tracked_without_default_price_card",
         },
     }
 
@@ -1433,6 +1513,43 @@ async def _provider_health_payload(provider: str, settings: Settings) -> dict[st
         status_code=404,
         detail={"error": "provider_not_supported", "provider": normalized},
     )
+
+
+def _embedding_provider_for_request(
+    registry: ProviderRegistry,
+    settings: Settings,
+    embedding_cache: LocalEmbeddingCache,
+    provider_name: str,
+):
+    provider = registry.embedding_provider(provider_name)
+    if not settings.performance.embedding_cache_enabled:
+        return provider
+    return CachingEmbeddingProvider(provider, embedding_cache)
+
+
+def _budgeted_chat_request(
+    request: ChatRequest,
+    settings: Settings,
+    *,
+    budget_name: str,
+) -> ChatRequest:
+    budgets = prompt_budgets_for_limits(
+        max_input_tokens=settings.performance.prompt_budget_input_tokens,
+        max_output_tokens=settings.performance.prompt_budget_output_tokens,
+    )
+    base_budget = budgets.get(budget_name, budgets["chat"])
+    check = base_budget.check(request)
+    if check.over_budget:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "prompt_budget_exceeded",
+                "budget": check.to_dict(),
+            },
+        )
+    if request.max_output_tokens is not None:
+        return request
+    return replace(request, max_output_tokens=check.recommended_max_output_tokens)
 
 
 def _interop_policy(settings: Settings) -> InteropAccessPolicy:
@@ -1662,6 +1779,20 @@ def _append_limited_cited_answer(
             created_at=datetime.now(UTC),
             provider="retrieval",
             model="no-evidence",
+            usage={
+                "provider_call": {
+                    "call_kind": "retrieval",
+                    "provider": "retrieval",
+                    "model": "no-evidence",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "latency_ms": 0,
+                    "estimated_cost_usd": "0.000000",
+                    "cost_source": "no_provider_call",
+                    "warnings": [],
+                }
+            },
             limitations=(limitation,),
         )
     )
@@ -1685,6 +1816,7 @@ def _append_limited_cited_answer(
             "output_tokens": 0,
             "total_tokens": 0,
         },
+        "performance": run.usage["provider_call"],
     }
 
 

@@ -263,6 +263,13 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["observability"]["source"] == "stored_orchestrator_runs"
     assert payload["observability"]["hosted_telemetry"] == "disabled"
     assert payload["observability"]["debug_bundle"] == "redacted_local_json"
+    assert payload["performance"]["embedding_cache"]["stores_raw_text"] is False
+    assert payload["performance"]["prompt_budgets"]["chat"]["max_input_tokens"] == 16_000
+    assert [item["id"] for item in payload["performance"]["local_model_profiles"]] == [
+        "small",
+        "medium",
+        "strong",
+    ]
     assert payload["interoperability"]["enabled"] is False
     assert payload["interoperability"]["api_key_configured"] is False
     assert payload["storage"]["provider"] == "local-json"
@@ -485,6 +492,9 @@ def test_chat_message_uses_offline_provider_and_updates_session() -> None:
     assert payload["model"] == "offline-test"
     assert payload["finish_reason"] == "stop"
     assert payload["usage"]["total_tokens"] > 0
+    assert payload["performance"]["call_kind"] == "chat"
+    assert payload["performance"]["provider"] == "offline-test"
+    assert payload["performance"]["estimated_cost_usd"] == "0.000000"
     assert payload["assistant_message"]["role"] == "assistant"
     assistant_content = payload["assistant_message"]["content"]
     assert "offline-test response: Summarize Novo Nordisk." in assistant_content
@@ -509,6 +519,7 @@ def test_chat_request_includes_financial_research_system_prompt() -> None:
     assert "must fetch and inspect source data first" in system_prompt.content
     assert "Do not provide buy, sell, or hold recommendations" in system_prompt.content
     assert request.messages[-1].content == "Hello"
+    assert request.max_output_tokens is not None
 
 
 def test_chat_request_accepts_mentions_and_adds_provider_context() -> None:
@@ -570,6 +581,7 @@ def test_streaming_chat_message_emits_deltas_and_updates_session() -> None:
         "captured response"
     )
     assert events[-1]["assistant_message"]["content"] == "captured response"
+    assert events[-1]["performance"]["call_kind"] == "streaming_chat"
     assert events[-1]["session"]["messages"] == retrieved["messages"]
     assert provider.requests[0].messages[-1].content == "Stream this answer."
 

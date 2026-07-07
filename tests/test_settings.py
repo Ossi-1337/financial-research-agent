@@ -34,6 +34,9 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.interoperability.local_only is True
     assert settings.interoperability.api_key is None
     assert settings.background.max_concurrent_research_runs == 1
+    assert settings.performance.prompt_budget_input_tokens == 16_000
+    assert settings.performance.prompt_budget_output_tokens == 1_024
+    assert settings.performance.embedding_cache_enabled is True
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -80,6 +83,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_INTEROP_LOCAL_ONLY": "false",
             "FRA_INTEROP_API_KEY": "interop-key",
             "FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS": "2",
+            "FRA_PROMPT_BUDGET_INPUT_TOKENS": "12000",
+            "FRA_PROMPT_BUDGET_OUTPUT_TOKENS": "800",
+            "FRA_EMBEDDING_CACHE_ENABLED": "false",
         }
     )
 
@@ -128,6 +134,9 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.interoperability.local_only is False
     assert settings.interoperability.api_key == "interop-key"
     assert settings.background.max_concurrent_research_runs == 2
+    assert settings.performance.prompt_budget_input_tokens == 12_000
+    assert settings.performance.prompt_budget_output_tokens == 800
+    assert settings.performance.embedding_cache_enabled is False
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:

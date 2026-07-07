@@ -35,6 +35,9 @@ DEFAULT_RETRIEVAL_MIN_SCORE = 0.0
 DEFAULT_INTEROP_ENABLED = False
 DEFAULT_INTEROP_LOCAL_ONLY = True
 DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS = 1
+DEFAULT_PROMPT_BUDGET_INPUT_TOKENS = 16_000
+DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS = 1_024
+DEFAULT_EMBEDDING_CACHE_ENABLED = True
 
 
 class ProviderTask(StrEnum):
@@ -317,6 +320,26 @@ class BackgroundSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class PerformanceSettings:
+    prompt_budget_input_tokens: int = DEFAULT_PROMPT_BUDGET_INPUT_TOKENS
+    prompt_budget_output_tokens: int = DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS
+    embedding_cache_enabled: bool = DEFAULT_EMBEDDING_CACHE_ENABLED
+
+    def __post_init__(self) -> None:
+        if self.prompt_budget_input_tokens <= 0:
+            raise ValueError("prompt_budget_input_tokens must be positive")
+        if self.prompt_budget_output_tokens <= 0:
+            raise ValueError("prompt_budget_output_tokens must be positive")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "prompt_budget_input_tokens": self.prompt_budget_input_tokens,
+            "prompt_budget_output_tokens": self.prompt_budget_output_tokens,
+            "embedding_cache_enabled": self.embedding_cache_enabled,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     environment: str
     local_paths: LocalPaths
@@ -327,6 +350,7 @@ class Settings:
     retrieval: RetrievalSettings
     interoperability: InteroperabilitySettings
     background: BackgroundSettings
+    performance: PerformanceSettings
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Self:
@@ -470,6 +494,23 @@ class Settings:
                     env,
                     "FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS",
                     DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS,
+                ),
+            ),
+            performance=PerformanceSettings(
+                prompt_budget_input_tokens=_env_int_value(
+                    env,
+                    "FRA_PROMPT_BUDGET_INPUT_TOKENS",
+                    DEFAULT_PROMPT_BUDGET_INPUT_TOKENS,
+                ),
+                prompt_budget_output_tokens=_env_int_value(
+                    env,
+                    "FRA_PROMPT_BUDGET_OUTPUT_TOKENS",
+                    DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS,
+                ),
+                embedding_cache_enabled=_env_bool_value(
+                    env,
+                    "FRA_EMBEDDING_CACHE_ENABLED",
+                    DEFAULT_EMBEDDING_CACHE_ENABLED,
                 ),
             ),
         )

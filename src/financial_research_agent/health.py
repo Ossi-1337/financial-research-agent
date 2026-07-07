@@ -8,6 +8,10 @@ from financial_research_agent import __version__
 from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
 from financial_research_agent.llm.openai import OpenAIProvider
 from financial_research_agent.llm.registry import create_default_provider_registry
+from financial_research_agent.performance import (
+    default_local_model_profiles,
+    prompt_budgets_for_limits,
+)
 from financial_research_agent.retrieval import LocalVectorIndex
 from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.storage import LocalStorageManager
@@ -49,6 +53,19 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
         },
         "interoperability": settings.interoperability.to_dict(),
         "background": settings.background.to_dict(),
+        "performance": {
+            **settings.performance.to_dict(),
+            "prompt_budgets": {
+                name: budget.to_dict()
+                for name, budget in prompt_budgets_for_limits(
+                    max_input_tokens=settings.performance.prompt_budget_input_tokens,
+                    max_output_tokens=settings.performance.prompt_budget_output_tokens,
+                ).items()
+            },
+            "local_model_profiles": [
+                profile.to_dict() for profile in default_local_model_profiles()
+            ],
+        },
         "paths": settings.local_paths.to_dict(),
         "environment": settings.environment,
         "notes": [

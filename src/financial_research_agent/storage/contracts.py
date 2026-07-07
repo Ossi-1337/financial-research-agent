@@ -26,6 +26,7 @@ class StorageDataset(StrEnum):
     FILINGS_INDEX = "filings_index"
     FILING_RAW_DOCUMENTS = "filing_raw_documents"
     FILING_EXTRACTED_TEXT = "filing_extracted_text"
+    EMBEDDING_CACHE = "embedding_cache"
     RETRIEVAL_VECTOR_INDEX = "retrieval_vector_index"
     REPORT_RUNS = "report_runs"
     ORCHESTRATOR_RUNS = "orchestrator_runs"

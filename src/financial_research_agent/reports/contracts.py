@@ -162,6 +162,7 @@ class CitedResearchRun:
     evidence: tuple[EvidenceSnippet, ...] = ()
     provider: str | None = None
     model: str | None = None
+    usage: Mapping[str, object] = field(default_factory=dict)
     limitations: tuple[str, ...] = ()
     metadata: Mapping[str, str] = field(default_factory=dict)
 
@@ -175,6 +176,7 @@ class CitedResearchRun:
         object.__setattr__(self, "evidence", _evidence_tuple(self.evidence))
         object.__setattr__(self, "provider", _optional_text(self.provider))
         object.__setattr__(self, "model", _optional_text(self.model))
+        object.__setattr__(self, "usage", _object_mapping("usage", self.usage))
         object.__setattr__(self, "limitations", _text_tuple("limitations", self.limitations))
         object.__setattr__(self, "metadata", _text_mapping("metadata", self.metadata))
 
@@ -195,6 +197,7 @@ class CitedResearchRun:
             ),
             provider=_payload_optional_text(payload, "provider"),
             model=_payload_optional_text(payload, "model"),
+            usage=_payload_object_mapping(payload, "usage"),
             limitations=tuple(str(item) for item in _payload_sequence(payload, "limitations")),
             metadata=_payload_text_mapping(payload, "metadata"),
         )
@@ -210,6 +213,7 @@ class CitedResearchRun:
             "evidence": [snippet.to_dict() for snippet in self.evidence],
             "provider": self.provider,
             "model": self.model,
+            "usage": dict(self.usage),
             "limitations": list(self.limitations),
             "metadata": dict(self.metadata),
         }
@@ -283,6 +287,14 @@ def _text_mapping(name: str, values: Mapping[str, str]) -> Mapping[str, str]:
     )
 
 
+def _object_mapping(name: str, values: Mapping[str, object]) -> Mapping[str, object]:
+    if not isinstance(values, Mapping):
+        raise ValueError(f"{name} must be a mapping")
+    return MappingProxyType(
+        {_require_text(f"{name}.key", str(key)): item for key, item in values.items()}
+    )
+
+
 def _text_tuple(name: str, values: Iterable[str]) -> tuple[str, ...]:
     if isinstance(values, str):
         raise ValueError(f"{name} must be an iterable of strings, not a string")
@@ -350,3 +362,10 @@ def _payload_text_mapping(payload: Mapping[str, Any], name: str) -> Mapping[str,
     if not isinstance(value, Mapping):
         raise ValueError(f"{name} must be an object")
     return {str(key): str(item) for key, item in value.items()}
+
+
+def _payload_object_mapping(payload: Mapping[str, Any], name: str) -> Mapping[str, object]:
+    value = payload.get(name, {})
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be an object")
+    return {str(key): item for key, item in value.items()}

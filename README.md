@@ -108,6 +108,9 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - SEC EDGAR filing ingestion for primary HTML/TXT documents.
 - Local raw document, extracted text, chunk, metadata, and JSON store management.
 - Local vector retrieval over stored filing chunks when embeddings are configured.
+- Provider-call performance payloads with approximate tokens, latency, and local/offline
+  cost estimates.
+- Prompt budget defaults, local model hardware profiles, and a hash-only embedding cache.
 - Explicit cited-answer workflow over retrieved local evidence.
 - Specialist analysis for financial reports, stock price history, and explicit
   news/macro/sector context.
@@ -195,6 +198,9 @@ Common settings:
 | `FRA_ALPHA_VANTAGE_API_KEY` | Alpha Vantage API key | empty |
 | `FRA_EMBEDDING_PROVIDER` | Embedding provider for retrieval | `disabled` |
 | `FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS` | Local background research concurrency limit | `1` |
+| `FRA_PROMPT_BUDGET_INPUT_TOKENS` | Approximate prompt input token budget | `16000` |
+| `FRA_PROMPT_BUDGET_OUTPUT_TOKENS` | Default response output budget | `1024` |
+| `FRA_EMBEDDING_CACHE_ENABLED` | Cache embeddings by provider/model/text hash | `true` |
 | `FRA_LOCAL_MODEL` | Docker Compose llama.cpp model | Mistral Small GGUF |
 
 The settings UI can save non-secret runtime overrides under `FRA_HOME`. API keys remain
@@ -323,10 +329,13 @@ Local runtime data is stored under `FRA_HOME`, which defaults to:
 ```
 
 The local store includes runtime settings overrides, chat sessions, provider caches, market
-data, financial statements, filing documents, extracted text, retrieval indexes,
+data, financial statements, filing documents, extracted text, embedding cache, retrieval indexes,
 cited-answer runs, and orchestrator run state. Background job status is in-process; the
 linked orchestrator run state is persisted when the workflow writes run snapshots. Secrets
 are not written into ordinary JSON data stores.
+
+The embedding cache stores provider/model/text hashes and vectors, not raw prompt or
+document text.
 
 Use these commands to inspect or clean local state:
 

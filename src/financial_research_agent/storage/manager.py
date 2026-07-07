@@ -323,6 +323,18 @@ def default_storage_dataset_specs(settings: Settings) -> tuple[StorageDatasetSpe
             description="Extracted text files produced from SEC primary documents.",
         ),
         StorageDatasetSpec(
+            dataset=StorageDataset.EMBEDDING_CACHE,
+            label="Embedding cache",
+            area=StorageArea.CACHE,
+            relative_path="embedding_cache.json",
+            storage_format=StorageFormat.JSON,
+            schema_version=1,
+            description=(
+                "Local cache of provider/model/text-hash keyed embeddings; raw text is not stored."
+            ),
+            clear_on_cache_clear=True,
+        ),
+        StorageDatasetSpec(
             dataset=StorageDataset.RETRIEVAL_VECTOR_INDEX,
             label="Retrieval vector index",
             area=StorageArea.DATA,

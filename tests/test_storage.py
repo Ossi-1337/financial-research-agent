@@ -30,6 +30,7 @@ def test_storage_specs_cover_current_local_stores_and_have_no_secrets(tmp_path: 
         StorageDataset.FILINGS_INDEX,
         StorageDataset.FILING_RAW_DOCUMENTS,
         StorageDataset.FILING_EXTRACTED_TEXT,
+        StorageDataset.EMBEDDING_CACHE,
         StorageDataset.RETRIEVAL_VECTOR_INDEX,
         StorageDataset.REPORT_RUNS,
         StorageDataset.ORCHESTRATOR_RUNS,
@@ -37,6 +38,7 @@ def test_storage_specs_cover_current_local_stores_and_have_no_secrets(tmp_path: 
     }
     assert all(not spec.contains_secrets for spec in specs)
     assert _spec(specs, StorageDataset.COMPANY_LOOKUP_CACHE).reset_on_data_reset is True
+    assert _spec(specs, StorageDataset.EMBEDDING_CACHE).clear_on_cache_clear is True
     with pytest.raises(FrozenInstanceError):
         specs[0].label = "mutated"
 
