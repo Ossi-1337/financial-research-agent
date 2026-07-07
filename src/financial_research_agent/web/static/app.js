@@ -10,6 +10,7 @@ const state = {
   abortController: null,
   activeBackgroundJobId: null,
   tracesByRunId: {},
+  settings: null,
 };
 
 const form = document.querySelector("#chat-form");
@@ -25,6 +26,16 @@ const contextPanel = document.querySelector("#context-panel");
 const contextSourceList = document.querySelector("#context-source-list");
 const newSessionButton = document.querySelector("#new-session-button");
 const clearSessionsButton = document.querySelector("#clear-sessions-button");
+const settingsButton = document.querySelector("#settings-button");
+const settingsPanel = document.querySelector("#settings-panel");
+const settingsCloseButton = document.querySelector("#settings-close-button");
+const settingsForm = document.querySelector("#settings-form");
+const settingsError = document.querySelector("#settings-error");
+const settingsProviderStatus = document.querySelector("#settings-provider-status");
+const settingsSecretNote = document.querySelector("#settings-secret-note");
+const settingsHealthButton = document.querySelector("#settings-health-button");
+const settingsCacheClearButton = document.querySelector("#settings-cache-clear-button");
+const settingsResetButton = document.querySelector("#settings-reset-button");
 
 function setBusy(value) {
   state.busy = value;
@@ -53,6 +64,16 @@ function showError(message) {
 function clearError() {
   errorBanner.textContent = "";
   errorBanner.hidden = true;
+}
+
+function showSettingsError(message) {
+  settingsError.textContent = message;
+  settingsError.hidden = false;
+}
+
+function clearSettingsError() {
+  settingsError.textContent = "";
+  settingsError.hidden = true;
 }
 
 function mentionText(mention) {
@@ -632,6 +653,84 @@ function appendAssistantDelta(assistantId, delta) {
   renderMessages();
 }
 
+async function loadSettingsPanel() {
+  clearSettingsError();
+  const payload = await requestJson("/api/settings");
+  state.settings = payload;
+  populateSettingsForm(payload);
+  renderSettingsSummary(payload);
+}
+
+function populateSettingsForm(payload) {
+  const provider = payload.settings.provider;
+  const retrieval = payload.settings.retrieval;
+  const dataSources = payload.settings.data_sources;
+  const background = payload.settings.background;
+  setField("llm_provider", provider.llm_provider);
+  setField("llm_model", provider.llm_model);
+  setField("llm_base_url", provider.llm_base_url || "");
+  setField("llm_local_runtime", provider.llm_local_runtime);
+  setField("llm_timeout_seconds", provider.llm_timeout_seconds);
+  setField("embedding_provider", provider.embedding_provider);
+  setField("embedding_model", provider.embedding_model || "");
+  setField("retrieval_top_k", retrieval.top_k);
+  setField("retrieval_min_score", retrieval.min_score);
+  setField("market_data_cache_ttl_days", dataSources.market_data_cache_ttl_days);
+  setField("filing_cache_ttl_days", dataSources.filing_cache_ttl_days);
+  setField("background_max_concurrent_research_runs", background.max_concurrent_research_runs);
+}
+
+function setField(name, value) {
+  const field = settingsForm.elements[name];
+  if (field) {
+    field.value = value ?? "";
+  }
+}
+
+function renderSettingsSummary(payload) {
+  const activeProvider = payload.settings.provider.llm_provider;
+  const provider = payload.providers.find((item) => item.provider === activeProvider);
+  const capabilityStatus = provider?.capability_status || {};
+  const capabilityRows = ["chat", "streaming", "tool_calls", "structured_output", "embeddings"]
+    .map((name) => `${name}: ${capabilityStatus[name] ? "available" : "limited"}`)
+    .join(" / ");
+  settingsProviderStatus.textContent = provider
+    ? `${provider.provider} capabilities: ${capabilityRows}`
+    : "Selected provider is not registered.";
+  settingsSecretNote.textContent = payload.secrets.message;
+}
+
+function settingsPayloadFromForm() {
+  const formData = new FormData(settingsForm);
+  const payload = {};
+  for (const [key, value] of formData.entries()) {
+    const text = String(value).trim();
+    if (!text) {
+      continue;
+    }
+    if (
+      [
+        "llm_timeout_seconds",
+        "retrieval_min_score",
+      ].includes(key)
+    ) {
+      payload[key] = Number(text);
+    } else if (
+      [
+        "retrieval_top_k",
+        "market_data_cache_ttl_days",
+        "filing_cache_ttl_days",
+        "background_max_concurrent_research_runs",
+      ].includes(key)
+    ) {
+      payload[key] = Number.parseInt(text, 10);
+    } else {
+      payload[key] = text;
+    }
+  }
+  return payload;
+}
+
 function updateAssistantContent(assistantId, content) {
   const message = state.messages.find((item) => item.id === assistantId);
   if (!message) {
@@ -1071,6 +1170,75 @@ newSessionButton.addEventListener("click", async () => {
 
 clearSessionsButton.addEventListener("click", () => {
   clearSessions();
+});
+
+settingsButton.addEventListener("click", async () => {
+  settingsPanel.hidden = false;
+  try {
+    await loadSettingsPanel();
+  } catch (error) {
+    showSettingsError(error instanceof Error ? error.message : "Could not load settings.");
+  }
+});
+
+settingsCloseButton.addEventListener("click", () => {
+  settingsPanel.hidden = true;
+});
+
+settingsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  clearSettingsError();
+  try {
+    const payload = await requestJson("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(settingsPayloadFromForm()),
+    });
+    state.settings = payload;
+    populateSettingsForm(payload);
+    renderSettingsSummary(payload);
+    await loadStatus();
+  } catch (error) {
+    showSettingsError(error instanceof Error ? error.message : "Could not save settings.");
+  }
+});
+
+settingsHealthButton.addEventListener("click", async () => {
+  clearSettingsError();
+  try {
+    const provider = settingsForm.elements.llm_provider.value;
+    const payload = await requestJson(
+      `/api/settings/provider-health?provider=${encodeURIComponent(provider)}`
+    );
+    const health = payload.provider_health;
+    settingsProviderStatus.textContent = `${health.provider} health: ${health.status}${
+      health.error ? ` / ${health.error}` : ""
+    }`;
+  } catch (error) {
+    showSettingsError(error instanceof Error ? error.message : "Provider health check failed.");
+  }
+});
+
+settingsCacheClearButton.addEventListener("click", async () => {
+  clearSettingsError();
+  try {
+    await requestJson("/api/storage/cache", { method: "DELETE" });
+    settingsProviderStatus.textContent = "Clearable local provider caches were cleared.";
+  } catch (error) {
+    showSettingsError(error instanceof Error ? error.message : "Could not clear cache.");
+  }
+});
+
+settingsResetButton.addEventListener("click", async () => {
+  clearSettingsError();
+  try {
+    const payload = await requestJson("/api/settings", { method: "DELETE" });
+    state.settings = payload;
+    populateSettingsForm(payload);
+    renderSettingsSummary(payload);
+    await loadStatus();
+  } catch (error) {
+    showSettingsError(error instanceof Error ? error.message : "Could not reset settings.");
+  }
 });
 
 form.addEventListener("submit", async (event) => {

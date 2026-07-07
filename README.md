@@ -93,6 +93,8 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 ## What Works Today
 
 - Local chat UI with persisted sessions, bounded context, and streamed assistant output.
+- Settings panel for local provider/model, endpoint, embeddings, retrieval, cache, and
+  background-run controls.
 - Inline `@company` mentions backed by SEC company ticker search.
 - Provider-neutral LLM contracts for chat, streaming, embeddings, tool calls, structured
   output, model metadata, usage, and provider errors.
@@ -195,6 +197,9 @@ Common settings:
 | `FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS` | Local background research concurrency limit | `1` |
 | `FRA_LOCAL_MODEL` | Docker Compose llama.cpp model | Mistral Small GGUF |
 
+The settings UI can save non-secret runtime overrides under `FRA_HOME`. API keys remain
+environment-only and are shown only as configured/not-configured flags.
+
 Example local model configuration outside Docker Compose:
 
 ```powershell
@@ -249,6 +254,10 @@ Core endpoints:
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/status` | Runtime status without secrets |
+| `GET /api/settings` | Inspect active runtime settings without secrets |
+| `PUT /api/settings` | Save local non-secret runtime overrides |
+| `DELETE /api/settings` | Clear local runtime overrides |
+| `GET /api/settings/provider-health` | Check active or selected provider health |
 | `POST /api/sessions` | Create a chat session |
 | `GET /api/sessions/{session_id}` | Read a chat session |
 | `POST /api/sessions/{session_id}/messages/stream` | Stream a chat response |
@@ -313,9 +322,11 @@ Local runtime data is stored under `FRA_HOME`, which defaults to:
 ~/.financial-research-agent
 ```
 
-The local store includes chat sessions, provider caches, market data, financial statements,
-filing documents, extracted text, retrieval indexes, cited-answer runs, and orchestrator
-run state. Secrets are not written into ordinary JSON data stores.
+The local store includes runtime settings overrides, chat sessions, provider caches, market
+data, financial statements, filing documents, extracted text, retrieval indexes,
+cited-answer runs, and orchestrator run state. Background job status is in-process; the
+linked orchestrator run state is persisted when the workflow writes run snapshots. Secrets
+are not written into ordinary JSON data stores.
 
 Use these commands to inspect or clean local state:
 

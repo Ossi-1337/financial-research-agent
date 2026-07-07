@@ -13,7 +13,10 @@
           <h1>Financial Research Agent</h1>
           <p id="session-label" class="muted">Starting session</p>
         </div>
-        <div id="provider-pill" class="provider-pill">offline-test</div>
+        <div class="topbar-actions">
+          <div id="provider-pill" class="provider-pill">offline-test</div>
+          <button id="settings-button" class="secondary-button" type="button">Settings</button>
+        </div>
       </header>
 
       <div class="workspace">
@@ -64,6 +67,98 @@
           </form>
         </section>
       </div>
+      <section id="settings-panel" class="settings-panel" aria-label="Settings" hidden>
+        <div class="settings-dialog">
+          <header class="settings-header">
+            <div>
+              <h2>Settings</h2>
+              <p>Local provider, cache, and privacy controls</p>
+            </div>
+            <button id="settings-close-button" class="secondary-button" type="button">Close</button>
+          </header>
+          <div id="settings-error" class="error-banner" role="alert" hidden></div>
+          <form id="settings-form" class="settings-form">
+            <fieldset>
+              <legend>LLM provider</legend>
+              <label>
+                Provider
+                <select id="settings-llm-provider" name="llm_provider">
+                  <option value="offline-test">offline-test</option>
+                  <option value="local-openai">local-openai</option>
+                  <option value="openai">openai</option>
+                </select>
+              </label>
+              <label>
+                Model
+                <input id="settings-llm-model" name="llm_model" type="text" />
+              </label>
+              <label>
+                Base URL
+                <input id="settings-llm-base-url" name="llm_base_url" type="url" />
+              </label>
+              <label>
+                Local runtime
+                <select id="settings-local-runtime" name="llm_local_runtime">
+                  <option value="llama.cpp">llama.cpp</option>
+                  <option value="ollama">ollama</option>
+                  <option value="generic-openai">generic-openai</option>
+                </select>
+              </label>
+              <label>
+                Timeout seconds
+                <input id="settings-timeout" name="llm_timeout_seconds" type="number" min="1" max="300" step="0.5" />
+              </label>
+            </fieldset>
+            <fieldset>
+              <legend>Embeddings and retrieval</legend>
+              <label>
+                Embedding provider
+                <select id="settings-embedding-provider" name="embedding_provider">
+                  <option value="disabled">disabled</option>
+                  <option value="offline-test">offline-test</option>
+                  <option value="local-openai">local-openai</option>
+                  <option value="openai">openai</option>
+                </select>
+              </label>
+              <label>
+                Embedding model
+                <input id="settings-embedding-model" name="embedding_model" type="text" />
+              </label>
+              <label>
+                Retrieval top K
+                <input id="settings-retrieval-top-k" name="retrieval_top_k" type="number" min="1" max="50" />
+              </label>
+              <label>
+                Minimum score
+                <input id="settings-retrieval-min-score" name="retrieval_min_score" type="number" min="-1" max="1" step="0.01" />
+              </label>
+            </fieldset>
+            <fieldset>
+              <legend>Data and local resources</legend>
+              <label>
+                Market cache TTL days
+                <input id="settings-market-ttl" name="market_data_cache_ttl_days" type="number" min="1" max="365" />
+              </label>
+              <label>
+                Filing cache TTL days
+                <input id="settings-filing-ttl" name="filing_cache_ttl_days" type="number" min="1" max="365" />
+              </label>
+              <label>
+                Background research limit
+                <input id="settings-background-limit" name="background_max_concurrent_research_runs" type="number" min="1" max="8" />
+              </label>
+            </fieldset>
+            <div id="settings-provider-status" class="settings-status"></div>
+            <div id="settings-secret-note" class="settings-secret-note"></div>
+            <div class="settings-actions">
+              <button id="settings-health-button" class="secondary-button" type="button">Check provider</button>
+              <button id="settings-cache-clear-button" class="secondary-button" type="button">Clear cache</button>
+              <button id="settings-reset-button" class="secondary-button" type="button">Reset overrides</button>
+              <button type="submit">Save</button>
+            </div>
+          </form>
+        </div>
+      </section>
     </main>
     <script src="/static/app.js" type="module"></script>
   </body>

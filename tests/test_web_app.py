@@ -67,6 +67,7 @@ from financial_research_agent.retrieval import (
     RetrievalChunk,
     RetrievalSourceKind,
 )
+from financial_research_agent.runtime_settings import RuntimeSettingsStore
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements import (
     FinancialStatementCompany,
@@ -94,6 +95,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="send-button"' in root_response.text
     assert 'id="context-panel"' in root_response.text
     assert 'id="context-source-list"' in root_response.text
+    assert 'id="settings-panel"' in root_response.text
+    assert 'id="settings-button"' in root_response.text
     assert 'class="composer-action"' in root_response.text
     assert 'id="company-search-form"' not in root_response.text
     assert 'id="selected-company"' not in root_response.text
@@ -116,6 +119,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".evidence-snippet" in css_response.text
     assert ".synthesis-report" in css_response.text
     assert ".trace-timeline" in css_response.text
+    assert ".settings-panel" in css_response.text
 
 
 def test_static_script_contains_mention_autocomplete_wiring() -> None:
@@ -140,11 +144,89 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "/synthesis-report" in response.text
     assert "/trace" in response.text
     assert "researchCommand" in response.text
+    assert "/api/settings" in response.text
+    assert "/api/settings/provider-health" in response.text
     assert "contextSourcesFromMessages" in response.text
     assert "safeExternalUrl" in response.text
     assert "citation-list" in response.text
     assert 'item.className = "loading-row"' in response.text
     assert "message.provider" not in response.text
+
+
+def test_runtime_settings_endpoint_returns_redacted_provider_management_payload() -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_OPENAI_API_KEY": "secret-value",
+            "FRA_ALPHA_VANTAGE_API_KEY": "alpha-secret",
+        }
+    )
+    client = _client(settings=settings)
+
+    response = client.get("/api/settings")
+    payload = response.json()
+    dumped = json.dumps(payload)
+
+    assert response.status_code == 200
+    assert payload["settings"]["provider"]["llm_provider"] == "offline-test"
+    assert payload["secrets"]["strategy"] == "environment_only"
+    assert payload["secrets"]["plaintext_storage"] == "disabled"
+    assert payload["secrets"]["openai_api_key_configured"] is True
+    assert any(provider["provider"] == "offline-test" for provider in payload["providers"])
+    assert payload["management"]["cache_clear_endpoint"] == "/api/storage/cache"
+    assert "secret-value" not in dumped
+    assert "alpha-secret" not in dumped
+
+
+def test_runtime_settings_update_changes_chat_model_without_restart() -> None:
+    client = _client()
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    settings_response = client.put(
+        "/api/settings",
+        json={"llm_provider": "offline-test", "llm_model": "custom-offline-model"},
+    )
+    status = client.get("/api/status").json()
+    chat_response = client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={"content": "Use the selected model."},
+    )
+
+    assert settings_response.status_code == 200
+    assert settings_response.json()["overrides"]["llm_model"] == "custom-offline-model"
+    assert status["chat"]["model"] == "custom-offline-model"
+    assert chat_response.status_code == 200
+    assert chat_response.json()["model"] == "custom-offline-model"
+
+
+def test_runtime_settings_reject_secret_fields_and_can_reset() -> None:
+    client = _client()
+
+    rejected = client.put("/api/settings", json={"openai_api_key": "secret-value"})
+    rejected_generic = client.put("/api/settings", json={"api_key": "another-secret"})
+    saved = client.put("/api/settings", json={"llm_model": "custom-offline-model"})
+    reset = client.delete("/api/settings")
+
+    assert rejected.status_code == 400
+    assert "secret-value" not in json.dumps(rejected.json())
+    assert rejected_generic.status_code == 400
+    assert "another-secret" not in json.dumps(rejected_generic.json())
+    assert saved.json()["overrides"]["llm_model"] == "custom-offline-model"
+    assert reset.status_code == 200
+    assert reset.json()["overrides"] == {}
+    assert reset.json()["settings"]["provider"]["llm_model"] == "offline-test"
+
+
+def test_runtime_provider_health_reports_offline_capabilities() -> None:
+    client = _client()
+
+    response = client.get("/api/settings/provider-health?provider=offline-test")
+    health = response.json()["provider_health"]
+
+    assert response.status_code == 200
+    assert health["provider"] == "offline-test"
+    assert health["reachable"] is True
+    assert health["status"] == "ok"
+    assert "chat" in health["capabilities"]
 
 
 def test_status_returns_chat_provider_without_secrets() -> None:
@@ -1085,6 +1167,7 @@ def _client(
     retrieval_index=None,
     report_run_store=None,
     orchestrator_run_store=None,
+    runtime_settings_store=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -1103,6 +1186,7 @@ def _client(
             retrieval_index=retrieval_index or LocalVectorIndex(),
             report_run_store=report_run_store or CitedResearchRunStore(),
             orchestrator_run_store=orchestrator_run_store or OrchestratorRunStore(),
+            runtime_settings_store=runtime_settings_store or RuntimeSettingsStore(),
         )
     )
 

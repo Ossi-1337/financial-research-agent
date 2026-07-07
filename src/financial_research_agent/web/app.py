@@ -11,7 +11,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from financial_research_agent.background import (
     BackgroundResearchJob,
@@ -50,10 +50,15 @@ from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
     MessageRole,
+    ModelMetadata,
+    ProviderCapability,
     ProviderError,
     ProviderErrorCode,
     StreamEventType,
 )
+from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
+from financial_research_agent.llm.offline import OfflineTestProvider
+from financial_research_agent.llm.openai import OpenAIProvider
 from financial_research_agent.llm.registry import ProviderRegistry, create_default_provider_registry
 from financial_research_agent.market_data import (
     MarketDataError,
@@ -98,6 +103,7 @@ from financial_research_agent.retrieval import (
     index_filing_result,
     search_index,
 )
+from financial_research_agent.runtime_settings import RuntimeSettingsOverrides, RuntimeSettingsStore
 from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.statements import (
     FinancialStatementCompany,
@@ -238,6 +244,50 @@ class OrchestratorResearchRequest(BaseModel):
     context_source_items: tuple[ContextSourceItemRequest, ...] = ()
 
 
+class RuntimeSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    llm_provider: str | None = Field(default=None, min_length=1, max_length=80)
+    llm_model: str | None = Field(default=None, min_length=1, max_length=200)
+    llm_base_url: str | None = Field(default=None, max_length=500)
+    llm_local_runtime: str | None = Field(default=None, min_length=1, max_length=80)
+    llm_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
+    openai_api_key: str | None = Field(default=None, max_length=500)
+    alpha_vantage_api_key: str | None = Field(default=None, max_length=500)
+    interop_api_key: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+    embedding_provider: str | None = Field(default=None, min_length=1, max_length=80)
+    embedding_model: str | None = Field(default=None, max_length=200)
+    chat_provider: str | None = Field(default=None, max_length=80)
+    chat_model: str | None = Field(default=None, max_length=200)
+    streaming_provider: str | None = Field(default=None, max_length=80)
+    streaming_model: str | None = Field(default=None, max_length=200)
+    tool_calling_provider: str | None = Field(default=None, max_length=80)
+    tool_calling_model: str | None = Field(default=None, max_length=200)
+    structured_output_provider: str | None = Field(default=None, max_length=80)
+    structured_output_model: str | None = Field(default=None, max_length=200)
+    chat_history_recent_turns: int | None = Field(default=None, ge=1, le=100)
+    chat_history_summary_max_chars: int | None = Field(default=None, ge=100, le=20_000)
+    company_lookup_provider: str | None = Field(default=None, min_length=1, max_length=80)
+    company_lookup_cache_ttl_days: int | None = Field(default=None, ge=1, le=365)
+    market_data_provider: str | None = Field(default=None, min_length=1, max_length=80)
+    market_data_cache_ttl_days: int | None = Field(default=None, ge=1, le=365)
+    financial_statement_provider: str | None = Field(default=None, min_length=1, max_length=80)
+    financial_statement_cache_ttl_days: int | None = Field(default=None, ge=1, le=365)
+    filing_provider: str | None = Field(default=None, min_length=1, max_length=80)
+    filing_cache_ttl_days: int | None = Field(default=None, ge=1, le=365)
+    filing_max_document_bytes: int | None = Field(default=None, ge=1_000, le=100_000_000)
+    retrieval_provider: str | None = Field(default=None, min_length=1, max_length=80)
+    retrieval_top_k: int | None = Field(default=None, ge=1, le=50)
+    retrieval_min_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+    background_max_concurrent_research_runs: int | None = Field(default=None, ge=1, le=8)
+
+    def overrides(self) -> RuntimeSettingsOverrides:
+        return RuntimeSettingsOverrides.from_mapping(
+            self.model_dump(exclude_none=True),
+        )
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -255,6 +305,7 @@ def create_app(
     report_run_store: CitedResearchRunStore | None = None,
     orchestrator_run_store: OrchestratorRunStore | None = None,
     background_runner: BackgroundResearchRunner | None = None,
+    runtime_settings_store: RuntimeSettingsStore | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -274,6 +325,7 @@ def create_app(
     retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
     report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
     orchestrator_runs = orchestrator_run_store or OrchestratorRunStore.from_settings(app_settings)
+    runtime_settings = runtime_settings_store or RuntimeSettingsStore.from_settings(app_settings)
     background_research = background_runner or BackgroundResearchRunner(
         max_concurrent_runs=app_settings.background.max_concurrent_research_runs,
     )
@@ -315,6 +367,7 @@ def create_app(
     app.state.filing_provider = filing_source
     app.state.filing_store = filings
     app.state.storage_manager = storage
+    app.state.runtime_settings_store = runtime_settings
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
     app.state.orchestrator_run_store = orchestrator_runs
@@ -326,16 +379,26 @@ def create_app(
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+    def current_settings() -> Settings:
+        return runtime_settings.settings(app_settings)
+
+    def current_registry() -> ProviderRegistry:
+        if registry is not None:
+            return provider_registry
+        return create_default_provider_registry(current_settings().provider)
+
     def sanitized_interop_status() -> dict[str, object]:
-        selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        selection = settings_for_request.provider.selection_for_task(ProviderTask.CHAT)
         return create_sanitized_status_payload(
-            environment=app_settings.environment,
+            environment=settings_for_request.environment,
             chat_provider=selection.provider,
             chat_model=selection.model,
-            chat_registered=provider_registry.has_chat_provider(selection.provider),
-            storage_provider=app_settings.storage.provider,
-            retrieval_provider=app_settings.retrieval.provider,
-            interop_policy=_interop_policy(app_settings),
+            chat_registered=registry_for_request.has_chat_provider(selection.provider),
+            storage_provider=settings_for_request.storage.provider,
+            retrieval_provider=settings_for_request.retrieval.provider,
+            interop_policy=_interop_policy(settings_for_request),
         )
 
     @app.get("/", include_in_schema=False)
@@ -382,18 +445,22 @@ def create_app(
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
-        selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
-        embedding_selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        selection = settings_for_request.provider.selection_for_task(ProviderTask.CHAT)
+        embedding_selection = settings_for_request.provider.selection_for_task(
+            ProviderTask.EMBEDDINGS
+        )
         background_stats = await background_research.stats()
         return {
             "app": "financial-research-agent",
-            "environment": app_settings.environment,
+            "environment": settings_for_request.environment,
             "status": "ok",
             "chat": {
                 "provider": selection.provider,
                 "model": selection.model,
                 "base_url": selection.base_url,
-                "registered": provider_registry.has_chat_provider(selection.provider),
+                "registered": registry_for_request.has_chat_provider(selection.provider),
             },
             "history": {
                 "recent_turns": sessions.recent_turns,
@@ -402,36 +469,38 @@ def create_app(
                 "persistent": sessions.storage_path is not None,
             },
             "company_search": {
-                "provider": app_settings.data_sources.company_lookup_provider,
-                "cache_ttl_days": app_settings.data_sources.company_lookup_cache_ttl_days,
+                "provider": settings_for_request.data_sources.company_lookup_provider,
+                "cache_ttl_days": (settings_for_request.data_sources.company_lookup_cache_ttl_days),
             },
             "market_data": {
-                "provider": app_settings.data_sources.market_data_provider,
-                "cache_ttl_days": app_settings.data_sources.market_data_cache_ttl_days,
+                "provider": settings_for_request.data_sources.market_data_provider,
+                "cache_ttl_days": settings_for_request.data_sources.market_data_cache_ttl_days,
                 "alpha_vantage_api_key_configured": (
-                    app_settings.data_sources.alpha_vantage_api_key is not None
+                    settings_for_request.data_sources.alpha_vantage_api_key is not None
                 ),
                 "stored_series_count": market_store.count(),
             },
             "financial_statements": {
-                "provider": app_settings.data_sources.financial_statement_provider,
-                "cache_ttl_days": (app_settings.data_sources.financial_statement_cache_ttl_days),
+                "provider": settings_for_request.data_sources.financial_statement_provider,
+                "cache_ttl_days": (
+                    settings_for_request.data_sources.financial_statement_cache_ttl_days
+                ),
                 "stored_result_count": statement_store.count(),
             },
             "filings": {
-                "provider": app_settings.data_sources.filing_provider,
-                "cache_ttl_days": app_settings.data_sources.filing_cache_ttl_days,
-                "max_document_bytes": app_settings.data_sources.filing_max_document_bytes,
+                "provider": settings_for_request.data_sources.filing_provider,
+                "cache_ttl_days": settings_for_request.data_sources.filing_cache_ttl_days,
+                "max_document_bytes": settings_for_request.data_sources.filing_max_document_bytes,
                 "stored_result_count": filings.count(),
             },
             "retrieval": {
-                "provider": app_settings.retrieval.provider,
-                "top_k": app_settings.retrieval.top_k,
-                "min_score": app_settings.retrieval.min_score,
+                "provider": settings_for_request.retrieval.provider,
+                "top_k": settings_for_request.retrieval.top_k,
+                "min_score": settings_for_request.retrieval.min_score,
                 "index": retrieval.metadata().to_dict(),
                 "embedding_provider": embedding_selection.provider,
                 "embedding_model": embedding_selection.model,
-                "embedding_provider_registered": provider_registry.has_embedding_provider(
+                "embedding_provider_registered": registry_for_request.has_embedding_provider(
                     embedding_selection.provider
                 ),
             },
@@ -470,12 +539,66 @@ def create_app(
                 "hosted_telemetry": "disabled",
                 "debug_bundle": "redacted_local_json",
             },
-            "interoperability": app_settings.interoperability.to_dict(),
+            "interoperability": settings_for_request.interoperability.to_dict(),
             "storage": {
-                "provider": app_settings.storage.provider,
-                "app_home": str(app_settings.local_paths.app_home),
+                "provider": settings_for_request.storage.provider,
+                "app_home": str(settings_for_request.local_paths.app_home),
                 "dataset_count": len(storage.dataset_specs),
             },
+        }
+
+    @app.get("/api/settings")
+    def get_runtime_settings() -> dict[str, Any]:
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        return _settings_payload(
+            settings_for_request,
+            runtime_settings.get(),
+            registry_for_request,
+            storage,
+        )
+
+    @app.put("/api/settings")
+    def update_runtime_settings(request: RuntimeSettingsRequest) -> dict[str, Any]:
+        try:
+            runtime_settings.update(request.overrides(), base_settings=app_settings)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_runtime_settings", "message": str(exc)},
+            ) from exc
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        return _settings_payload(
+            settings_for_request,
+            runtime_settings.get(),
+            registry_for_request,
+            storage,
+        )
+
+    @app.delete("/api/settings")
+    def clear_runtime_settings() -> dict[str, Any]:
+        runtime_settings.clear()
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        return _settings_payload(
+            settings_for_request,
+            runtime_settings.get(),
+            registry_for_request,
+            storage,
+        )
+
+    @app.get("/api/settings/provider-health")
+    async def runtime_provider_health(
+        provider: str | None = Query(default=None, min_length=1, max_length=80),
+    ) -> dict[str, Any]:
+        settings_for_request = current_settings()
+        selected_provider = provider or settings_for_request.provider.llm_provider
+        return {
+            "provider_health": await _provider_health_payload(
+                selected_provider,
+                settings_for_request,
+            )
         }
 
     @app.get("/api/storage")
@@ -868,9 +991,11 @@ def create_app(
         )
         if stored is None:
             raise HTTPException(status_code=404, detail={"error": "filings_not_found"})
-        selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        selection = settings_for_request.provider.selection_for_task(ProviderTask.EMBEDDINGS)
         try:
-            embedding_provider = provider_registry.embedding_provider(selection.provider)
+            embedding_provider = registry_for_request.embedding_provider(selection.provider)
             result = await index_filing_result(
                 stored,
                 index=retrieval,
@@ -897,19 +1022,21 @@ def create_app(
 
     @app.post("/api/retrieval/search")
     async def search_retrieval_index(request: RetrievalSearchRequest) -> dict[str, Any]:
-        selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        selection = settings_for_request.provider.selection_for_task(ProviderTask.EMBEDDINGS)
         query = RetrievalQuery(
             query=_message_content(request.query),
-            top_k=request.top_k or app_settings.retrieval.top_k,
+            top_k=request.top_k or settings_for_request.retrieval.top_k,
             min_score=(
                 request.min_score
                 if request.min_score is not None
-                else app_settings.retrieval.min_score
+                else settings_for_request.retrieval.min_score
             ),
             filters=request.filters,
         )
         try:
-            embedding_provider = provider_registry.embedding_provider(selection.provider)
+            embedding_provider = registry_for_request.embedding_provider(selection.provider)
             result = await search_index(
                 query,
                 index=retrieval,
@@ -944,19 +1071,25 @@ def create_app(
         if session is None:
             raise HTTPException(status_code=404, detail={"error": "session_not_found"})
         content = _message_content(request.content)
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
         retrieval_query = RetrievalQuery(
             query=content,
-            top_k=request.top_k or app_settings.retrieval.top_k,
+            top_k=request.top_k or settings_for_request.retrieval.top_k,
             min_score=(
                 request.min_score
                 if request.min_score is not None
-                else app_settings.retrieval.min_score
+                else settings_for_request.retrieval.min_score
             ),
             filters=request.filters,
         )
         try:
-            embedding_selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
-            embedding_provider = provider_registry.embedding_provider(embedding_selection.provider)
+            embedding_selection = settings_for_request.provider.selection_for_task(
+                ProviderTask.EMBEDDINGS
+            )
+            embedding_provider = registry_for_request.embedding_provider(
+                embedding_selection.provider
+            )
             retrieval_result = await search_index(
                 retrieval_query,
                 index=retrieval,
@@ -992,9 +1125,9 @@ def create_app(
                 limitation=missing_evidence_limitation(content),
             )
 
-        chat_selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
+        chat_selection = settings_for_request.provider.selection_for_task(ProviderTask.CHAT)
         try:
-            provider = provider_registry.chat_provider(chat_selection.provider)
+            provider = registry_for_request.chat_provider(chat_selection.provider)
             response = await provider.chat(
                 ChatRequest(
                     messages=build_rag_messages(content, evidence),
@@ -1052,9 +1185,11 @@ def create_app(
             raise HTTPException(status_code=404, detail={"error": "session_not_found"})
         content = _message_content(request.content)
         mentions = _chat_mentions(request.mentions)
-        selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        selection = settings_for_request.provider.selection_for_task(ProviderTask.CHAT)
         try:
-            provider = provider_registry.chat_provider(selection.provider)
+            provider = registry_for_request.chat_provider(selection.provider)
             response = await provider.chat(
                 ChatRequest(
                     messages=_request_messages(
@@ -1105,9 +1240,11 @@ def create_app(
             raise HTTPException(status_code=404, detail={"error": "session_not_found"})
         content = _message_content(request.content)
         mentions = _chat_mentions(request.mentions)
-        selection = app_settings.provider.selection_for_task(ProviderTask.STREAMING)
+        settings_for_request = current_settings()
+        registry_for_request = current_registry()
+        selection = settings_for_request.provider.selection_for_task(ProviderTask.STREAMING)
         try:
-            provider = provider_registry.chat_provider(selection.provider)
+            provider = registry_for_request.chat_provider(selection.provider)
         except ProviderError as exc:
             raise HTTPException(
                 status_code=_status_for_provider_error(exc.code),
@@ -1191,6 +1328,111 @@ def create_app(
         )
 
     return app
+
+
+def _settings_payload(
+    settings: Settings,
+    overrides: RuntimeSettingsOverrides,
+    registry: ProviderRegistry,
+    storage: LocalStorageManager,
+) -> dict[str, Any]:
+    return {
+        "settings": {
+            "provider": settings.provider.to_dict(),
+            "chat": settings.chat.to_dict(),
+            "data_sources": settings.data_sources.to_dict(),
+            "retrieval": settings.retrieval.to_dict(),
+            "background": settings.background.to_dict(),
+        },
+        "overrides": overrides.to_dict(),
+        "providers": _provider_options_payload(settings, registry),
+        "secrets": {
+            "strategy": "environment_only",
+            "plaintext_storage": "disabled",
+            "openai_api_key_configured": settings.provider.openai_api_key is not None,
+            "alpha_vantage_api_key_configured": (
+                settings.data_sources.alpha_vantage_api_key is not None
+            ),
+            "message": (
+                "Secrets are not stored in the local settings override file. Configure API "
+                "keys through environment variables."
+            ),
+        },
+        "management": {
+            "cache_clear_endpoint": "/api/storage/cache",
+            "storage_status_endpoint": "/api/storage",
+            "data_reset_command": "python -m financial_research_agent data-reset --yes --pretty",
+            "settings_storage_path": str(settings.local_paths.data_dir / "settings_overrides.json"),
+            "storage_dataset_count": len(storage.dataset_specs),
+        },
+    }
+
+
+def _provider_options_payload(
+    settings: Settings, registry: ProviderRegistry
+) -> list[dict[str, Any]]:
+    providers = (
+        OfflineTestProvider().metadata,
+        OpenAICompatibleLocalProvider.from_settings(settings.provider).metadata,
+        OpenAIProvider.from_settings(settings.provider).metadata,
+    )
+    return [
+        _provider_metadata_payload(
+            metadata,
+            chat_registered=registry.has_chat_provider(metadata.provider),
+            embedding_registered=registry.has_embedding_provider(metadata.provider),
+        )
+        for metadata in providers
+    ]
+
+
+def _provider_metadata_payload(
+    metadata: ModelMetadata,
+    *,
+    chat_registered: bool,
+    embedding_registered: bool,
+) -> dict[str, Any]:
+    capabilities = {capability.value for capability in metadata.capabilities}
+    return {
+        "provider": metadata.provider,
+        "model": metadata.model,
+        "registered": {
+            "chat": chat_registered,
+            "embeddings": embedding_registered,
+        },
+        "capabilities": sorted(capabilities),
+        "capability_status": {
+            capability.value: capability.value in capabilities for capability in ProviderCapability
+        },
+        "context_window": metadata.context_window,
+        "max_output_tokens": metadata.max_output_tokens,
+        "metadata": dict(metadata.metadata),
+    }
+
+
+async def _provider_health_payload(provider: str, settings: Settings) -> dict[str, Any]:
+    normalized = provider.strip()
+    if normalized == "offline-test":
+        metadata = OfflineTestProvider().metadata
+        return {
+            "provider": metadata.provider,
+            "model": metadata.model,
+            "reachable": True,
+            "authenticated": True,
+            "status": "ok",
+            "capabilities": [capability.value for capability in metadata.capabilities],
+            "limitations": ["Deterministic offline provider; no network or real model calls."],
+        }
+    if normalized == "local-openai":
+        return (
+            await OpenAICompatibleLocalProvider.from_settings(settings.provider).check_health()
+        ).to_dict()
+    if normalized == "openai":
+        return (await OpenAIProvider.from_settings(settings.provider).check_health()).to_dict()
+    raise HTTPException(
+        status_code=404,
+        detail={"error": "provider_not_supported", "provider": normalized},
+    )
 
 
 def _interop_policy(settings: Settings) -> InteropAccessPolicy:
