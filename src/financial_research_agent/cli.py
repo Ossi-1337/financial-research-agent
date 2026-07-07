@@ -29,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
             "data-reset",
             "retrieval-status",
             "retrieval-clear",
+            "eval",
         ],
         default="health",
         help="Command to run. Defaults to health.",
@@ -110,6 +111,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = Settings.from_env()
         uvicorn.run(create_app(settings=settings), host=args.host, port=args.port)
         return 0
+
+    if args.command == "eval":
+        from financial_research_agent.evaluation import (
+            EvalSuiteStatus,
+            run_default_offline_evaluations,
+        )
+
+        result = run_default_offline_evaluations()
+        _print_json(result.to_dict(), pretty=args.pretty)
+        return 0 if result.status == EvalSuiteStatus.PASSED else 1
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

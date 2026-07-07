@@ -48,6 +48,7 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
             ),
         },
         "interoperability": settings.interoperability.to_dict(),
+        "background": settings.background.to_dict(),
         "paths": settings.local_paths.to_dict(),
         "environment": settings.environment,
         "notes": [

@@ -42,6 +42,7 @@ services:
       FRA_LLM_LOCAL_RUNTIME: llama.cpp
       FRA_LLM_TIMEOUT_SECONDS: ${FRA_LLM_TIMEOUT_SECONDS:-30}
       FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
+      FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS: ${FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS:-1}
       FRA_STORAGE_PROVIDER: local-json
       FRA_RETRIEVAL_PROVIDER: local-vector
     volumes:

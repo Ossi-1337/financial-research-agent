@@ -135,3 +135,15 @@ def test_retrieval_clear_command_removes_index_file(monkeypatch, tmp_path: Path,
     assert exit_code == 0
     assert payload["cleared_records"] == 0
     assert not index_path.exists()
+
+
+def test_eval_command_runs_default_offline_harness(capsys) -> None:
+    exit_code = main(["eval", "--pretty"])
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["id"] == "default-offline-fixture"
+    assert payload["status"] == "passed"
+    assert payload["case_count"] == 3
+    assert payload["failed_count"] == 0

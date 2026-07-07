@@ -34,6 +34,7 @@ DEFAULT_RETRIEVAL_TOP_K = 5
 DEFAULT_RETRIEVAL_MIN_SCORE = 0.0
 DEFAULT_INTEROP_ENABLED = False
 DEFAULT_INTEROP_LOCAL_ONLY = True
+DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS = 1
 
 
 class ProviderTask(StrEnum):
@@ -304,6 +305,18 @@ class InteroperabilitySettings:
 
 
 @dataclass(frozen=True, slots=True)
+class BackgroundSettings:
+    max_concurrent_research_runs: int = DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS
+
+    def __post_init__(self) -> None:
+        if self.max_concurrent_research_runs <= 0:
+            raise ValueError("max_concurrent_research_runs must be positive")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"max_concurrent_research_runs": self.max_concurrent_research_runs}
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     environment: str
     local_paths: LocalPaths
@@ -313,6 +326,7 @@ class Settings:
     storage: StorageSettings
     retrieval: RetrievalSettings
     interoperability: InteroperabilitySettings
+    background: BackgroundSettings
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Self:
@@ -450,6 +464,13 @@ class Settings:
                     DEFAULT_INTEROP_LOCAL_ONLY,
                 ),
                 api_key=_env_optional(env, "FRA_INTEROP_API_KEY"),
+            ),
+            background=BackgroundSettings(
+                max_concurrent_research_runs=_env_int_value(
+                    env,
+                    "FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS",
+                    DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS,
+                ),
             ),
         )
 

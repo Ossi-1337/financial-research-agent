@@ -111,11 +111,15 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
   news/macro/sector context.
 - Bounded orchestrator workflow that coordinates company resolution, data refresh,
   specialist runs, handoffs, and inspectable research run state.
+- In-process background research queue for `/research ...` chat commands with status,
+  progress, cancellation, and a local concurrency limit.
 - Deterministic synthesis reports with current situation, strengths, weaknesses,
   opportunities, risks, upside/downside scenarios, unknowns, confidence, and evidence
   coverage indicators.
 - Local observability for orchestrator runs, including redacted trace timelines,
   stored-result replay plans, and exportable debug bundles without hosted telemetry.
+- Offline deterministic evaluation harness for fixture-labeled research artifacts,
+  citations, source freshness, refusal behavior, guardrails, and traceability.
 - Optional interoperability spike with A2A discovery metadata and one local-safe,
   read-only MCP-style status tool. It is disabled by default.
 
@@ -129,6 +133,8 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - SQLite or remote database storage.
 - Automatic chat RAG for every message.
 - Hosted telemetry, production audit logging, or remote observability exports.
+- Paid or hosted LLM-as-judge evaluation as part of the default local test path.
+- Public benchmark claims.
 - Trading, broker integration, alerts, monitoring, or buy/sell/hold recommendations.
 
 ## Architecture
@@ -186,6 +192,7 @@ Common settings:
 | `FRA_SEC_USER_AGENT` | SEC EDGAR User-Agent/contact | project placeholder |
 | `FRA_ALPHA_VANTAGE_API_KEY` | Alpha Vantage API key | empty |
 | `FRA_EMBEDDING_PROVIDER` | Embedding provider for retrieval | `disabled` |
+| `FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS` | Local background research concurrency limit | `1` |
 | `FRA_LOCAL_MODEL` | Docker Compose llama.cpp model | Mistral Small GGUF |
 
 Example local model configuration outside Docker Compose:
@@ -220,6 +227,7 @@ python -m financial_research_agent cache-clear --pretty
 python -m financial_research_agent data-reset --yes --pretty
 python -m financial_research_agent retrieval-status --pretty
 python -m financial_research_agent retrieval-clear --pretty
+python -m financial_research_agent eval --pretty
 ```
 
 The installed console script is also available after `pip install -e .`:
@@ -255,6 +263,9 @@ Core endpoints:
 | `POST /api/stock-price-analysis` | Analyze stored market data |
 | `POST /api/context-analysis` | Analyze explicit source-linked context |
 | `POST /api/orchestrator/research` | Run the bounded research workflow |
+| `POST /api/background/research-runs` | Queue a background research workflow |
+| `GET /api/background/research-runs/{job_id}` | Inspect background run status and progress |
+| `POST /api/background/research-runs/{job_id}/cancel` | Cancel a queued or running background run |
 | `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
 | `GET /api/orchestrator/runs/{run_id}/trace` | Inspect a redacted run timeline |
 | `POST /api/orchestrator/runs/{run_id}/replay` | Build a stored-result replay plan |
@@ -271,9 +282,10 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/orchestrator/research" `
   -Body '{"query":"Apple financial situation","refresh":true}'
 ```
 
-In the chat UI, an explicit `/research Apple financial situation` message runs the same
-bounded workflow and renders the synthesis report in the conversation. Ordinary chat
-messages remain direct LLM chat and do not automatically run research tools.
+In the chat UI, an explicit `/research Apple financial situation` message queues the same
+bounded workflow in the background, shows progress, and renders the synthesis report when
+the run completes. Ordinary chat messages remain direct LLM chat and do not automatically
+run research tools.
 
 Synthesis messages include an optional run trace inspector. Trace and debug-bundle
 payloads redact configured secrets and sensitive local paths, and replay plans use stored
@@ -348,8 +360,14 @@ python -m pytest
 python -m ruff check .
 python -m ruff format --check .
 python -m compileall -q src tests
+python -m financial_research_agent eval --pretty
 git diff --check
 ```
+
+The default eval command runs offline against fixture-labeled artifacts. It checks schema
+paths, citation coverage, source freshness, refusal behavior, hallucination-sensitive
+patterns, and trace components. LLM-as-judge evaluation is represented as a separate
+skipped check unless a future milestone explicitly configures it.
 
 Validate Docker Compose without starting services:
 

@@ -8,6 +8,7 @@ const state = {
   suggestionQuery: "",
   suggestionRequestId: 0,
   abortController: null,
+  activeBackgroundJobId: null,
   tracesByRunId: {},
 };
 
@@ -631,6 +632,16 @@ function appendAssistantDelta(assistantId, delta) {
   renderMessages();
 }
 
+function updateAssistantContent(assistantId, content) {
+  const message = state.messages.find((item) => item.id === assistantId);
+  if (!message) {
+    return;
+  }
+  message.content = content;
+  message.streaming = false;
+  renderMessages();
+}
+
 async function readNdjsonStream(response, onEvent) {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -896,7 +907,7 @@ async function sendMessage(content, mentions, assistantId) {
 }
 
 async function sendSynthesisReport(query) {
-  const response = await fetch(`/api/sessions/${state.sessionId}/synthesis-report`, {
+  const response = await fetch(`/api/sessions/${state.sessionId}/synthesis-report/background`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -909,9 +920,58 @@ async function sendSynthesisReport(query) {
     throw new Error(await errorMessageFromResponse(response));
   }
   const payload = await response.json();
-  state.messages = payload.session.messages;
-  await loadSessions();
-  renderMessages();
+  return payload.job;
+}
+
+async function pollBackgroundResearchJob(jobId, assistantId) {
+  state.activeBackgroundJobId = jobId;
+  while (state.activeBackgroundJobId === jobId) {
+    const payload = await requestJson(`/api/background/research-runs/${jobId}`);
+    const job = payload.job;
+    updateAssistantContent(assistantId, backgroundJobText(job));
+    if (["succeeded", "failed", "cancelled"].includes(job.status)) {
+      state.activeBackgroundJobId = null;
+      if (job.status === "succeeded") {
+        await openSession(state.sessionId, true);
+        return;
+      }
+      throw new Error(job.error_message || `Research run ${job.status}.`);
+    }
+    await sleep(750);
+  }
+}
+
+async function cancelBackgroundResearchJob() {
+  if (!state.activeBackgroundJobId) {
+    return;
+  }
+  await requestJson(`/api/background/research-runs/${state.activeBackgroundJobId}/cancel`, {
+    method: "POST",
+  });
+}
+
+function backgroundJobText(job) {
+  const progress = job.progress || {};
+  const completed = progress.completed_steps ?? 0;
+  const total = progress.total_steps ?? 0;
+  const current = progress.current_step ? ` Current step: ${progress.current_step}.` : "";
+  if (job.status === "queued") {
+    return `Research run queued. ${completed}/${total} steps complete.`;
+  }
+  if (job.status === "running") {
+    return `Research run running. ${completed}/${total} steps complete.${current}`;
+  }
+  if (job.status === "succeeded") {
+    return "Research run completed. Loading results...";
+  }
+  if (job.status === "cancelled") {
+    return "Research run cancelled. Partial results were preserved when available.";
+  }
+  return job.error_message || "Research run failed.";
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 async function loadRunTrace(runId) {
@@ -984,7 +1044,13 @@ sendButton.addEventListener("click", (event) => {
     return;
   }
   event.preventDefault();
-  state.abortController?.abort();
+  if (state.abortController) {
+    state.abortController.abort();
+    return;
+  }
+  cancelBackgroundResearchJob().catch((error) => {
+    showError(error instanceof Error ? error.message : "Could not cancel research run.");
+  });
 });
 
 newSessionButton.addEventListener("click", async () => {
@@ -1025,7 +1091,9 @@ form.addEventListener("submit", async (event) => {
   try {
     const research = researchCommand(content);
     if (research) {
-      await sendSynthesisReport(research.query);
+      const job = await sendSynthesisReport(research.query);
+      updateAssistantContent(pending.assistantId, backgroundJobText(job));
+      await pollBackgroundResearchJob(job.id, pending.assistantId);
     } else {
       await sendMessage(content, mentions, pending.assistantId);
     }
@@ -1039,6 +1107,7 @@ form.addEventListener("submit", async (event) => {
     }
   } finally {
     state.abortController = null;
+    state.activeBackgroundJobId = null;
     setBusy(false);
     input.focus();
   }

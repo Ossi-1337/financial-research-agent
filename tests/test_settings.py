@@ -33,6 +33,7 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.interoperability.enabled is False
     assert settings.interoperability.local_only is True
     assert settings.interoperability.api_key is None
+    assert settings.background.max_concurrent_research_runs == 1
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -78,6 +79,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_INTEROP_ENABLED": "true",
             "FRA_INTEROP_LOCAL_ONLY": "false",
             "FRA_INTEROP_API_KEY": "interop-key",
+            "FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS": "2",
         }
     )
 
@@ -125,6 +127,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.interoperability.enabled is True
     assert settings.interoperability.local_only is False
     assert settings.interoperability.api_key == "interop-key"
+    assert settings.background.max_concurrent_research_runs == 2
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:
@@ -348,3 +351,12 @@ def test_interoperability_settings_are_read_and_validated() -> None:
         assert "FRA_INTEROP_API_KEY is required" in str(exc)
     else:
         raise AssertionError("Expected remote interop without API key to be rejected")
+
+
+def test_invalid_background_research_limit_is_rejected() -> None:
+    try:
+        Settings.from_env({"FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS": "0"})
+    except ValueError as exc:
+        assert "FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS must be positive" in str(exc)
+    else:
+        raise AssertionError("Expected invalid background research limit to be rejected")

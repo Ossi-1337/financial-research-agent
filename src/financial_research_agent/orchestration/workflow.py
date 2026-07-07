@@ -100,7 +100,7 @@ class ResearchOrchestrator:
     async def run(self, request: OrchestratorResearchInput) -> OrchestratedResearchRun:
         created_at = _aware_now(self._now())
         run = OrchestratedResearchRun(
-            id=f"orchestrator_run_{uuid4().hex}",
+            id=request.run_id or f"orchestrator_run_{uuid4().hex}",
             query=request.query,
             status=OrchestratorRunStatus.RUNNING,
             created_at=created_at,

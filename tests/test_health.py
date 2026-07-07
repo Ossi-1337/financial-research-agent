@@ -23,6 +23,7 @@ def test_health_report_has_no_external_requirements() -> None:
     assert report["retrieval"]["embedding_provider"] == "disabled"
     assert report["interoperability"]["enabled"] is False
     assert report["interoperability"]["api_key_configured"] is False
+    assert report["background"]["max_concurrent_research_runs"] == 1
     assert report["notes"][0] == "Foundation health check only."
     assert "offline-test by default" in report["notes"][1]
     assert "companyfacts financial statement ingestion" in report["notes"][3]

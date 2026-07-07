@@ -13,6 +13,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from financial_research_agent.background import (
+    BackgroundResearchJob,
+    BackgroundResearchRunner,
+    BackgroundResearchStatus,
+)
 from financial_research_agent.context_analysis import (
     ContextScope,
     ContextSourceItem,
@@ -67,8 +72,10 @@ from financial_research_agent.observability import (
 from financial_research_agent.orchestration import (
     OrchestratedResearchRun,
     OrchestratorResearchInput,
+    OrchestratorRunStatus,
     OrchestratorRunStore,
     ResearchOrchestrator,
+    default_orchestrator_plan,
 )
 from financial_research_agent.report_analysis import (
     FinancialReportAnalysisAgent,
@@ -247,6 +254,7 @@ def create_app(
     retrieval_index: LocalVectorIndex | None = None,
     report_run_store: CitedResearchRunStore | None = None,
     orchestrator_run_store: OrchestratorRunStore | None = None,
+    background_runner: BackgroundResearchRunner | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -266,6 +274,9 @@ def create_app(
     retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
     report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
     orchestrator_runs = orchestrator_run_store or OrchestratorRunStore.from_settings(app_settings)
+    background_research = background_runner or BackgroundResearchRunner(
+        max_concurrent_runs=app_settings.background.max_concurrent_research_runs,
+    )
     financial_report_agent = FinancialReportAnalysisAgent(
         statement_store=statement_store,
         filing_store=filings,
@@ -307,6 +318,7 @@ def create_app(
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
     app.state.orchestrator_run_store = orchestrator_runs
+    app.state.background_research = background_research
     app.state.financial_report_agent = financial_report_agent
     app.state.stock_price_agent = stock_price_agent
     app.state.context_agent = context_agent
@@ -369,9 +381,10 @@ def create_app(
         return dispatcher.handle(payload)
 
     @app.get("/api/status")
-    def status() -> dict[str, Any]:
+    async def status() -> dict[str, Any]:
         selection = app_settings.provider.selection_for_task(ProviderTask.CHAT)
         embedding_selection = app_settings.provider.selection_for_task(ProviderTask.EMBEDDINGS)
+        background_stats = await background_research.stats()
         return {
             "app": "financial-research-agent",
             "environment": app_settings.environment,
@@ -442,6 +455,11 @@ def create_app(
                 "execution_policy": "sequential_local_safe",
                 "stored_run_count": orchestrator_runs.count(),
                 "recommendations": "disabled",
+            },
+            "background_research": {
+                **background_stats,
+                "queue": "in_process",
+                "scheduled_monitoring": "disabled",
             },
             "synthesis": {
                 "source": "orchestrator_specialist_handoffs",
@@ -683,6 +701,45 @@ def create_app(
             ) from exc
         return {"run": run.to_dict(), "synthesis_report": _synthesis_report_from_run(run)}
 
+    @app.post("/api/background/research-runs", status_code=202)
+    async def enqueue_background_research(
+        request: OrchestratorResearchRequest,
+    ) -> dict[str, Any]:
+        try:
+            research_input = _orchestrator_input(request)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_orchestrator_request", "message": str(exc)},
+            ) from exc
+        job = await background_research.submit(research_input, run=orchestrator.run)
+        return _background_job_payload(job, orchestrator_runs)
+
+    @app.get("/api/background/research-runs")
+    async def list_background_research_runs() -> dict[str, Any]:
+        return {
+            "jobs": [
+                _background_job_payload(job, orchestrator_runs)["job"]
+                for job in await background_research.list()
+            ],
+            "limits": await background_research.stats(),
+        }
+
+    @app.get("/api/background/research-runs/{job_id}")
+    async def get_background_research_run(job_id: str) -> dict[str, Any]:
+        job = await background_research.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail={"error": "background_job_not_found"})
+        return _background_job_payload(job, orchestrator_runs)
+
+    @app.post("/api/background/research-runs/{job_id}/cancel")
+    async def cancel_background_research_run(job_id: str) -> dict[str, Any]:
+        job = await background_research.cancel(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail={"error": "background_job_not_found"})
+        _mark_cancelled_orchestrator_run(job, orchestrator_runs)
+        return _background_job_payload(job, orchestrator_runs)
+
     @app.post("/api/sessions/{session_id}/synthesis-report")
     async def post_session_synthesis_report(
         session_id: str,
@@ -716,6 +773,45 @@ def create_app(
             "provider": "orchestrator",
             "model": run.execution_policy.value,
         }
+
+    @app.post("/api/sessions/{session_id}/synthesis-report/background", status_code=202)
+    async def enqueue_session_synthesis_report(
+        session_id: str,
+        request: OrchestratorResearchRequest,
+    ) -> dict[str, Any]:
+        if sessions.get(session_id) is None:
+            raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+        try:
+            research_input = _orchestrator_input(request)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_orchestrator_request", "message": str(exc)},
+            ) from exc
+
+        async def run_and_append(
+            input_request: OrchestratorResearchInput,
+        ) -> OrchestratedResearchRun:
+            run = await orchestrator.run(input_request)
+            report = _synthesis_report_from_run(run)
+            assistant_content = _synthesis_message_content(run, report)
+            sessions.append_exchange(
+                session_id=session_id,
+                user_content=request.query,
+                assistant_content=assistant_content,
+                provider="orchestrator",
+                model=run.execution_policy.value,
+                research_run_id=run.id,
+                synthesis_report=report,
+            )
+            return run
+
+        job = await background_research.submit(
+            research_input,
+            run=run_and_append,
+            metadata={"session_id": session_id},
+        )
+        return _background_job_payload(job, orchestrator_runs)
 
     @app.get("/api/orchestrator/runs")
     def list_orchestrator_runs() -> dict[str, Any]:
@@ -1157,6 +1253,60 @@ def _orchestrator_run_or_404(
     if run is None:
         raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
     return run
+
+
+def _background_job_payload(
+    job: BackgroundResearchJob,
+    orchestrator_runs: OrchestratorRunStore,
+) -> dict[str, Any]:
+    run = orchestrator_runs.get(job.orchestrator_run_id)
+    progress = _orchestrator_progress(run) if run is not None else _empty_progress()
+    return {
+        "job": {
+            **job.to_dict(),
+            "progress": progress,
+            "orchestrator_run": run.to_dict() if run is not None else None,
+            "synthesis_report": _synthesis_report_from_run(run) if run is not None else None,
+        }
+    }
+
+
+def _empty_progress() -> dict[str, object]:
+    return {
+        "completed_steps": 0,
+        "total_steps": len(default_orchestrator_plan()),
+        "current_step": None,
+    }
+
+
+def _orchestrator_progress(run: OrchestratedResearchRun) -> dict[str, object]:
+    completed_steps = {handoff.step_id for handoff in run.handoffs}
+    remaining_steps = tuple(step.id for step in run.plan if step.id not in completed_steps)
+    return {
+        "completed_steps": len(completed_steps),
+        "total_steps": len(run.plan),
+        "current_step": remaining_steps[0] if remaining_steps else None,
+    }
+
+
+def _mark_cancelled_orchestrator_run(
+    job: BackgroundResearchJob,
+    orchestrator_runs: OrchestratorRunStore,
+) -> None:
+    if job.status != BackgroundResearchStatus.CANCELLED:
+        return
+    run = orchestrator_runs.get(job.orchestrator_run_id)
+    if run is None or run.status != OrchestratorRunStatus.RUNNING:
+        return
+    limitation = "Background research job was cancelled before the workflow completed."
+    orchestrator_runs.save(
+        replace(
+            run,
+            status=OrchestratorRunStatus.PARTIAL,
+            limitations=tuple(dict.fromkeys((*run.limitations, limitation))),
+            updated_at=datetime.now(UTC),
+        )
+    )
 
 
 def _synthesis_message_content(
