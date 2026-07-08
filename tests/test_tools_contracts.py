@@ -115,7 +115,15 @@ def test_registry_rejects_duplicates_and_executes_with_call_metadata() -> None:
     with pytest.raises(ValueError, match="already registered"):
         registry.register(spec)
 
-    result = asyncio.run(registry.execute(ToolCall(id="call_1", name="echo")))
+    result = asyncio.run(
+        registry.execute(
+            ToolCall(id="call_1", name="echo"),
+            ToolContext(
+                allowed_permissions=(ToolPermission.CALCULATION,),
+                allowed_tools=("echo",),
+            ),
+        )
+    )
 
     assert result.status == ToolResultStatus.SUCCEEDED
     assert result.tool_call_id == "call_1"

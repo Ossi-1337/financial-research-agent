@@ -102,6 +102,7 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - OpenAI-compatible local provider for llama.cpp, Ollama, and similar local endpoints.
 - Optional hosted OpenAI provider.
 - Deterministic tool registry with guarded function calling.
+- Deny-by-default tool name/permission allowlists and untrusted-document prompt framing.
 - SEC company lookup using the official company ticker list.
 - Alpha Vantage daily market data ingestion when an API key is configured.
 - SEC companyfacts financial statement ingestion for SEC filers.
@@ -201,6 +202,7 @@ Common settings:
 | `FRA_PROMPT_BUDGET_INPUT_TOKENS` | Approximate prompt input token budget | `16000` |
 | `FRA_PROMPT_BUDGET_OUTPUT_TOKENS` | Default response output budget | `1024` |
 | `FRA_EMBEDDING_CACHE_ENABLED` | Cache embeddings by provider/model/text hash | `true` |
+| `FRA_ALLOW_REMOTE_BIND` | Permit non-loopback web server binding | `false` |
 | `FRA_LOCAL_MODEL` | Docker Compose llama.cpp model | Mistral Small GGUF |
 
 The settings UI can save non-secret runtime overrides under `FRA_HOME`. API keys remain
@@ -226,6 +228,18 @@ python -m financial_research_agent --pretty
 ```
 
 Do not commit real API keys.
+
+## Security
+
+- API keys remain environment-only and are never written by the settings UI.
+- Retrieved filings and external source text are treated as untrusted data, not instructions.
+- Tool calls require both an explicit tool-name allowlist and matching permissions.
+- Direct app runs bind to `127.0.0.1` by default. Non-loopback binds require
+  `FRA_ALLOW_REMOTE_BIND=true`.
+- Docker Compose publishes app and llama.cpp ports on host loopback only.
+- No shell, arbitrary code execution, or unrestricted local-file tool exists.
+
+Use remote binding only behind a trusted network boundary with appropriate authentication.
 
 ## CLI
 

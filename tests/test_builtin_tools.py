@@ -17,6 +17,7 @@ from financial_research_agent.llm import ToolCall
 from financial_research_agent.tools import (
     ToolContext,
     ToolErrorCode,
+    ToolPermission,
     ToolResultStatus,
     create_default_tool_registry,
 )
@@ -24,7 +25,12 @@ from financial_research_agent.tools import (
 
 def test_current_utc_datetime_tool_returns_iso_utc_timestamp() -> None:
     registry = create_default_tool_registry()
-    result = asyncio.run(registry.execute(ToolCall(id="call_time", name="current_utc_datetime")))
+    result = asyncio.run(
+        registry.execute(
+            ToolCall(id="call_time", name="current_utc_datetime"),
+            _tool_context("current_utc_datetime"),
+        )
+    )
 
     timestamp = result.data["utc_datetime"]
 
@@ -44,7 +50,8 @@ def test_calculate_ratio_tool_succeeds_and_handles_division_by_zero() -> None:
                 id="call_ratio",
                 name="calculate_ratio",
                 arguments={"numerator": 5, "denominator": 2, "precision": 2},
-            )
+            ),
+            _tool_context("calculate_ratio"),
         )
     )
     failure = asyncio.run(
@@ -53,7 +60,8 @@ def test_calculate_ratio_tool_succeeds_and_handles_division_by_zero() -> None:
                 id="call_zero",
                 name="calculate_ratio",
                 arguments={"numerator": 5, "denominator": 0},
-            )
+            ),
+            _tool_context("calculate_ratio"),
         )
     )
 
@@ -72,7 +80,8 @@ def test_resolve_company_stub_returns_no_fake_company_data() -> None:
                 id="call_company",
                 name="resolve_company_stub",
                 arguments={"query": "Novo Nordisk"},
-            )
+            ),
+            _tool_context("resolve_company_stub"),
         )
     )
 
@@ -94,7 +103,8 @@ def test_resolve_company_tool_returns_reviewable_candidates() -> None:
                 id="call_company",
                 name="resolve_company",
                 arguments={"query": "Novo Nordisk", "limit": 3},
-            )
+            ),
+            _tool_context("resolve_company"),
         )
     )
 
@@ -108,12 +118,14 @@ def test_resolve_company_tool_returns_reviewable_candidates() -> None:
 def test_read_local_evidence_tool_reads_injected_mapping_and_reports_missing_items() -> None:
     registry = create_default_tool_registry()
     context = ToolContext(
+        allowed_permissions=(ToolPermission.LOCAL_READ,),
+        allowed_tools=("read_local_evidence",),
         local_evidence={
             "ev_1": {
                 "title": "Source title",
                 "excerpt": "Evidence excerpt.",
             }
-        }
+        },
     )
 
     found = asyncio.run(
@@ -178,3 +190,10 @@ class FakeCompanySearchProvider:
             source=source,
             warnings=(f"limit={limit}",),
         )
+
+
+def _tool_context(*tool_names: str) -> ToolContext:
+    return ToolContext(
+        allowed_permissions=tuple(ToolPermission),
+        allowed_tools=tool_names,
+    )

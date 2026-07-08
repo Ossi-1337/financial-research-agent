@@ -38,6 +38,7 @@ DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS = 1
 DEFAULT_PROMPT_BUDGET_INPUT_TOKENS = 16_000
 DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS = 1_024
 DEFAULT_EMBEDDING_CACHE_ENABLED = True
+DEFAULT_ALLOW_REMOTE_BIND = False
 
 
 class ProviderTask(StrEnum):
@@ -340,6 +341,20 @@ class PerformanceSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class SecuritySettings:
+    allow_remote_bind: bool = DEFAULT_ALLOW_REMOTE_BIND
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "allow_remote_bind": self.allow_remote_bind,
+            "default_bind_host": "127.0.0.1",
+            "tool_policy": "deny_by_default_name_and_permission_allowlist",
+            "external_content": "untrusted_data",
+            "secret_storage": "environment_only",
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     environment: str
     local_paths: LocalPaths
@@ -351,6 +366,7 @@ class Settings:
     interoperability: InteroperabilitySettings
     background: BackgroundSettings
     performance: PerformanceSettings
+    security: SecuritySettings
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Self:
@@ -511,6 +527,13 @@ class Settings:
                     env,
                     "FRA_EMBEDDING_CACHE_ENABLED",
                     DEFAULT_EMBEDDING_CACHE_ENABLED,
+                ),
+            ),
+            security=SecuritySettings(
+                allow_remote_bind=_env_bool_value(
+                    env,
+                    "FRA_ALLOW_REMOTE_BIND",
+                    DEFAULT_ALLOW_REMOTE_BIND,
                 ),
             ),
         )

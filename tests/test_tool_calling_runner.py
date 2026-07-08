@@ -15,7 +15,9 @@ from financial_research_agent.llm import (
 )
 from financial_research_agent.tools import (
     ToolCallingRunner,
+    ToolContext,
     ToolErrorCode,
+    ToolPermission,
     ToolResultStatus,
     create_default_tool_registry,
 )
@@ -40,7 +42,10 @@ def test_tool_calling_runner_executes_tool_then_returns_final_response() -> None
     runner = ToolCallingRunner(provider=provider, registry=create_default_tool_registry())
 
     result = asyncio.run(
-        runner.run([ChatMessage(role=MessageRole.USER, content="What time is it?")])
+        runner.run(
+            [ChatMessage(role=MessageRole.USER, content="What time is it?")],
+            context=_tool_context("current_utc_datetime"),
+        )
     )
 
     assert result.stopped_reason == "final_response"
@@ -77,7 +82,12 @@ def test_tool_calling_runner_executes_multiple_tool_calls_in_one_round() -> None
     )
     runner = ToolCallingRunner(provider=provider, registry=create_default_tool_registry())
 
-    result = asyncio.run(runner.run([ChatMessage(role="user", content="Use tools.")]))
+    result = asyncio.run(
+        runner.run(
+            [ChatMessage(role="user", content="Use tools.")],
+            context=_tool_context("current_utc_datetime", "calculate_ratio"),
+        )
+    )
 
     assert [tool_result.tool_call_id for tool_result in result.tool_results] == [
         "call_time",
@@ -106,7 +116,12 @@ def test_tool_calling_runner_stops_on_failed_tool_result() -> None:
     )
     runner = ToolCallingRunner(provider=provider, registry=create_default_tool_registry())
 
-    result = asyncio.run(runner.run([ChatMessage(role="user", content="Divide.")]))
+    result = asyncio.run(
+        runner.run(
+            [ChatMessage(role="user", content="Divide.")],
+            context=_tool_context("calculate_ratio"),
+        )
+    )
 
     assert result.stopped_reason == ToolErrorCode.DIVISION_BY_ZERO.value
     assert result.tool_results[0].status == ToolResultStatus.FAILED
@@ -121,7 +136,12 @@ def test_tool_calling_runner_reports_max_rounds_exceeded() -> None:
         max_tool_rounds=1,
     )
 
-    result = asyncio.run(runner.run([ChatMessage(role="user", content="Loop.")]))
+    result = asyncio.run(
+        runner.run(
+            [ChatMessage(role="user", content="Loop.")],
+            context=_tool_context("current_utc_datetime"),
+        )
+    )
 
     assert result.stopped_reason == ToolErrorCode.MAX_ROUNDS_EXCEEDED.value
     assert result.tool_results[-1].error_code == ToolErrorCode.MAX_ROUNDS_EXCEEDED
@@ -135,7 +155,12 @@ def test_tool_calling_runner_can_execute_offline_test_provider_tool_call() -> No
         max_tool_rounds=1,
     )
 
-    result = asyncio.run(runner.run([ChatMessage(role="user", content="Use a tool.")]))
+    result = asyncio.run(
+        runner.run(
+            [ChatMessage(role="user", content="Use a tool.")],
+            context=_tool_context("current_utc_datetime"),
+        )
+    )
 
     assert result.tool_results[0].tool_name == "current_utc_datetime"
     assert result.tool_results[0].status == ToolResultStatus.SUCCEEDED
@@ -176,3 +201,10 @@ class RepeatingToolProvider:
 
     def stream_chat(self, _request: ChatRequest):
         raise NotImplementedError
+
+
+def _tool_context(*tool_names: str) -> ToolContext:
+    return ToolContext(
+        allowed_permissions=tuple(ToolPermission),
+        allowed_tools=tool_names,
+    )

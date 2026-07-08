@@ -37,6 +37,7 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.performance.prompt_budget_input_tokens == 16_000
     assert settings.performance.prompt_budget_output_tokens == 1_024
     assert settings.performance.embedding_cache_enabled is True
+    assert settings.security.allow_remote_bind is False
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -86,6 +87,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_PROMPT_BUDGET_INPUT_TOKENS": "12000",
             "FRA_PROMPT_BUDGET_OUTPUT_TOKENS": "800",
             "FRA_EMBEDDING_CACHE_ENABLED": "false",
+            "FRA_ALLOW_REMOTE_BIND": "true",
         }
     )
 
@@ -137,6 +139,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.performance.prompt_budget_input_tokens == 12_000
     assert settings.performance.prompt_budget_output_tokens == 800
     assert settings.performance.embedding_cache_enabled is False
+    assert settings.security.allow_remote_bind is True
 
 
 def test_blank_environment_values_fall_back_to_defaults() -> None:

@@ -258,6 +258,8 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["orchestration"]["execution_policy"] == "sequential_local_safe"
     assert payload["orchestration"]["stored_run_count"] == 0
     assert payload["orchestration"]["recommendations"] == "disabled"
+    assert payload["security"]["allow_remote_bind"] is False
+    assert payload["security"]["secret_storage"] == "environment_only"
     assert payload["synthesis"]["source"] == "orchestrator_specialist_handoffs"
     assert payload["synthesis"]["recommendations"] == "disabled"
     assert payload["observability"]["source"] == "stored_orchestrator_runs"

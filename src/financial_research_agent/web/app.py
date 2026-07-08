@@ -553,6 +553,7 @@ def create_app(
                 "debug_bundle": "redacted_local_json",
             },
             "interoperability": settings_for_request.interoperability.to_dict(),
+            "security": settings_for_request.security.to_dict(),
             "storage": {
                 "provider": settings_for_request.storage.provider,
                 "app_home": str(settings_for_request.local_paths.app_home),
@@ -1399,6 +1400,7 @@ def _settings_payload(
             "retrieval": settings.retrieval.to_dict(),
             "background": settings.background.to_dict(),
             "performance": settings.performance.to_dict(),
+            "security": settings.security.to_dict(),
         },
         "overrides": overrides.to_dict(),
         "providers": _provider_options_payload(settings, registry),

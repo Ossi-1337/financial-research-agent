@@ -8,6 +8,7 @@ import uvicorn
 
 from financial_research_agent.health import build_health_report
 from financial_research_agent.retrieval import LocalVectorIndex
+from financial_research_agent.security import validate_bind_host
 from financial_research_agent.settings import Settings
 from financial_research_agent.storage import LocalStorageManager
 
@@ -109,7 +110,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         from financial_research_agent.web import create_app
 
         settings = Settings.from_env()
-        uvicorn.run(create_app(settings=settings), host=args.host, port=args.port)
+        try:
+            host = validate_bind_host(
+                args.host,
+                allow_remote_bind=settings.security.allow_remote_bind,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        uvicorn.run(create_app(settings=settings), host=host, port=args.port)
         return 0
 
     if args.command == "eval":

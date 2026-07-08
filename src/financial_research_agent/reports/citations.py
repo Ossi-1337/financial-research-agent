@@ -3,6 +3,11 @@ from __future__ import annotations
 from financial_research_agent.llm import ChatMessage, MessageRole
 from financial_research_agent.reports.contracts import Citation, EvidenceSnippet
 from financial_research_agent.retrieval import RetrievalResult
+from financial_research_agent.security import (
+    UNTRUSTED_CONTENT_INSTRUCTION,
+    UntrustedContent,
+    build_untrusted_content_payload,
+)
 
 MAX_QUOTE_CHARS = 280
 MAX_EVIDENCE_SNIPPET_CHARS = 900
@@ -59,7 +64,9 @@ def build_rag_messages(
 ) -> tuple[ChatMessage, ...]:
     if not evidence:
         raise ValueError("evidence is required to build a cited RAG prompt")
-    evidence_blocks = "\n\n".join(_format_evidence_for_prompt(snippet) for snippet in evidence)
+    evidence_payload = build_untrusted_content_payload(
+        _untrusted_content_from_snippet(snippet) for snippet in evidence
+    )
     return (
         ChatMessage(
             role=MessageRole.SYSTEM,
@@ -69,12 +76,12 @@ def build_rag_messages(
                 "markers like [C1]. If the evidence is insufficient, say what is missing "
                 "instead of inventing facts. Do not cite sources that are not provided. "
                 "Do not provide buy, sell, or hold recommendations. Provide concise "
-                "reasoning summaries only."
+                f"reasoning summaries only. {UNTRUSTED_CONTENT_INSTRUCTION}"
             ),
         ),
         ChatMessage(
             role=MessageRole.USER,
-            content=f"Question:\n{query.strip()}\n\nEvidence:\n{evidence_blocks}",
+            content=f"Question:\n{query.strip()}\n\nUntrusted evidence JSON:\n{evidence_payload}",
         ),
     )
 
@@ -96,14 +103,17 @@ def missing_evidence_limitation(query: str) -> str:
     )
 
 
-def _format_evidence_for_prompt(snippet: EvidenceSnippet) -> str:
-    section = f"Section: {snippet.section}\n" if snippet.section else ""
-    return (
-        f"[{snippet.citation_id}]\n"
-        f"{section}"
-        f"Source URL: {snippet.source_url}\n"
-        f"Retrieved at: {snippet.retrieved_at.isoformat()}\n"
-        f"Snippet: {snippet.text}"
+def _untrusted_content_from_snippet(snippet: EvidenceSnippet) -> UntrustedContent:
+    return UntrustedContent(
+        source_id=snippet.id,
+        source_url=snippet.source_url,
+        content=snippet.text,
+        metadata={
+            "citation_id": snippet.citation_id,
+            "citation_marker": f"[{snippet.citation_id}]",
+            "retrieved_at": snippet.retrieved_at.isoformat(),
+            "section": snippet.section,
+        },
     )
 
 

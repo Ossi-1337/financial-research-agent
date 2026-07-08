@@ -48,6 +48,28 @@ def test_serve_command_starts_uvicorn(monkeypatch) -> None:
     assert calls["port"] == 8123
 
 
+def test_serve_rejects_remote_bind_without_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("FRA_ALLOW_REMOTE_BIND", raising=False)
+
+    with pytest.raises(SystemExit):
+        main(["serve", "--host", "0.0.0.0"])
+
+
+def test_serve_allows_remote_bind_with_explicit_opt_in(monkeypatch) -> None:
+    calls = {}
+
+    def fake_run(app, *, host, port):
+        calls["app"] = app
+        calls["host"] = host
+        calls["port"] = port
+
+    monkeypatch.setenv("FRA_ALLOW_REMOTE_BIND", "true")
+    monkeypatch.setattr("financial_research_agent.cli.uvicorn.run", fake_run)
+
+    assert main(["serve", "--host", "0.0.0.0"]) == 0
+    assert calls["host"] == "0.0.0.0"
+
+
 def test_storage_status_command_outputs_manifest(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setenv("FRA_HOME", str(tmp_path))
 

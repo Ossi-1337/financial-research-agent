@@ -44,20 +44,27 @@ class ToolErrorCode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ToolContext:
-    allowed_permissions: tuple[ToolPermission, ...] = field(
-        default_factory=lambda: tuple(ToolPermission)
-    )
+    allowed_permissions: tuple[ToolPermission, ...] = ()
+    allowed_tools: tuple[str, ...] = ()
     local_evidence: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_permissions", _permission_tuple(self.allowed_permissions))
+        object.__setattr__(self, "allowed_tools", _text_tuple("allowed_tools", self.allowed_tools))
         object.__setattr__(self, "local_evidence", _nested_mapping(self.local_evidence))
         object.__setattr__(self, "metadata", _text_mapping("metadata", self.metadata))
 
     def allows(self, permissions: Iterable[ToolPermission | str]) -> bool:
         allowed = set(self.allowed_permissions)
         return all(ToolPermission(permission) in allowed for permission in permissions)
+
+    def allows_tool(
+        self,
+        name: str,
+        permissions: Iterable[ToolPermission | str],
+    ) -> bool:
+        return _require_text("name", name) in self.allowed_tools and self.allows(permissions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,7 +218,7 @@ class ToolRegistry:
         values = tuple(self._specs.values())
         if context is None:
             return values
-        return tuple(spec for spec in values if context.allows(spec.permissions))
+        return tuple(spec for spec in values if context.allows_tool(spec.name, spec.permissions))
 
     def tool_definitions(self, context: ToolContext | None = None) -> tuple[ToolDefinition, ...]:
         return tuple(spec.to_llm_definition() for spec in self.specs(context))
@@ -226,7 +233,7 @@ class ToolRegistry:
                 error_code=ToolErrorCode.UNKNOWN_TOOL,
                 errors=(f"Unknown tool: {tool_call.name}",),
             )
-        if not tool_context.allows(spec.permissions):
+        if not tool_context.allows_tool(spec.name, spec.permissions):
             return ToolResult.denied(
                 tool_call_id=tool_call.id,
                 tool_name=tool_call.name,
@@ -253,12 +260,12 @@ class ToolRegistry:
                 error_code=ToolErrorCode.TIMEOUT,
                 errors=(f"Tool timed out after {spec.timeout_seconds} seconds.",),
             )
-        except Exception as exc:
+        except Exception:
             return ToolResult.failed(
                 tool_call_id=tool_call.id,
                 tool_name=tool_call.name,
                 error_code=ToolErrorCode.EXECUTION_FAILED,
-                errors=(f"Tool execution failed: {exc}",),
+                errors=("Tool execution failed.",),
             )
         if not isinstance(result, ToolResult):
             return ToolResult.failed(

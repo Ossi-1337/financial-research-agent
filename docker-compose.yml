@@ -6,7 +6,7 @@ services:
     container_name: fra-llama-cpp
     gpus: all
     ports:
-      - "${FRA_LLAMA_PORT:-8080}:8080"
+      - "127.0.0.1:${FRA_LLAMA_PORT:-8080}:8080"
     volumes:
       - type: bind
         source: ${FRA_HUGGINGFACE_CACHE:-${USERPROFILE}/.cache/huggingface}
@@ -32,7 +32,7 @@ services:
     depends_on:
       - llama-cpp
     ports:
-      - "${FRA_APP_PORT:-8000}:8000"
+      - "127.0.0.1:${FRA_APP_PORT:-8000}:8000"
     environment:
       FRA_ENV: local
       FRA_HOME: /app/.financial-research-agent
@@ -45,6 +45,7 @@ services:
       FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS: ${FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS:-1}
       FRA_STORAGE_PROVIDER: local-json
       FRA_RETRIEVAL_PROVIDER: local-vector
+      FRA_ALLOW_REMOTE_BIND: "true"
     volumes:
       - fra-data:/app/.financial-research-agent
     command:

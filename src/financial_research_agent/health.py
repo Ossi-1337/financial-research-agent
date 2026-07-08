@@ -66,6 +66,7 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
                 profile.to_dict() for profile in default_local_model_profiles()
             ],
         },
+        "security": settings.security.to_dict(),
         "paths": settings.local_paths.to_dict(),
         "environment": settings.environment,
         "notes": [
