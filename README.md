@@ -122,6 +122,8 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - Deterministic synthesis reports with current situation, strengths, weaknesses,
   opportunities, risks, upside/downside scenarios, unknowns, confidence, and evidence
   coverage indicators.
+- Immutable local synthesis report exports in Markdown, self-contained HTML, and PDF,
+  with source appendix, timestamps, hashes, limitations, and no-advice framing.
 - Local observability for orchestrator runs, including redacted trace timelines,
   stored-result replay plans, and exportable debug bundles without hosted telemetry.
 - Offline deterministic evaluation harness for fixture-labeled research artifacts,
@@ -296,6 +298,10 @@ Core endpoints:
 | `GET /api/background/research-runs/{job_id}` | Inspect background run status and progress |
 | `POST /api/background/research-runs/{job_id}/cancel` | Cancel a queued or running background run |
 | `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
+| `POST /api/orchestrator/runs/{run_id}/exports` | Create a saved Markdown/HTML/PDF report snapshot |
+| `GET /api/report-exports` | List saved local report exports |
+| `GET /api/report-exports/{export_id}` | Inspect an export manifest |
+| `GET /api/report-exports/{export_id}/files/{format}` | Download a Markdown, HTML, or PDF artifact |
 | `GET /api/orchestrator/runs/{run_id}/trace` | Inspect a redacted run timeline |
 | `POST /api/orchestrator/runs/{run_id}/replay` | Build a stored-result replay plan |
 | `GET /api/orchestrator/runs/{run_id}/debug-bundle` | Export a redacted local debug bundle |
@@ -319,6 +325,11 @@ run research tools.
 Synthesis messages include an optional run trace inspector. Trace and debug-bundle
 payloads redact configured secrets and sensitive local paths, and replay plans use stored
 handoff outputs only; they do not call providers, LLMs, tools, or data sources.
+
+Synthesis reports also include an `Export` action. One click creates a new immutable local
+snapshot containing Markdown, self-contained HTML, and PDF, then shows a download link for
+each format. Export uses only the persisted run and specialist handoffs; it does not call an
+LLM, refresh data, or publish the report.
 
 Optional interoperability spike:
 
@@ -344,9 +355,10 @@ Local runtime data is stored under `FRA_HOME`, which defaults to:
 
 The local store includes runtime settings overrides, chat sessions, provider caches, market
 data, financial statements, filing documents, extracted text, embedding cache, retrieval indexes,
-cited-answer runs, and orchestrator run state. Background job status is in-process; the
-linked orchestrator run state is persisted when the workflow writes run snapshots. Secrets
-are not written into ordinary JSON data stores.
+cited-answer runs, orchestrator run state, and report export snapshots under
+`FRA_HOME/data/exports/`. Background job status is in-process; the linked orchestrator run
+state is persisted when the workflow writes run snapshots. Secrets are not written into
+ordinary JSON data stores.
 
 The embedding cache stores provider/model/text hashes and vectors, not raw prompt or
 document text.
@@ -419,7 +431,7 @@ Near-term direction:
 
 - stronger orchestrated synthesis over stored specialist outputs
 - more provider adapters
-- richer report generation
+- optional narrative report writing over source-backed exports
 - better identifier resolution
 - PDF and additional document formats
 - stronger persistence options

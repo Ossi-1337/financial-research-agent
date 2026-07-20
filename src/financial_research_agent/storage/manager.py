@@ -364,6 +364,15 @@ def default_storage_dataset_specs(settings: Settings) -> tuple[StorageDatasetSpe
             description="Stored orchestrator workflow state with specialist handoffs.",
         ),
         StorageDatasetSpec(
+            dataset=StorageDataset.REPORT_EXPORTS,
+            label="Report export snapshots",
+            area=StorageArea.DATA,
+            relative_path="exports",
+            storage_format=StorageFormat.FILE_TREE,
+            schema_version=1,
+            description="Immutable Markdown, HTML, and PDF synthesis report snapshots.",
+        ),
+        StorageDatasetSpec(
             dataset=StorageDataset.STORAGE_MIGRATIONS,
             label="Storage migrations",
             area=StorageArea.DATA,

@@ -96,6 +96,14 @@ from financial_research_agent.report_analysis import (
     FinancialReportAnalysisAgent,
     FinancialReportAnalysisCompany,
 )
+from financial_research_agent.report_exports import (
+    ReportExportError,
+    ReportExportErrorCode,
+    ReportExportFormat,
+    ReportExportService,
+    ReportExportSnapshot,
+    ReportExportStore,
+)
 from financial_research_agent.reports import (
     CitedResearchRun,
     CitedResearchRunStatus,
@@ -314,6 +322,7 @@ def create_app(
     retrieval_index: LocalVectorIndex | None = None,
     report_run_store: CitedResearchRunStore | None = None,
     orchestrator_run_store: OrchestratorRunStore | None = None,
+    report_export_store: ReportExportStore | None = None,
     background_runner: BackgroundResearchRunner | None = None,
     runtime_settings_store: RuntimeSettingsStore | None = None,
     embedding_cache: LocalEmbeddingCache | None = None,
@@ -336,6 +345,11 @@ def create_app(
     retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
     report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
     orchestrator_runs = orchestrator_run_store or OrchestratorRunStore.from_settings(app_settings)
+    report_exports = report_export_store or ReportExportStore.from_settings(app_settings)
+    report_export_service = ReportExportService(
+        store=report_exports,
+        redaction_policy=RedactionPolicy.from_settings(app_settings),
+    )
     runtime_settings = runtime_settings_store or RuntimeSettingsStore.from_settings(app_settings)
     embeddings_cache = embedding_cache or LocalEmbeddingCache.from_settings(app_settings)
     background_research = background_runner or BackgroundResearchRunner(
@@ -384,6 +398,8 @@ def create_app(
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
     app.state.orchestrator_run_store = orchestrator_runs
+    app.state.report_export_store = report_exports
+    app.state.report_export_service = report_export_service
     app.state.background_research = background_research
     app.state.financial_report_agent = financial_report_agent
     app.state.stock_price_agent = stock_price_agent
@@ -972,6 +988,76 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
         return {"run": run.to_dict(), "synthesis_report": _synthesis_report_from_run(run)}
+
+    @app.post("/api/orchestrator/runs/{run_id}/exports", status_code=201)
+    def create_report_export(run_id: str) -> dict[str, Any]:
+        run = _orchestrator_run_or_404(orchestrator_runs, run_id)
+        try:
+            snapshot = report_export_service.export(run)
+        except ReportExportError as exc:
+            if exc.code == ReportExportErrorCode.SYNTHESIS_REPORT_UNAVAILABLE:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": exc.code.value, "message": exc.message},
+                ) from exc
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": ReportExportErrorCode.REPORT_EXPORT_FAILED.value,
+                    "message": "The local report export could not be generated.",
+                },
+            ) from exc
+        return _report_export_payload(snapshot)
+
+    @app.get("/api/report-exports")
+    def list_report_exports() -> dict[str, Any]:
+        try:
+            return {
+                "exports": [_report_export_payload(snapshot) for snapshot in report_exports.list()]
+            }
+        except ReportExportError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": ReportExportErrorCode.REPORT_EXPORT_FAILED.value,
+                    "message": "Stored report exports could not be read.",
+                },
+            ) from exc
+
+    @app.get("/api/report-exports/{export_id}")
+    def get_report_export(export_id: str) -> dict[str, Any]:
+        snapshot = _report_export_or_404(report_exports, export_id)
+        return _report_export_payload(snapshot)
+
+    @app.get("/api/report-exports/{export_id}/files/{export_format}")
+    def download_report_export(export_id: str, export_format: str) -> FileResponse:
+        snapshot = _report_export_or_404(report_exports, export_id)
+        try:
+            selected_format = ReportExportFormat(export_format)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": ReportExportErrorCode.REPORT_EXPORT_ARTIFACT_NOT_FOUND.value},
+            ) from exc
+        artifact = snapshot.artifact(selected_format)
+        path = report_exports.artifact_path(snapshot, selected_format)
+        if artifact is None or path is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": ReportExportErrorCode.REPORT_EXPORT_ARTIFACT_NOT_FOUND.value},
+            )
+        headers = {"X-Content-Type-Options": "nosniff"}
+        if selected_format == ReportExportFormat.HTML:
+            headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            )
+        return FileResponse(
+            path,
+            media_type=artifact.mime_type,
+            filename=artifact.filename,
+            headers=headers,
+        )
 
     @app.get("/api/orchestrator/runs/{run_id}/trace")
     def get_orchestrator_run_trace(run_id: str) -> dict[str, Any]:
@@ -1614,6 +1700,46 @@ def _orchestrator_run_or_404(
     if run is None:
         raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
     return run
+
+
+def _report_export_or_404(
+    report_exports: ReportExportStore,
+    export_id: str,
+) -> ReportExportSnapshot:
+    try:
+        snapshot = report_exports.get(export_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ReportExportErrorCode.REPORT_EXPORT_NOT_FOUND.value},
+        ) from exc
+    except ReportExportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": ReportExportErrorCode.REPORT_EXPORT_FAILED.value,
+                "message": "Stored report export could not be read.",
+            },
+        ) from exc
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ReportExportErrorCode.REPORT_EXPORT_NOT_FOUND.value},
+        )
+    return snapshot
+
+
+def _report_export_payload(snapshot: ReportExportSnapshot) -> dict[str, object]:
+    export_id = snapshot.export_id
+    return {
+        "export": snapshot.to_dict(),
+        "files": {
+            artifact.format.value: (
+                f"/api/report-exports/{export_id}/files/{artifact.format.value}"
+            )
+            for artifact in snapshot.artifacts
+        },
+    }
 
 
 def _background_job_payload(

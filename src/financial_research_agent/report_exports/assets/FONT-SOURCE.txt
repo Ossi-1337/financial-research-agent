@@ -1,0 +1,4 @@
+Noto Sans Regular and Bold
+Version: 2.015
+Source: https://github.com/notofonts/latin-greek-cyrillic/releases/tag/NotoSans-v2.015
+License: SIL Open Font License 1.1 (see OFL.txt)

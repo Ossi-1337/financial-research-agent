@@ -139,6 +139,7 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "renderMessageCitations" in response.text
     assert "renderContextPanel" in response.text
     assert "renderSynthesisReport" in response.text
+    assert "createReportExport" in response.text
     assert "renderTraceTimeline" in response.text
     assert "loadRunTrace" in response.text
     assert "/synthesis-report" in response.text

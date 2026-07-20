@@ -11,6 +11,7 @@ requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi>=0.118.3,<1",
     "httpx>=0.28,<0.29",
+    "reportlab>=4.5,<5",
     "uvicorn>=0.38,<1",
 ]
 
@@ -27,6 +28,7 @@ financial-research-agent = "financial_research_agent.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"financial_research_agent.report_exports" = ["assets/*"]
 "financial_research_agent.web" = ["static/*"]
 
 [tool.pytest.ini_options]

@@ -480,6 +480,35 @@ h1 {
   font-size: 0.84rem;
 }
 
+.report-export {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-export-button {
+  min-width: 76px;
+  min-height: 34px;
+  font-size: 0.8rem;
+}
+
+.report-export-link {
+  color: var(--accent-strong);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.report-export-link:hover {
+  text-decoration: underline;
+}
+
+.report-export-error {
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
 .synthesis-section {
   display: grid;
   gap: 7px;

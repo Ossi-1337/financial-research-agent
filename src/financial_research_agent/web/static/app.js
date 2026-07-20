@@ -10,6 +10,7 @@ const state = {
   abortController: null,
   activeBackgroundJobId: null,
   tracesByRunId: {},
+  exportsByRunId: {},
   settings: null,
 };
 
@@ -209,6 +210,7 @@ function renderSynthesisReport(container, message) {
 
   header.append(title, badges);
   wrapper.append(header);
+  wrapper.append(renderReportExportControl(message.research_run_id));
 
   const notice = document.createElement("p");
   notice.className = "synthesis-notice";
@@ -238,6 +240,54 @@ function renderSynthesisReport(container, message) {
   wrapper.append(scenarioSection);
 
   container.append(wrapper);
+}
+
+function renderReportExportControl(runId) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "report-export";
+  if (!runId) {
+    return wrapper;
+  }
+  const exportState = state.exportsByRunId[runId];
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "report-export-button secondary-button";
+  button.textContent = exportState?.loading ? "Exporting..." : "Export";
+  button.disabled = Boolean(exportState?.loading);
+  button.addEventListener("click", () => createReportExport(runId));
+  wrapper.append(button);
+
+  if (exportState?.error) {
+    const error = document.createElement("span");
+    error.className = "report-export-error";
+    error.textContent = exportState.error;
+    wrapper.append(error);
+  }
+  if (exportState?.payload) {
+    const artifacts = new Map(
+      (exportState.payload.export?.artifacts || []).map((artifact) => [
+        artifact.format,
+        artifact,
+      ])
+    );
+    for (const [format, label] of [
+      ["markdown", "Markdown"],
+      ["html", "HTML"],
+      ["pdf", "PDF"],
+    ]) {
+      const url = exportState.payload.files?.[format];
+      if (!url) {
+        continue;
+      }
+      const link = document.createElement("a");
+      link.className = "report-export-link";
+      link.href = url;
+      link.download = artifacts.get(format)?.filename || "";
+      link.textContent = label;
+      wrapper.append(link);
+    }
+  }
+  return wrapper;
 }
 
 function renderTraceControl(container, message) {
@@ -1082,6 +1132,22 @@ async function loadRunTrace(runId) {
   } catch (error) {
     state.tracesByRunId[runId] = {
       error: error instanceof Error ? error.message : "Could not load trace.",
+    };
+  }
+  renderMessages();
+}
+
+async function createReportExport(runId) {
+  state.exportsByRunId[runId] = { loading: true };
+  renderMessages();
+  try {
+    const payload = await requestJson(`/api/orchestrator/runs/${runId}/exports`, {
+      method: "POST",
+    });
+    state.exportsByRunId[runId] = { payload };
+  } catch (error) {
+    state.exportsByRunId[runId] = {
+      error: error instanceof Error ? error.message : "Could not export report.",
     };
   }
   renderMessages();

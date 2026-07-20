@@ -30,6 +30,7 @@ class StorageDataset(StrEnum):
     RETRIEVAL_VECTOR_INDEX = "retrieval_vector_index"
     REPORT_RUNS = "report_runs"
     ORCHESTRATOR_RUNS = "orchestrator_runs"
+    REPORT_EXPORTS = "report_exports"
     STORAGE_MIGRATIONS = "storage_migrations"
 
 

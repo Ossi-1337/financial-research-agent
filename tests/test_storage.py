@@ -34,6 +34,7 @@ def test_storage_specs_cover_current_local_stores_and_have_no_secrets(tmp_path: 
         StorageDataset.RETRIEVAL_VECTOR_INDEX,
         StorageDataset.REPORT_RUNS,
         StorageDataset.ORCHESTRATOR_RUNS,
+        StorageDataset.REPORT_EXPORTS,
         StorageDataset.STORAGE_MIGRATIONS,
     }
     assert all(not spec.contains_secrets for spec in specs)
@@ -145,7 +146,8 @@ def test_reset_local_data_removes_data_and_cache_but_preserves_logs(tmp_path: Pa
     raw_path = settings.local_paths.data_dir / "filings" / "raw" / "file.htm"
     cache_path = settings.local_paths.cache_dir / "sec_company_tickers.json"
     log_path = settings.local_paths.logs_dir / "app.log"
-    for path in (chat_path, raw_path, cache_path, log_path):
+    export_path = settings.local_paths.data_dir / "exports" / "export_fixture" / "report.pdf"
+    for path in (chat_path, raw_path, cache_path, log_path, export_path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("content", encoding="utf-8")
 
@@ -155,6 +157,7 @@ def test_reset_local_data_removes_data_and_cache_but_preserves_logs(tmp_path: Pa
     assert not chat_path.exists()
     assert not raw_path.exists()
     assert not cache_path.exists()
+    assert not export_path.exists()
     assert log_path.exists()
 
 
