@@ -255,6 +255,16 @@ def default_storage_dataset_specs(settings: Settings) -> tuple[StorageDatasetSpe
     data_sources = settings.data_sources
     return (
         StorageDatasetSpec(
+            dataset=StorageDataset.SQLITE_DATABASE,
+            label="SQLite database",
+            area=StorageArea.DATA,
+            relative_path="financial_research_agent.sqlite3",
+            storage_format=StorageFormat.SQLITE,
+            schema_version=1,
+            description="Default structured application state database.",
+            reset_on_data_reset=False,
+        ),
+        StorageDatasetSpec(
             dataset=StorageDataset.CHAT_SESSIONS,
             label="Chat sessions",
             area=StorageArea.DATA,

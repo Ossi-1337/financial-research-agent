@@ -7,10 +7,18 @@ from collections.abc import Sequence
 import uvicorn
 
 from financial_research_agent.health import build_health_report
+from financial_research_agent.persistence import (
+    LegacyJsonImporter,
+    PersistenceError,
+    PersistenceErrorCode,
+    SQLiteDatabase,
+    SQLiteOperations,
+    create_storage_manager,
+    existing_legacy_paths,
+)
 from financial_research_agent.retrieval import LocalVectorIndex
 from financial_research_agent.security import validate_bind_host
 from financial_research_agent.settings import Settings
-from financial_research_agent.storage import LocalStorageManager
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
             "serve",
             "storage-status",
             "storage-migrate",
+            "storage-check",
+            "storage-backup",
+            "storage-restore",
+            "storage-cleanup",
             "cache-clear",
             "data-reset",
             "retrieval-status",
@@ -52,6 +64,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Confirm destructive local data reset.",
     )
+    parser.add_argument("--full", action="store_true", help="Run full SQLite integrity check.")
+    parser.add_argument("--backup", help="Backup ID used by storage-restore.")
+    parser.add_argument("--dataset", help="Dataset used by storage-cleanup.")
+    parser.add_argument(
+        "--older-than-days", type=int, help="Retention cutoff used by storage-cleanup."
+    )
+    parser.add_argument(
+        "--include-source-documents",
+        action="store_true",
+        help="Allow filing source document cleanup.",
+    )
     return parser
 
 
@@ -68,19 +91,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in {
         "storage-status",
         "storage-migrate",
+        "storage-check",
+        "storage-backup",
+        "storage-restore",
+        "storage-cleanup",
         "cache-clear",
         "data-reset",
         "retrieval-status",
         "retrieval-clear",
     }:
         settings = Settings.from_env()
-        storage = LocalStorageManager.from_settings(settings)
+        storage = create_storage_manager(settings)
         if args.command == "storage-status":
             _print_json(storage.inspect().to_dict(), pretty=args.pretty)
             return 0
         if args.command == "storage-migrate":
-            _print_json(storage.migrate().to_dict(), pretty=args.pretty)
-            return 0
+            return _run_storage_command(
+                lambda: LegacyJsonImporter(settings).migrate().to_dict(), pretty=args.pretty
+            )
+        if args.command == "storage-check":
+
+            def check_storage():
+                database = _sqlite_database_for_operation(settings)
+                return database.integrity(full=args.full).to_dict()
+
+            return _run_storage_command(check_storage, pretty=args.pretty)
+        if args.command == "storage-backup":
+            return _run_storage_command(
+                lambda: _sqlite_operations(settings).backup().to_dict(), pretty=args.pretty
+            )
+        if args.command == "storage-restore":
+            if not args.backup:
+                parser.error("storage-restore requires --backup")
+            if not args.yes:
+                parser.error("storage-restore requires --yes")
+            return _run_storage_command(
+                lambda: _sqlite_operations(settings).restore(args.backup), pretty=args.pretty
+            )
+        if args.command == "storage-cleanup":
+            if not args.dataset or args.older_than_days is None:
+                parser.error("storage-cleanup requires --dataset and --older-than-days")
+            return _run_storage_command(
+                lambda: (
+                    _sqlite_operations(settings)
+                    .cleanup(
+                        dataset=args.dataset,
+                        older_than_days=args.older_than_days,
+                        confirmed=args.yes,
+                        include_source_documents=args.include_source_documents,
+                    )
+                    .to_dict()
+                ),
+                pretty=args.pretty,
+            )
         if args.command == "cache-clear":
             _print_json(storage.clear_cache().to_dict(), pretty=args.pretty)
             return 0
@@ -117,7 +180,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except ValueError as exc:
             parser.error(str(exc))
-        uvicorn.run(create_app(settings=settings), host=host, port=args.port)
+        try:
+            app = create_app(settings=settings)
+        except PersistenceError as exc:
+            _print_json(exc.to_dict(), pretty=args.pretty)
+            return 1
+        uvicorn.run(app, host=host, port=args.port)
         return 0
 
     if args.command == "eval":
@@ -146,3 +214,43 @@ def _port_value(value: str) -> int:
     if port < 1 or port > 65535:
         raise argparse.ArgumentTypeError("port must be between 1 and 65535")
     return port
+
+
+def _sqlite_database_for_operation(settings: Settings) -> SQLiteDatabase:
+    if settings.storage.provider != "sqlite":
+        raise PersistenceError(
+            PersistenceErrorCode.INCOMPATIBLE_SCHEMA,
+            "This command requires FRA_STORAGE_PROVIDER=sqlite.",
+        )
+    database = SQLiteDatabase.from_data_dir(settings.local_paths.data_dir)
+    if not database.path.exists() and existing_legacy_paths(settings.local_paths.data_dir):
+        raise PersistenceError(
+            PersistenceErrorCode.STORAGE_MIGRATION_REQUIRED,
+            "Legacy JSON storage exists. Run storage-migrate first.",
+        )
+    database.initialize()
+    return database
+
+
+def _sqlite_operations(settings: Settings) -> SQLiteOperations:
+    return SQLiteOperations(
+        _sqlite_database_for_operation(settings), app_home=settings.local_paths.app_home
+    )
+
+
+def _run_storage_command(operation, *, pretty: bool) -> int:
+    try:
+        payload = operation()
+    except (PersistenceError, ValueError) as exc:
+        error = (
+            exc.to_dict()
+            if isinstance(exc, PersistenceError)
+            else {
+                "error": "invalid_storage_operation",
+                "message": str(exc),
+            }
+        )
+        _print_json(error, pretty=pretty)
+        return 1
+    _print_json(payload, pretty=pretty)
+    return 0

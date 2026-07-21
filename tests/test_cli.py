@@ -39,6 +39,7 @@ def test_serve_command_starts_uvicorn(monkeypatch) -> None:
         calls["port"] = port
 
     monkeypatch.setattr("financial_research_agent.cli.uvicorn.run", fake_run)
+    monkeypatch.setenv("FRA_STORAGE_PROVIDER", "local-json")
 
     exit_code = main(["serve", "--host", "127.0.0.2", "--port", "8123"])
 
@@ -64,6 +65,7 @@ def test_serve_allows_remote_bind_with_explicit_opt_in(monkeypatch) -> None:
         calls["port"] = port
 
     monkeypatch.setenv("FRA_ALLOW_REMOTE_BIND", "true")
+    monkeypatch.setenv("FRA_STORAGE_PROVIDER", "local-json")
     monkeypatch.setattr("financial_research_agent.cli.uvicorn.run", fake_run)
 
     assert main(["serve", "--host", "0.0.0.0"]) == 0
@@ -77,9 +79,9 @@ def test_storage_status_command_outputs_manifest(monkeypatch, tmp_path: Path, ca
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert payload["provider"] == "local-json"
-    assert payload["app_home"] == str(tmp_path)
-    assert any(entry["spec"]["id"] == "chat_sessions" for entry in payload["datasets"])
+    assert payload["provider"] == "sqlite"
+    assert payload["schema_version"] == 0
+    assert payload["filesystem"]["app_home"] == str(tmp_path)
 
 
 def test_storage_migrate_command_creates_local_layout(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -89,9 +91,49 @@ def test_storage_migrate_command_creates_local_layout(monkeypatch, tmp_path: Pat
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
-    assert payload["applied_migrations"][0]["id"] == "0001_local_json_storage_layout"
+    assert payload["database_path"] == str(tmp_path / "data" / "financial_research_agent.sqlite3")
     assert tmp_path.joinpath("data").exists()
     assert tmp_path.joinpath("cache").exists()
+
+
+def test_sqlite_storage_check_backup_and_cleanup_commands(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+    assert main(["storage-migrate"]) == 0
+    capsys.readouterr()
+
+    assert main(["storage-check", "--full", "--pretty"]) == 0
+    check = json.loads(capsys.readouterr().out)
+    assert check["healthy"] is True
+    assert check["schema_version"] == 1
+
+    assert main(["storage-backup", "--pretty"]) == 0
+    backup = json.loads(capsys.readouterr().out)
+    assert backup["id"].startswith("backup_")
+
+    assert (
+        main(
+            [
+                "storage-cleanup",
+                "--dataset",
+                "chat-sessions",
+                "--older-than-days",
+                "30",
+                "--pretty",
+            ]
+        )
+        == 0
+    )
+    cleanup = json.loads(capsys.readouterr().out)
+    assert cleanup["dry_run"] is True
+
+
+def test_storage_restore_requires_confirmation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+
+    with pytest.raises(SystemExit):
+        main(["storage-restore", "--backup", "backup_20260701T000000Z_deadbeef"])
 
 
 def test_cache_clear_command_removes_cache(monkeypatch, tmp_path: Path, capsys) -> None:

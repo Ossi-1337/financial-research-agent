@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
+from typing import Any, Protocol, Self
 from uuid import uuid4
 
 from financial_research_agent.orchestration import (
@@ -71,8 +72,33 @@ class BackgroundResearchJob:
             "metadata": dict(self.metadata),
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Self:
+        return cls(
+            id=str(payload["id"]),
+            query=str(payload["query"]),
+            status=BackgroundResearchStatus(str(payload["status"])),
+            created_at=_datetime_from_payload(payload["created_at"]),
+            updated_at=_datetime_from_payload(payload["updated_at"]),
+            orchestrator_run_id=str(payload["orchestrator_run_id"]),
+            started_at=_optional_datetime_from_payload(payload.get("started_at")),
+            completed_at=_optional_datetime_from_payload(payload.get("completed_at")),
+            error_code=_optional_payload_text(payload.get("error_code")),
+            error_message=_optional_payload_text(payload.get("error_message")),
+            warnings=tuple(str(item) for item in payload.get("warnings", ())),
+            metadata={str(key): str(value) for key, value in payload.get("metadata", {}).items()},
+        )
+
 
 ResearchCallable = Callable[[OrchestratorResearchInput], Awaitable[OrchestratedResearchRun]]
+
+
+class BackgroundJobStore(Protocol):
+    def save(self, job: BackgroundResearchJob) -> BackgroundResearchJob: ...
+
+    def list(self) -> tuple[BackgroundResearchJob, ...]: ...
+
+    def fail_unfinished(self, *, now: datetime) -> int: ...
 
 
 class BackgroundResearchRunner:
@@ -81,12 +107,17 @@ class BackgroundResearchRunner:
         *,
         max_concurrent_runs: int = 1,
         now: Callable[[], datetime] | None = None,
+        job_store: BackgroundJobStore | None = None,
     ) -> None:
         if max_concurrent_runs <= 0:
             raise ValueError("max_concurrent_runs must be positive")
         self.max_concurrent_runs = max_concurrent_runs
         self._now = now or (lambda: datetime.now(UTC))
-        self._jobs: dict[str, BackgroundResearchJob] = {}
+        self._job_store = job_store
+        if self._job_store is not None:
+            self._job_store.fail_unfinished(now=_aware_now(self._now()))
+        stored_jobs = self._job_store.list() if self._job_store is not None else ()
+        self._jobs: dict[str, BackgroundResearchJob] = {job.id: job for job in stored_jobs}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._semaphore: asyncio.Semaphore | None = None
         self._lock = asyncio.Lock()
@@ -112,6 +143,7 @@ class BackgroundResearchRunner:
         request_with_run_id = replace(request, run_id=orchestrator_run_id)
         async with self._lock:
             self._jobs[job.id] = job
+            self._persist(job)
             self._tasks[job.id] = asyncio.create_task(
                 self._execute(job.id, request_with_run_id, run),
                 name=job.id,
@@ -220,7 +252,12 @@ class BackgroundResearchRunner:
     def _replace_job(self, job: BackgroundResearchJob, **changes: object) -> BackgroundResearchJob:
         updated = replace(job, updated_at=_aware_now(self._now()), **changes)
         self._jobs[job.id] = updated
+        self._persist(updated)
         return updated
+
+    def _persist(self, job: BackgroundResearchJob) -> None:
+        if self._job_store is not None:
+            self._job_store.save(job)
 
 
 _TERMINAL_STATUSES = {
@@ -268,3 +305,16 @@ def _aware_datetime(name: str, value: datetime) -> datetime:
 
 def _aware_now(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _datetime_from_payload(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _optional_datetime_from_payload(value: object) -> datetime | None:
+    return None if value is None else _datetime_from_payload(value)
+
+
+def _optional_payload_text(value: object) -> str | None:
+    return None if value is None else str(value)

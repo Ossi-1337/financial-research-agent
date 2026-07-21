@@ -28,7 +28,7 @@ DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS = 30
 DEFAULT_FILING_PROVIDER = "sec-edgar"
 DEFAULT_FILING_CACHE_TTL_DAYS = 30
 DEFAULT_FILING_MAX_DOCUMENT_BYTES = 8_000_000
-DEFAULT_STORAGE_PROVIDER = "local-json"
+DEFAULT_STORAGE_PROVIDER = "sqlite"
 DEFAULT_RETRIEVAL_PROVIDER = "local-vector"
 DEFAULT_RETRIEVAL_TOP_K = 5
 DEFAULT_RETRIEVAL_MIN_SCORE = 0.0
@@ -259,6 +259,8 @@ class StorageSettings:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider", _require_text(self.provider))
+        if self.provider not in {"sqlite", "local-json"}:
+            raise ValueError("storage provider must be sqlite or local-json")
 
     def to_dict(self) -> dict[str, object]:
         return {"provider": self.provider}

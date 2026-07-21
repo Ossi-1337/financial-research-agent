@@ -23,6 +23,7 @@ def test_storage_specs_cover_current_local_stores_and_have_no_secrets(tmp_path: 
     specs = default_storage_dataset_specs(settings)
 
     assert {spec.dataset for spec in specs} == {
+        StorageDataset.SQLITE_DATABASE,
         StorageDataset.CHAT_SESSIONS,
         StorageDataset.COMPANY_LOOKUP_CACHE,
         StorageDataset.MARKET_DATA_PRICE_BARS,
@@ -38,6 +39,7 @@ def test_storage_specs_cover_current_local_stores_and_have_no_secrets(tmp_path: 
         StorageDataset.STORAGE_MIGRATIONS,
     }
     assert all(not spec.contains_secrets for spec in specs)
+    assert _spec(specs, StorageDataset.SQLITE_DATABASE).reset_on_data_reset is False
     assert _spec(specs, StorageDataset.COMPANY_LOOKUP_CACHE).reset_on_data_reset is True
     assert _spec(specs, StorageDataset.EMBEDDING_CACHE).clear_on_cache_clear is True
     with pytest.raises(FrozenInstanceError):

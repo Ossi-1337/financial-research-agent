@@ -73,6 +73,16 @@ class FilingStore:
         with self._lock:
             return len(self._results)
 
+    def list(self) -> tuple[FilingIngestionResult, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._results.values(),
+                    key=lambda result: result.source.retrieved_at,
+                    reverse=True,
+                )
+            )
+
     def clear(self) -> int:
         with self._lock:
             deleted = len(self._results)
@@ -112,7 +122,7 @@ class FilingStore:
                 raise ValueError("filing results must be a list")
             self._results = {
                 _result_key(result.source.provider, result.company.cik): result
-                for result in (_result_from_payload(item) for item in results_payload)
+                for result in (filing_ingestion_result_from_dict(item) for item in results_payload)
             }
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             message = f"Could not load filing store: {self.storage_path}"
@@ -131,7 +141,7 @@ class FilingStore:
         temp_path.replace(self.storage_path)
 
 
-def _result_from_payload(payload: Any) -> FilingIngestionResult:
+def filing_ingestion_result_from_dict(payload: Any) -> FilingIngestionResult:
     if not isinstance(payload, dict):
         raise ValueError("filing result must be an object")
     company = _company_from_payload(payload["company"])

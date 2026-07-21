@@ -15,10 +15,12 @@ class StorageArea(StrEnum):
 
 class StorageFormat(StrEnum):
     JSON = "json"
+    SQLITE = "sqlite"
     FILE_TREE = "file_tree"
 
 
 class StorageDataset(StrEnum):
+    SQLITE_DATABASE = "sqlite_database"
     CHAT_SESSIONS = "chat_sessions"
     COMPANY_LOOKUP_CACHE = "company_lookup_cache"
     MARKET_DATA_PRICE_BARS = "market_data_price_bars"

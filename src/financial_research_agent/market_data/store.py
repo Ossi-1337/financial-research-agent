@@ -74,6 +74,16 @@ class MarketDataStore:
         with self._lock:
             return len(self._series)
 
+    def list(self) -> tuple[HistoricalPriceResult, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._series.values(),
+                    key=lambda result: result.source.retrieved_at,
+                    reverse=True,
+                )
+            )
+
     def clear(self) -> int:
         with self._lock:
             deleted = len(self._series)
@@ -103,7 +113,7 @@ class MarketDataStore:
                 raise ValueError("market data series must be a list")
             self._series = {
                 _series_key(result.source.provider, result.security.symbol): result
-                for result in (_history_from_payload(item) for item in series_payload)
+                for result in (historical_price_result_from_dict(item) for item in series_payload)
             }
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"Could not load market data store: {self.storage_path}") from exc
@@ -121,7 +131,7 @@ class MarketDataStore:
         temp_path.replace(self.storage_path)
 
 
-def _history_from_payload(payload: Any) -> HistoricalPriceResult:
+def historical_price_result_from_dict(payload: Any) -> HistoricalPriceResult:
     if not isinstance(payload, dict):
         raise ValueError("market data history must be an object")
     security = _security_from_payload(payload["security"])

@@ -67,7 +67,10 @@ class OrchestratorRunStore:
             runs_payload = payload.get("runs", ())
             if not isinstance(runs_payload, list):
                 raise ValueError("orchestrator runs must be a list")
-            self._runs = {run.id: run for run in (_run_from_payload(item) for item in runs_payload)}
+            self._runs = {
+                run.id: run
+                for run in (orchestrated_research_run_from_dict(item) for item in runs_payload)
+            }
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             message = f"Could not load orchestrator run store: {self.storage_path}"
             raise ValueError(message) from exc
@@ -85,7 +88,7 @@ class OrchestratorRunStore:
         temp_path.replace(self.storage_path)
 
 
-def _run_from_payload(payload: Any) -> OrchestratedResearchRun:
+def orchestrated_research_run_from_dict(payload: Any) -> OrchestratedResearchRun:
     if not isinstance(payload, dict):
         raise ValueError("orchestrator run must be an object")
     return OrchestratedResearchRun(

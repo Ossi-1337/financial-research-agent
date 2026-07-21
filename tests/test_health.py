@@ -17,7 +17,7 @@ def test_health_report_has_no_external_requirements() -> None:
     assert report["data_sources"]["alpha_vantage_api_key_configured"] is False
     assert report["data_sources"]["financial_statement_provider"] == "sec-companyfacts"
     assert report["data_sources"]["filing_provider"] == "sec-edgar"
-    assert report["storage"]["provider"] == "local-json"
+    assert report["storage"]["provider"] == "sqlite"
     assert report["storage"]["dataset_count"] >= 1
     assert report["retrieval"]["provider"] == "local-vector"
     assert report["retrieval"]["embedding_provider"] == "disabled"

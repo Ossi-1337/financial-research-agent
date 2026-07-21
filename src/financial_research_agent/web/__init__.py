@@ -1,6 +1,5 @@
 """Local web UI for Financial Research Agent."""
 
-from financial_research_agent.web.app import create_app
 from financial_research_agent.web.sessions import (
     ChatMention,
     ChatSession,
@@ -8,6 +7,13 @@ from financial_research_agent.web.sessions import (
     ChatSessionStore,
     summarize_messages,
 )
+
+
+def create_app(**kwargs):
+    from financial_research_agent.web.app import create_app as app_factory
+
+    return app_factory(**kwargs)
+
 
 __all__ = [
     "ChatMention",

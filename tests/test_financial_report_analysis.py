@@ -144,7 +144,7 @@ def test_financial_report_analysis_endpoint_uses_stored_statements_and_filings()
     filing_store.save_result(_filing_result())
     client = TestClient(
         create_app(
-            settings=Settings.from_env({}),
+            settings=Settings.from_env({"FRA_STORAGE_PROVIDER": "local-json"}),
             registry=create_offline_provider_registry(),
             session_store=ChatSessionStore(),
             financial_statement_store=statement_store,

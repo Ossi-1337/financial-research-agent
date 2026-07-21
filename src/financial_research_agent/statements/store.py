@@ -75,6 +75,16 @@ class FinancialStatementStore:
         with self._lock:
             return len(self._results)
 
+    def list(self) -> tuple[FinancialStatementResult, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._results.values(),
+                    key=lambda result: result.source.retrieved_at,
+                    reverse=True,
+                )
+            )
+
     def clear(self) -> int:
         with self._lock:
             deleted = len(self._results)
@@ -107,7 +117,9 @@ class FinancialStatementStore:
                 raise ValueError("financial statement results must be a list")
             self._results = {
                 _result_key(result.source.provider, result.company.cik): result
-                for result in (_result_from_payload(item) for item in results_payload)
+                for result in (
+                    financial_statement_result_from_dict(item) for item in results_payload
+                )
             }
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             message = f"Could not load financial statement store: {self.storage_path}"
@@ -126,7 +138,7 @@ class FinancialStatementStore:
         temp_path.replace(self.storage_path)
 
 
-def _result_from_payload(payload: Any) -> FinancialStatementResult:
+def financial_statement_result_from_dict(payload: Any) -> FinancialStatementResult:
     if not isinstance(payload, dict):
         raise ValueError("financial statement result must be an object")
     company = _company_from_payload(payload["company"])

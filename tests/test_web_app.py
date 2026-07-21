@@ -275,7 +275,7 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     ]
     assert payload["interoperability"]["enabled"] is False
     assert payload["interoperability"]["api_key_configured"] is False
-    assert payload["storage"]["provider"] == "local-json"
+    assert payload["storage"]["provider"] == "sqlite"
     assert "secret-value" not in json.dumps(payload)
 
 
@@ -392,25 +392,36 @@ def test_storage_status_endpoint_reports_local_datasets(tmp_path) -> None:
     payload = response.json()["storage"]
 
     assert response.status_code == 200
-    assert payload["provider"] == "local-json"
-    assert payload["app_home"] == str(tmp_path)
+    assert payload["provider"] == "sqlite"
+    assert payload["filesystem"]["app_home"] == str(tmp_path)
     cache_entries = [
-        entry for entry in payload["datasets"] if entry["spec"]["id"] == "company_lookup_cache"
+        entry
+        for entry in payload["filesystem"]["datasets"]
+        if entry["spec"]["id"] == "company_lookup_cache"
     ]
     assert cache_entries[0]["exists"] is True
     assert cache_entries[0]["record_count"] == 0
 
 
-def test_storage_migrate_endpoint_creates_local_layout(tmp_path) -> None:
+def test_storage_migrate_is_cli_only(tmp_path) -> None:
     settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
     client = _client(settings=settings)
 
     response = client.post("/api/storage/migrate")
-    payload = response.json()["result"]
+    assert response.status_code == 404
+
+
+def test_storage_integrity_endpoint_is_read_only(tmp_path) -> None:
+    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
+    client = _client(settings=settings, use_default_store=True)
+
+    response = client.get("/api/storage/integrity?full=true")
+    payload = response.json()["integrity"]
 
     assert response.status_code == 200
-    assert payload["applied_migrations"][0]["id"] == "0001_local_json_storage_layout"
-    assert tmp_path.joinpath("data", "storage_migrations.json").exists()
+    assert payload["healthy"] is True
+    assert payload["schema_version"] == 1
+    assert payload["counts"]["chat_sessions"] == 0
 
 
 def test_storage_cache_clear_endpoint_removes_cache_without_data(tmp_path) -> None:

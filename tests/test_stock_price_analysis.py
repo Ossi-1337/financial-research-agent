@@ -147,7 +147,7 @@ def test_stock_price_analysis_endpoint_uses_stored_market_data() -> None:
     store.save_history(_history("NVO", (100, 101, 103, 102, 104, 108)))
     client = TestClient(
         create_app(
-            settings=Settings.from_env({}),
+            settings=Settings.from_env({"FRA_STORAGE_PROVIDER": "local-json"}),
             registry=create_offline_provider_registry(),
             session_store=ChatSessionStore(),
             market_data_store=store,

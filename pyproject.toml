@@ -29,6 +29,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "financial_research_agent.report_exports" = ["assets/*"]
+"financial_research_agent.persistence.migrations" = ["*.sql"]
 "financial_research_agent.web" = ["static/*"]
 
 [tool.pytest.ini_options]

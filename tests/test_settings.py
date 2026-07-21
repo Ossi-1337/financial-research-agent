@@ -26,7 +26,7 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.data_sources.filing_provider == "sec-edgar"
     assert settings.data_sources.filing_cache_ttl_days == 30
     assert settings.data_sources.filing_max_document_bytes == 8_000_000
-    assert settings.storage.provider == "local-json"
+    assert settings.storage.provider == "sqlite"
     assert settings.retrieval.provider == "local-vector"
     assert settings.retrieval.top_k == 5
     assert settings.retrieval.min_score == 0.0

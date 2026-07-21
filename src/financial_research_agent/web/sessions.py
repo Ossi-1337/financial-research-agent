@@ -239,6 +239,14 @@ class ChatSessionStore:
             self._save()
         return session
 
+    def save(self, session: ChatSession) -> ChatSession:
+        if not isinstance(session, ChatSession):
+            raise ValueError("session must be a ChatSession")
+        with self._lock:
+            self._sessions[session.id] = session
+            self._save()
+        return session
+
     def list(self, *, limit: int = DEFAULT_SESSION_LIST_LIMIT) -> tuple[ChatSession, ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")

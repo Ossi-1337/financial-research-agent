@@ -107,7 +107,10 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - Alpha Vantage daily market data ingestion when an API key is configured.
 - SEC companyfacts financial statement ingestion for SEC filers.
 - SEC EDGAR filing ingestion for primary HTML/TXT documents.
-- Local raw document, extracted text, chunk, metadata, and JSON store management.
+- SQLite persistence for structured application state, with local raw documents, exports,
+  vector indexes, and caches kept as files.
+- Guarded legacy JSON import, integrity checks, checksummed schema migrations, local backup,
+  restore, cleanup, and transactional data reset commands.
 - Local vector retrieval over stored filing chunks when embeddings are configured.
 - Provider-call performance payloads with approximate tokens, latency, and local/offline
   cost estimates.
@@ -138,7 +141,7 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
 - Automatic news or macro ingestion.
 - Production A2A agent server or broad MCP tool server.
 - PDF extraction.
-- SQLite or remote database storage.
+- Remote database storage.
 - Automatic chat RAG for every message.
 - Hosted telemetry, production audit logging, or remote observability exports.
 - Paid or hosted LLM-as-judge evaluation as part of the default local test path.
@@ -173,7 +176,7 @@ Data layer
         +--> Alpha Vantage market data
         +--> SEC companyfacts statements
         +--> SEC EDGAR filings
-        +--> local JSON/file stores under FRA_HOME
+        +--> local SQLite + filesystem artifacts under FRA_HOME
 ```
 
 The orchestration policy is intentionally bounded and local-safe. Steps run through declared
@@ -250,6 +253,10 @@ python -m financial_research_agent --pretty
 python -m financial_research_agent serve --host 127.0.0.1 --port 8000
 python -m financial_research_agent storage-status --pretty
 python -m financial_research_agent storage-migrate --pretty
+python -m financial_research_agent storage-check --full --pretty
+python -m financial_research_agent storage-backup --pretty
+python -m financial_research_agent storage-restore --backup <backup_id> --yes --pretty
+python -m financial_research_agent storage-cleanup --dataset chat-sessions --older-than-days 90 --pretty
 python -m financial_research_agent cache-clear --pretty
 python -m financial_research_agent data-reset --yes --pretty
 python -m financial_research_agent retrieval-status --pretty
@@ -280,6 +287,8 @@ Core endpoints:
 | `PUT /api/settings` | Save local non-secret runtime overrides |
 | `DELETE /api/settings` | Clear local runtime overrides |
 | `GET /api/settings/provider-health` | Check active or selected provider health |
+| `GET /api/storage` | Inspect storage provider, schema, size, counts, and warnings |
+| `GET /api/storage/integrity` | Run a read-only SQLite integrity check |
 | `POST /api/sessions` | Create a chat session |
 | `GET /api/sessions/{session_id}` | Read a chat session |
 | `POST /api/sessions/{session_id}/messages/stream` | Stream a chat response |
@@ -353,12 +362,29 @@ Local runtime data is stored under `FRA_HOME`, which defaults to:
 ~/.financial-research-agent
 ```
 
-The local store includes runtime settings overrides, chat sessions, provider caches, market
-data, financial statements, filing documents, extracted text, embedding cache, retrieval indexes,
-cited-answer runs, orchestrator run state, and report export snapshots under
-`FRA_HOME/data/exports/`. Background job status is in-process; the linked orchestrator run
-state is persisted when the workflow writes run snapshots. Secrets are not written into
-ordinary JSON data stores.
+Structured state is stored by default in:
+
+```text
+FRA_HOME/data/financial_research_agent.sqlite3
+```
+
+This includes companies, securities, chat sessions, market series, statements, filing/chunk
+metadata, cited runs, orchestrator handoffs, background job history, and non-secret runtime
+settings. Filing source documents and extracted text, report exports, retrieval vector indexes,
+embedding caches, and provider caches remain filesystem artifacts. Secrets remain
+environment-only.
+
+Existing installations with legacy JSON stores do not import automatically. Back up and import
+them explicitly before starting the app with SQLite:
+
+```powershell
+python -m financial_research_agent storage-migrate --pretty
+python -m financial_research_agent storage-check --full --pretty
+```
+
+The importer validates legacy contracts, creates a hashed backup under `FRA_HOME/backups/`,
+builds a temporary database, checks counts and integrity, then activates it atomically. Set
+`FRA_STORAGE_PROVIDER=local-json` only when the compatibility path is intentionally required.
 
 The embedding cache stores provider/model/text hashes and vectors, not raw prompt or
 document text.
@@ -367,12 +393,16 @@ Use these commands to inspect or clean local state:
 
 ```powershell
 python -m financial_research_agent storage-status --pretty
+python -m financial_research_agent storage-check --full --pretty
+python -m financial_research_agent storage-backup --pretty
 python -m financial_research_agent cache-clear --pretty
 python -m financial_research_agent data-reset --yes --pretty
 ```
 
-`cache-clear` removes clearable provider caches. `data-reset --yes` removes local
-chat/research data and caches while leaving logs alone.
+`storage-cleanup` is a dry run unless `--yes` is supplied. Filing source document cleanup also
+requires `--include-source-documents`. `cache-clear` removes clearable provider caches.
+`data-reset --yes` clears resettable SQLite tables transactionally and removes resettable file
+artifacts while preserving schema history, backups, and logs.
 
 ## Data Sources
 

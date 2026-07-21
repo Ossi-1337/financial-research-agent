@@ -92,6 +92,11 @@ from financial_research_agent.performance import (
     measured_chat,
     prompt_budgets_for_limits,
 )
+from financial_research_agent.persistence import (
+    PersistenceError,
+    create_persistence,
+    create_storage_manager,
+)
 from financial_research_agent.report_analysis import (
     FinancialReportAnalysisAgent,
     FinancialReportAnalysisCompany,
@@ -329,31 +334,43 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
-    sessions = session_store or ChatSessionStore.from_settings(app_settings)
+    all_stores_injected = all(
+        store is not None
+        for store in (
+            session_store,
+            market_data_store,
+            financial_statement_store,
+            filing_store,
+            report_run_store,
+            orchestrator_run_store,
+            runtime_settings_store,
+        )
+    )
+    persistence = None if all_stores_injected else create_persistence(app_settings)
+    sessions = session_store or persistence.sessions
     company_search = company_search_provider or create_default_company_search_provider(app_settings)
     market_provider = market_data_provider or create_default_market_data_provider(app_settings)
-    market_store = market_data_store or MarketDataStore.from_settings(app_settings)
+    market_store = market_data_store or persistence.market_data
     statement_provider = (
         financial_statement_provider or create_default_financial_statement_provider(app_settings)
     )
-    statement_store = financial_statement_store or FinancialStatementStore.from_settings(
-        app_settings
-    )
+    statement_store = financial_statement_store or persistence.financial_statements
     filing_source = filing_provider or create_default_filing_provider(app_settings)
-    filings = filing_store or FilingStore.from_settings(app_settings)
-    storage = storage_manager or LocalStorageManager.from_settings(app_settings)
+    filings = filing_store or persistence.filings
+    storage = storage_manager or create_storage_manager(app_settings)
     retrieval = retrieval_index or LocalVectorIndex.from_settings(app_settings)
-    report_runs = report_run_store or CitedResearchRunStore.from_settings(app_settings)
-    orchestrator_runs = orchestrator_run_store or OrchestratorRunStore.from_settings(app_settings)
+    report_runs = report_run_store or persistence.cited_runs
+    orchestrator_runs = orchestrator_run_store or persistence.orchestrator_runs
     report_exports = report_export_store or ReportExportStore.from_settings(app_settings)
     report_export_service = ReportExportService(
         store=report_exports,
         redaction_policy=RedactionPolicy.from_settings(app_settings),
     )
-    runtime_settings = runtime_settings_store or RuntimeSettingsStore.from_settings(app_settings)
+    runtime_settings = runtime_settings_store or persistence.runtime_settings
     embeddings_cache = embedding_cache or LocalEmbeddingCache.from_settings(app_settings)
     background_research = background_runner or BackgroundResearchRunner(
         max_concurrent_runs=app_settings.background.max_concurrent_research_runs,
+        job_store=persistence.background_jobs if persistence is not None else None,
     )
     financial_report_agent = FinancialReportAnalysisAgent(
         statement_store=statement_store,
@@ -383,6 +400,7 @@ def create_app(
 
     app = FastAPI(title="Financial Research Agent", version="0.1.0")
     app.state.settings = app_settings
+    app.state.persistence = persistence
     app.state.provider_registry = provider_registry
     app.state.sessions = sessions
     app.state.company_search = company_search
@@ -639,9 +657,21 @@ def create_app(
     def storage_status() -> dict[str, Any]:
         return {"storage": storage.inspect().to_dict()}
 
-    @app.post("/api/storage/migrate")
-    def migrate_storage() -> dict[str, Any]:
-        return {"result": storage.migrate().to_dict()}
+    @app.get("/api/storage/integrity")
+    def storage_integrity(full: bool = False) -> dict[str, Any]:
+        if persistence is None or persistence.database is None:
+            return {
+                "integrity": {
+                    "provider": "local-json",
+                    "healthy": True,
+                    "warning": "SQLite integrity checks are unavailable for local-json.",
+                }
+            }
+        try:
+            report = persistence.database.integrity(full=full)
+        except PersistenceError as exc:
+            raise HTTPException(status_code=503, detail=exc.to_dict()) from exc
+        return {"integrity": report.to_dict()}
 
     @app.delete("/api/storage/cache")
     def clear_storage_cache() -> dict[str, Any]:
