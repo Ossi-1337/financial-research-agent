@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Sequence
+from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 
 from financial_research_agent.health import build_health_report
 from financial_research_agent.persistence import (
@@ -79,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
     parser = build_parser()
     args = parser.parse_args(argv)
 

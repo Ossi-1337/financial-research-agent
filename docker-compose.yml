@@ -1,62 +1,97 @@
 name: financial-research-agent
 
+x-app-image: &app-image
+  image: financial-research-agent-app:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+
 services:
-  llama-cpp:
-    image: ${FRA_LLAMA_CPP_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
-    container_name: fra-llama-cpp
-    gpus: all
+  data-init:
+    <<: *app-image
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown -R 10001:10001 /data"]
+    volumes:
+      - fra-data:/data
+    restart: "no"
+
+  app:
+    <<: *app-image
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${FRA_APP_PORT:-8000}:8000"
+    environment:
+      FRA_ENV: ${FRA_ENV:-local}
+      FRA_HOME: /data
+      FRA_STORAGE_PROVIDER: ${FRA_STORAGE_PROVIDER:-sqlite}
+      FRA_RETRIEVAL_PROVIDER: ${FRA_RETRIEVAL_PROVIDER:-local-vector}
+      FRA_LLM_PROVIDER: ${FRA_LLM_PROVIDER:-offline-test}
+      FRA_LLM_MODEL: ${FRA_LLM_MODEL:-offline-test}
+      FRA_LLM_BASE_URL: ${FRA_LLM_BASE_URL:-http://llama-cpp:8080/v1}
+      FRA_LLM_LOCAL_RUNTIME: ${FRA_LLM_LOCAL_RUNTIME:-llama.cpp}
+      FRA_LLM_TIMEOUT_SECONDS: ${FRA_LLM_TIMEOUT_SECONDS:-30}
+      FRA_EMBEDDING_PROVIDER: ${FRA_EMBEDDING_PROVIDER:-disabled}
+      FRA_EMBEDDING_MODEL: ${FRA_EMBEDDING_MODEL:-}
+      FRA_OPENAI_API_KEY: ${FRA_OPENAI_API_KEY:-}
+      FRA_ALPHA_VANTAGE_API_KEY: ${FRA_ALPHA_VANTAGE_API_KEY:-}
+      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
+      FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS: ${FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS:-1}
+      FRA_ALLOW_REMOTE_BIND: "true"
+    volumes:
+      - fra-data:/data
+  llama-cpp-cpu:
+    image: ${FRA_LLAMA_CPP_CPU_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    profiles: [cpu]
     ports:
       - "127.0.0.1:${FRA_LLAMA_PORT:-8080}:8080"
     volumes:
       - type: bind
-        source: ${FRA_HUGGINGFACE_CACHE:-${USERPROFILE}/.cache/huggingface}
+        source: ${FRA_HUGGINGFACE_CACHE:-./.docker/huggingface}
         target: /root/.cache/huggingface
     command:
       - -hf
-      - ${FRA_LOCAL_MODEL:-unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL}
+      - ${FRA_CPU_MODEL:-ggml-org/gemma-3-1b-it-GGUF:Q4_K_M}
       - --host
       - 0.0.0.0
       - --port
       - "8080"
       - --ctx-size
-      - ${FRA_LLAMA_CTX_SIZE:-32768}
+      - ${FRA_CPU_CTX_SIZE:-8192}
       - --jinja
       - -ngl
-      - ${FRA_LLAMA_GPU_LAYERS:-99}
+      - "0"
+    networks:
+      default:
+        aliases: [llama-cpp]
 
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: fra-chat-ui
-    depends_on:
-      - llama-cpp
+  llama-cpp-cuda:
+    image: ${FRA_LLAMA_CPP_CUDA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    profiles: [cuda]
+    gpus: all
     ports:
-      - "127.0.0.1:${FRA_APP_PORT:-8000}:8000"
-    environment:
-      FRA_ENV: local
-      FRA_HOME: /app/.financial-research-agent
-      FRA_LLM_PROVIDER: local-openai
-      FRA_LLM_MODEL: ${FRA_LOCAL_MODEL:-unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL}
-      FRA_LLM_BASE_URL: http://llama-cpp:8080/v1
-      FRA_LLM_LOCAL_RUNTIME: llama.cpp
-      FRA_LLM_TIMEOUT_SECONDS: ${FRA_LLM_TIMEOUT_SECONDS:-30}
-      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
-      FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS: ${FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS:-1}
-      FRA_STORAGE_PROVIDER: sqlite
-      FRA_RETRIEVAL_PROVIDER: local-vector
-      FRA_ALLOW_REMOTE_BIND: "true"
+      - "127.0.0.1:${FRA_LLAMA_PORT:-8080}:8080"
     volumes:
-      - fra-data:/app/.financial-research-agent
+      - type: bind
+        source: ${FRA_HUGGINGFACE_CACHE:-./.docker/huggingface}
+        target: /root/.cache/huggingface
     command:
-      - python
-      - -m
-      - financial_research_agent
-      - serve
+      - -hf
+      - ${FRA_CUDA_MODEL:-unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL}
       - --host
       - 0.0.0.0
       - --port
-      - "8000"
+      - "8080"
+      - --ctx-size
+      - ${FRA_CUDA_CTX_SIZE:-32768}
+      - --jinja
+      - -ngl
+      - ${FRA_LLAMA_GPU_LAYERS:-99}
+    networks:
+      default:
+        aliases: [llama-cpp]
 
 volumes:
   fra-data:

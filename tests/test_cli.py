@@ -30,6 +30,37 @@ def test_default_command_is_health(capsys) -> None:
     assert payload["status"] == "ok"
 
 
+def test_cli_loads_current_directory_dotenv_without_exposing_secrets(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    tmp_path.joinpath(".env").write_text(
+        "FRA_LLM_MODEL=dotenv-model\nFRA_OPENAI_API_KEY=dotenv-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FRA_LLM_MODEL", raising=False)
+    monkeypatch.delenv("FRA_OPENAI_API_KEY", raising=False)
+
+    assert main(["health"]) == 0
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert payload["provider"]["llm_model"] == "dotenv-model"
+    assert payload["provider"]["openai_api_key_configured"] is True
+    assert "dotenv-secret" not in output
+
+
+def test_process_environment_overrides_dotenv(monkeypatch, tmp_path: Path, capsys) -> None:
+    tmp_path.joinpath(".env").write_text("FRA_LLM_MODEL=dotenv-model\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FRA_LLM_MODEL", "process-model")
+
+    assert main(["health"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["provider"]["llm_model"] == "process-model"
+
+
 def test_serve_command_starts_uvicorn(monkeypatch) -> None:
     calls = {}
 

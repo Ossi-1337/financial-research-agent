@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -114,42 +115,43 @@ class SQLiteChatSessionStore:
         evidence_snippets=(),
         synthesis_report=None,
     ) -> ChatSession:
-        session = self.get(session_id)
-        if session is None:
-            raise KeyError(session_id)
-        now = datetime.now(UTC)
-        messages = (
-            *session.messages,
-            ChatSessionMessage(
-                id=f"message_{uuid4().hex}",
-                role=MessageRole.USER,
-                content=user_content,
-                created_at=now,
-                research_run_id=research_run_id,
-                mentions=mentions,
-            ),
-            ChatSessionMessage(
-                id=f"message_{uuid4().hex}",
-                role=MessageRole.ASSISTANT,
-                content=assistant_content,
-                created_at=datetime.now(UTC),
-                provider=provider,
-                model=model,
-                research_run_id=research_run_id,
-                citations=tuple(citations),
-                evidence_snippets=tuple(evidence_snippets),
-                synthesis_report=synthesis_report,
-            ),
-        )
-        recent_count = self.recent_turns * 2
-        older = messages[:-recent_count] if len(messages) > recent_count else ()
-        updated = replace(
-            session,
-            updated_at=datetime.now(UTC),
-            messages=messages,
-            summary=summarize_messages(older, max_chars=self.summary_max_chars),
-        )
-        self._save(updated)
+        with self.database.transaction():
+            session = self.get(session_id)
+            if session is None:
+                raise KeyError(session_id)
+            now = datetime.now(UTC)
+            messages = (
+                *session.messages,
+                ChatSessionMessage(
+                    id=f"message_{uuid4().hex}",
+                    role=MessageRole.USER,
+                    content=user_content,
+                    created_at=now,
+                    research_run_id=research_run_id,
+                    mentions=mentions,
+                ),
+                ChatSessionMessage(
+                    id=f"message_{uuid4().hex}",
+                    role=MessageRole.ASSISTANT,
+                    content=assistant_content,
+                    created_at=datetime.now(UTC),
+                    provider=provider,
+                    model=model,
+                    research_run_id=research_run_id,
+                    citations=tuple(citations),
+                    evidence_snippets=tuple(evidence_snippets),
+                    synthesis_report=synthesis_report,
+                ),
+            )
+            recent_count = self.recent_turns * 2
+            older = messages[:-recent_count] if len(messages) > recent_count else ()
+            updated = replace(
+                session,
+                updated_at=datetime.now(UTC),
+                messages=messages,
+                summary=summarize_messages(older, max_chars=self.summary_max_chars),
+            )
+            self._save(updated)
         return updated
 
     def _save(self, session: ChatSession) -> None:
@@ -543,9 +545,9 @@ class SQLiteOrchestratorRunStore:
         self.storage_path = database.path
 
     def save(self, run: OrchestratedResearchRun) -> OrchestratedResearchRun:
-        company_id = _selected_company(self.database, run.selected_company)
-        security_id = _selected_security(self.database, run.selected_security, company_id)
         with self.database.transaction() as connection:
+            company_id = _selected_company(self.database, run.selected_company)
+            security_id = _selected_security(self.database, run.selected_security, company_id)
             connection.execute(
                 """
                 INSERT INTO orchestrator_runs(id, status, created_at, updated_at, company_id,
@@ -733,12 +735,30 @@ class SQLiteBackgroundJobStore:
 
 
 def _upsert_company(database: SQLiteDatabase, payload: dict[str, object]) -> str:
-    cik = _optional(payload.get("cik"))
-    legal_name = _optional(payload.get("legal_name"))
-    company_id = _optional(payload.get("company_id")) or _stable_id(
-        "company", cik or legal_name or _json(payload)
+    identifiers = _identifier_pairs(payload)
+    cik = _optional(payload.get("cik")) or _identifier_value(identifiers, "cik")
+    legal_name = _optional(payload.get("legal_name")) or _optional(payload.get("display_name"))
+    company_id = (
+        _optional(payload.get("company_id"))
+        or _optional(payload.get("id"))
+        or _stable_id("company", cik or legal_name or _json(payload))
+    )
+    company_identifiers = tuple(
+        dict.fromkeys(
+            (
+                *(((("cik", cik),)) if cik is not None else ()),
+                *(item for item in identifiers if item[0] in {"cik", "lei"}),
+            )
+        )
     )
     with database.transaction() as connection:
+        for scheme, value in company_identifiers:
+            existing = connection.execute(
+                "SELECT company_id FROM company_identifiers WHERE scheme = ? AND value = ?",
+                (scheme, value),
+            ).fetchone()
+            if existing is not None and existing["company_id"] != company_id:
+                raise ValueError(f"{scheme.upper()} is already assigned to a different company")
         connection.execute(
             """
             INSERT INTO companies(id, legal_name, cik, payload_json) VALUES (?, ?, ?, ?)
@@ -747,17 +767,11 @@ def _upsert_company(database: SQLiteDatabase, payload: dict[str, object]) -> str
             """,
             (company_id, legal_name, cik, _json(payload)),
         )
-        if cik is not None:
-            existing = connection.execute(
-                "SELECT company_id FROM company_identifiers WHERE scheme = 'cik' AND value = ?",
-                (cik,),
-            ).fetchone()
-            if existing is not None and existing["company_id"] != company_id:
-                raise ValueError("CIK is already assigned to a different company")
+        for scheme, value in company_identifiers:
             connection.execute(
                 "INSERT OR IGNORE INTO company_identifiers(company_id, scheme, value) "
-                "VALUES (?, 'cik', ?)",
-                (company_id, cik),
+                "VALUES (?, ?, ?)",
+                (company_id, scheme, value),
             )
     return company_id
 
@@ -765,9 +779,12 @@ def _upsert_company(database: SQLiteDatabase, payload: dict[str, object]) -> str
 def _upsert_security(
     database: SQLiteDatabase, payload: dict[str, object], company_id: str | None = None
 ) -> str:
-    symbol = _text("symbol", str(payload["symbol"])).upper()
-    security_id = _optional(payload.get("security_id")) or _stable_id(
-        "security", _optional(payload.get("exchange_mic")) or "unknown", symbol
+    raw_symbol = payload.get("symbol") or payload.get("ticker")
+    symbol = _text("symbol", str(raw_symbol or "")).upper()
+    security_id = (
+        _optional(payload.get("security_id"))
+        or _optional(payload.get("id"))
+        or _stable_id("security", _optional(payload.get("exchange_mic")) or "unknown", symbol)
     )
     with database.transaction() as connection:
         connection.execute(
@@ -787,18 +804,30 @@ def _upsert_security(
                 _json(payload),
             ),
         )
-        scheme = f"ticker:{_optional(payload.get('exchange_mic')) or 'unknown'}"
-        existing = connection.execute(
-            "SELECT security_id FROM security_identifiers WHERE scheme = ? AND value = ?",
-            (scheme, symbol),
-        ).fetchone()
-        if existing is not None and existing["security_id"] != security_id:
-            raise ValueError("Ticker is already assigned to a different security")
-        connection.execute(
-            "INSERT OR IGNORE INTO security_identifiers(security_id, scheme, value) "
-            "VALUES (?, ?, ?)",
-            (security_id, scheme, symbol),
+        ticker_scheme = f"ticker:{_optional(payload.get('exchange_mic')) or 'unknown'}"
+        identifiers = _identifier_pairs(payload)
+        isin = _optional(payload.get("isin"))
+        security_identifiers = tuple(
+            dict.fromkeys(
+                (
+                    (ticker_scheme, symbol),
+                    *(((("isin", isin),)) if isin is not None else ()),
+                    *(item for item in identifiers if item[0] in {"isin", "figi"}),
+                )
+            )
         )
+        for scheme, value in security_identifiers:
+            existing = connection.execute(
+                "SELECT security_id FROM security_identifiers WHERE scheme = ? AND value = ?",
+                (scheme, value),
+            ).fetchone()
+            if existing is not None and existing["security_id"] != security_id:
+                raise ValueError(f"{scheme.upper()} is already assigned to a different security")
+            connection.execute(
+                "INSERT OR IGNORE INTO security_identifiers(security_id, scheme, value) "
+                "VALUES (?, ?, ?)",
+                (security_id, scheme, value),
+            )
     return security_id
 
 
@@ -811,11 +840,29 @@ def _selected_company(database: SQLiteDatabase, payload) -> str | None:
 
 
 def _selected_security(database: SQLiteDatabase, payload, company_id: str | None) -> str | None:
-    if payload is None or "symbol" not in payload:
+    if payload is None or not ({"symbol", "ticker"} & set(payload)):
         return None
     values = dict(payload)
     values.setdefault("security_id", values.get("id"))
     return _upsert_security(database, values, company_id)
+
+
+def _identifier_pairs(payload: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+    raw_identifiers = payload.get("identifiers") or ()
+    if isinstance(raw_identifiers, (str, bytes)):
+        raise ValueError("identifiers must be a collection")
+    identifiers = []
+    for item in raw_identifiers:
+        if not isinstance(item, Mapping):
+            raise ValueError("identifier must be an object")
+        scheme = _text("identifier type", str(item.get("type") or "")).lower()
+        value = _text("identifier value", str(item.get("value") or ""))
+        identifiers.append((scheme, value))
+    return tuple(dict.fromkeys(identifiers))
+
+
+def _identifier_value(identifiers: tuple[tuple[str, str], ...], scheme: str) -> str | None:
+    return next((value for kind, value in identifiers if kind == scheme), None)
 
 
 def _latest_provider_payload(

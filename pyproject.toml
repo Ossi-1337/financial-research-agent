@@ -7,16 +7,19 @@ name = "financial-research-agent"
 version = "0.1.0"
 description = "Local-first AI agent system for financial research."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi>=0.118.3,<1",
     "httpx>=0.28,<0.29",
+    "python-dotenv>=1.2.2,<2",
     "reportlab>=4.5,<5",
     "uvicorn>=0.38,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.5,<1.6",
     "pytest>=8.4,<9",
     "ruff>=0.15,<0.16",
 ]

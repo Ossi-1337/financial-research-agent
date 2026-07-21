@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Event
 
 import pytest
 
 from financial_research_agent.background import BackgroundResearchJob, BackgroundResearchStatus
+from financial_research_agent.entities import (
+    EntityIdentifier,
+    EntityIdentifierType,
+    ResolvedCompany,
+    ResolvedSecurity,
+)
 from financial_research_agent.filings import (
     FilingChunk,
     FilingCompany,
@@ -85,6 +92,31 @@ def test_chat_repository_round_trip_ordering_and_concurrent_access(tmp_path: Pat
     assert store.get(updated.id) is None
 
 
+def test_chat_repository_serializes_concurrent_appends(tmp_path: Path) -> None:
+    store = create_persistence(_settings(tmp_path)).sessions
+    session = store.create()
+
+    def append(index: int) -> None:
+        store.append_exchange(
+            session_id=session.id,
+            user_content=f"Question {index}",
+            assistant_content=f"Answer {index}",
+            provider="offline-test",
+            model="offline-test",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        tuple(executor.map(append, range(20)))
+
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert len(loaded.messages) == 40
+    assert {message.content for message in loaded.messages} == {
+        *(f"Question {index}" for index in range(20)),
+        *(f"Answer {index}" for index in range(20)),
+    }
+
+
 def test_foreign_keys_and_transaction_rollback_are_enforced(tmp_path: Path) -> None:
     database = create_persistence(_settings(tmp_path)).database
     assert database is not None
@@ -124,6 +156,25 @@ def test_changed_migration_checksum_and_busy_database_fail_safely(tmp_path: Path
     finally:
         lock.rollback()
         lock.close()
+
+
+@pytest.mark.parametrize(
+    ("object_type", "object_name"),
+    (("TABLE", "chat_messages"), ("INDEX", "chat_sessions_updated_at_idx")),
+)
+def test_schema_validation_rejects_missing_required_objects(
+    tmp_path: Path, object_type: str, object_name: str
+) -> None:
+    database = create_persistence(_settings(tmp_path)).database
+    assert database is not None
+    with database.transaction() as connection:
+        connection.execute(f'DROP {object_type} "{object_name}"')
+
+    with pytest.raises(PersistenceError) as error:
+        database.initialize()
+
+    assert error.value.code == PersistenceErrorCode.INCOMPATIBLE_SCHEMA
+    assert object_name in str(error.value)
 
 
 def test_market_repository_preserves_decimal_and_date_values(tmp_path: Path) -> None:
@@ -244,6 +295,141 @@ def test_backup_restore_and_backup_id_validation(tmp_path: Path) -> None:
     assert error.value.code == PersistenceErrorCode.INVALID_BACKUP_ID
 
 
+def test_restore_blocks_concurrent_writes_until_atomic_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    bundle = create_persistence(settings)
+    bundle.sessions.create()
+    operations = SQLiteOperations(bundle.database, app_home=settings.local_paths.app_home)
+    backup = operations.backup()
+    copy_started = Event()
+    allow_copy = Event()
+    from financial_research_agent.persistence import operations as operations_module
+
+    original_copy = operations_module.shutil.copy2
+
+    def blocked_copy(source: Path, target: Path) -> str:
+        copy_started.set()
+        assert allow_copy.wait(timeout=5)
+        return original_copy(source, target)
+
+    monkeypatch.setattr(operations_module.shutil, "copy2", blocked_copy)
+    future: Future[dict[str, object]]
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(operations.restore, backup.id)
+        assert copy_started.wait(timeout=5)
+        contender = SQLiteDatabase(bundle.database.path, busy_timeout_ms=50)
+        with pytest.raises(PersistenceError) as error, contender.transaction():
+            pass
+        assert error.value.code == PersistenceErrorCode.DATABASE_BUSY
+        allow_copy.set()
+        future.result(timeout=5)
+
+    assert not bundle.database.maintenance_lock_path.exists()
+
+
+def test_orchestrator_store_normalizes_resolved_entity_payloads(tmp_path: Path) -> None:
+    bundle = create_persistence(_settings(tmp_path))
+    company = ResolvedCompany(
+        id="company_novo",
+        legal_name="Novo Nordisk A/S",
+        identifiers=(
+            EntityIdentifier(EntityIdentifierType.CIK, "0000353278", source="fixture"),
+            EntityIdentifier(EntityIdentifierType.LEI, "549300DAQ1CVT6CXN342", source="fixture"),
+        ),
+        country_code="DK",
+    )
+    security = ResolvedSecurity(
+        id="security_nvo",
+        company_id=company.id,
+        ticker="NVO",
+        name="Novo Nordisk A/S ADR",
+        exchange_mic="XNYS",
+        currency="USD",
+        isin="US6701002056",
+        identifiers=(
+            EntityIdentifier(EntityIdentifierType.TICKER, "NVO", source="fixture"),
+            EntityIdentifier(EntityIdentifierType.FIGI, "BBG000LYF3S8", source="fixture"),
+        ),
+    )
+    run = _orchestrator_run(
+        run_id="run_resolved",
+        company=company.to_dict(),
+        security=security.to_dict(),
+    )
+
+    bundle.orchestrator_runs.save(run)
+
+    with bundle.database.read() as connection:
+        stored_run = connection.execute(
+            "SELECT company_id, security_id FROM orchestrator_runs WHERE id = ?", (run.id,)
+        ).fetchone()
+        stored_company = connection.execute(
+            "SELECT legal_name, cik FROM companies WHERE id = ?", (company.id,)
+        ).fetchone()
+        stored_security = connection.execute(
+            "SELECT symbol, company_id FROM securities WHERE id = ?", (security.id,)
+        ).fetchone()
+        company_identifiers = {
+            tuple(row)
+            for row in connection.execute(
+                "SELECT scheme, value FROM company_identifiers WHERE company_id = ?",
+                (company.id,),
+            )
+        }
+        security_identifiers = {
+            tuple(row)
+            for row in connection.execute(
+                "SELECT scheme, value FROM security_identifiers WHERE security_id = ?",
+                (security.id,),
+            )
+        }
+
+    assert tuple(stored_run) == (company.id, security.id)
+    assert tuple(stored_company) == (company.legal_name, "0000353278")
+    assert tuple(stored_security) == (security.ticker, company.id)
+    assert company_identifiers == {
+        ("cik", "0000353278"),
+        ("lei", "549300DAQ1CVT6CXN342"),
+    }
+    assert security_identifiers == {
+        ("ticker:XNYS", "NVO"),
+        ("isin", "US6701002056"),
+        ("figi", "BBG000LYF3S8"),
+    }
+
+
+def test_entity_identifier_conflict_rolls_back_orchestrator_save(tmp_path: Path) -> None:
+    bundle = create_persistence(_settings(tmp_path))
+    first = _orchestrator_run(
+        run_id="run_first",
+        company={"id": "company_first", "legal_name": "First", "cik": "0000000001"},
+        security={"id": "security_first", "symbol": "ONE"},
+    )
+    conflicting = _orchestrator_run(
+        run_id="run_conflict",
+        company={"id": "company_other", "legal_name": "Other", "cik": "0000000001"},
+        security={"id": "security_other", "symbol": "TWO"},
+    )
+    bundle.orchestrator_runs.save(first)
+
+    with pytest.raises(ValueError, match="CIK is already assigned"):
+        bundle.orchestrator_runs.save(conflicting)
+
+    with bundle.database.read() as connection:
+        assert (
+            connection.execute("SELECT 1 FROM companies WHERE id = 'company_other'").fetchone()
+            is None
+        )
+        assert (
+            connection.execute(
+                "SELECT 1 FROM orchestrator_runs WHERE id = 'run_conflict'"
+            ).fetchone()
+            is None
+        )
+
+
 def test_cleanup_is_dry_run_and_reset_preserves_schema(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     bundle = create_persistence(settings)
@@ -303,6 +489,24 @@ def test_unfinished_background_jobs_fail_after_restart(tmp_path: Path) -> None:
 
 def _settings(tmp_path: Path) -> Settings:
     return Settings.from_env({"FRA_HOME": str(tmp_path), "FRA_STORAGE_PROVIDER": "sqlite"})
+
+
+def _orchestrator_run(
+    *, run_id: str, company: dict[str, object], security: dict[str, object]
+) -> OrchestratedResearchRun:
+    now = datetime(2026, 7, 1, tzinfo=UTC)
+    return OrchestratedResearchRun(
+        id=run_id,
+        query="Fixture research",
+        status=OrchestratorRunStatus.PARTIAL,
+        created_at=now,
+        updated_at=now,
+        execution_policy=OrchestratorExecutionPolicy.SEQUENTIAL_LOCAL_SAFE,
+        plan=default_orchestrator_plan(),
+        selected_company=company,
+        selected_security=security,
+        limitations=("Fixture",),
+    )
 
 
 def _market_result() -> HistoricalPriceResult:

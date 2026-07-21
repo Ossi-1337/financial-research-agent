@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import importlib.resources
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import local
+from uuid import uuid4
 
 from financial_research_agent.persistence.contracts import (
     IntegrityReport,
@@ -39,6 +41,37 @@ COUNTED_TABLES = (
     "runtime_settings",
     "import_records",
 )
+REQUIRED_TABLES = (
+    "schema_migrations",
+    "app_metadata",
+    "companies",
+    "company_identifiers",
+    "securities",
+    "security_identifiers",
+    "chat_sessions",
+    "chat_messages",
+    "market_series",
+    "price_bars",
+    "statement_results",
+    "financial_statements",
+    "filing_results",
+    "filings",
+    "filing_chunks",
+    "cited_runs",
+    "citations",
+    "evidence_snippets",
+    "orchestrator_runs",
+    "agent_handoffs",
+    "background_jobs",
+    "runtime_settings",
+    "import_records",
+)
+REQUIRED_INDEXES = (
+    "companies_cik_unique",
+    "chat_sessions_updated_at_idx",
+    "orchestrator_runs_updated_at_idx",
+    "background_jobs_updated_at_idx",
+)
 
 
 class SQLiteDatabase:
@@ -48,6 +81,10 @@ class SQLiteDatabase:
         self.path = path
         self.busy_timeout_ms = busy_timeout_ms
         self._local = local()
+
+    @property
+    def maintenance_lock_path(self) -> Path:
+        return self.path.with_name(f"{self.path.name}.maintenance.lock")
 
     @classmethod
     def from_data_dir(cls, data_dir: Path) -> SQLiteDatabase:
@@ -99,9 +136,11 @@ class SQLiteDatabase:
         if active is not None:
             yield active
             return
+        self._require_write_access()
         connection = self.connect()
         try:
             connection.execute("BEGIN EXCLUSIVE" if exclusive else "BEGIN IMMEDIATE")
+            self._require_write_access()
             self._local.connection = connection
             yield connection
             connection.commit()
@@ -119,6 +158,44 @@ class SQLiteDatabase:
         finally:
             self._local.connection = None
             connection.close()
+
+    @contextmanager
+    def maintenance(self) -> Iterator[None]:
+        if getattr(self._local, "maintenance_token", None) is not None:
+            raise RuntimeError("maintenance lock cannot be nested")
+        self.maintenance_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        token = uuid4().hex
+        try:
+            descriptor = os.open(
+                self.maintenance_lock_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+        except FileExistsError as exc:
+            raise _database_busy() from exc
+        lock_initialized = False
+        try:
+            with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+                stream.write(token)
+            lock_initialized = True
+            self._local.maintenance_token = token
+            yield
+        finally:
+            self._local.maintenance_token = None
+            try:
+                if not lock_initialized or (
+                    self.maintenance_lock_path.read_text(encoding="ascii") == token
+                ):
+                    self.maintenance_lock_path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
+
+    def _require_write_access(self) -> None:
+        try:
+            token = self.maintenance_lock_path.read_text(encoding="ascii")
+        except FileNotFoundError:
+            return
+        if token != getattr(self._local, "maintenance_token", None):
+            raise _database_busy()
 
     def schema_version(self) -> int:
         if not self.path.exists():
@@ -174,9 +251,11 @@ class SQLiteMigrationRunner:
 
     def apply(self) -> tuple[int, ...]:
         self.database.path.parent.mkdir(parents=True, exist_ok=True)
+        self.database._require_write_access()
         connection = self.database.connect()
         try:
             connection.execute("BEGIN EXCLUSIVE")
+            self.database._require_write_access()
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -216,6 +295,7 @@ class SQLiteMigrationRunner:
                     (version, name, checksum, datetime.now(UTC).isoformat()),
                 )
                 applied.append(version)
+            _validate_schema_objects(connection)
             connection.commit()
             return tuple(applied)
         except Exception:
@@ -229,13 +309,20 @@ class SQLiteMigrationRunner:
             version: hashlib.sha256(sql.encode("utf-8")).hexdigest()
             for version, _name, sql in _migration_resources()
         }
-        with self.database.read() as connection:
-            actual = {
-                int(row["version"]): str(row["checksum"])
-                for row in connection.execute(
-                    "SELECT version, checksum FROM schema_migrations ORDER BY version"
-                )
-            }
+        try:
+            with self.database.read() as connection:
+                actual = {
+                    int(row["version"]): str(row["checksum"])
+                    for row in connection.execute(
+                        "SELECT version, checksum FROM schema_migrations ORDER BY version"
+                    )
+                }
+                _validate_schema_objects(connection)
+        except sqlite3.OperationalError as exc:
+            raise PersistenceError(
+                PersistenceErrorCode.INCOMPATIBLE_SCHEMA,
+                "Database schema is missing required migration objects.",
+            ) from exc
         if set(actual) != set(expected):
             raise PersistenceError(
                 PersistenceErrorCode.INCOMPATIBLE_SCHEMA,
@@ -271,3 +358,25 @@ def _sql_statements(sql: str) -> tuple[str, ...]:
     if buffer.strip():
         raise ValueError("migration SQL ends with an incomplete statement")
     return tuple(statements)
+
+
+def _validate_schema_objects(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'index')"
+    )
+    objects = {(str(row["type"]), str(row["name"])) for row in rows}
+    missing_tables = tuple(name for name in REQUIRED_TABLES if ("table", name) not in objects)
+    missing_indexes = tuple(name for name in REQUIRED_INDEXES if ("index", name) not in objects)
+    if missing_tables or missing_indexes:
+        missing = ", ".join((*missing_tables, *missing_indexes))
+        raise PersistenceError(
+            PersistenceErrorCode.INCOMPATIBLE_SCHEMA,
+            f"Database schema is missing required objects: {missing}.",
+        )
+
+
+def _database_busy() -> PersistenceError:
+    return PersistenceError(
+        PersistenceErrorCode.DATABASE_BUSY,
+        "SQLite maintenance is active; stop active app processes or clear a stale lock and retry.",
+    )

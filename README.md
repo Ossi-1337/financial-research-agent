@@ -19,15 +19,15 @@ research workflows inspectable, source-aware, and runnable on a developer machin
 ## Requirements
 
 - Python 3.14
-- Docker Desktop for the recommended local model setup
-- Optional NVIDIA GPU support for the default llama.cpp CUDA container
+- Docker Desktop for container-based setup
+- Optional NVIDIA GPU support for the llama.cpp CUDA profile
 - Optional Alpha Vantage API key for daily market data
 - Optional OpenAI API key for hosted LLM usage
 - A real SEC User-Agent/contact string for serious SEC EDGAR usage
 
 ## Quick Start
 
-Run the full local stack with Docker Compose:
+Start the lightweight offline UI with Docker Compose:
 
 ```powershell
 docker compose up --build
@@ -39,31 +39,29 @@ Open the app:
 http://127.0.0.1:8000
 ```
 
-The Compose setup starts:
+Default startup uses `offline-test`; it needs no model, GPU, API key, or network call after
+the app image has been built. Local state is kept in the `fra-data` Docker volume.
 
-- `llama-cpp` on `http://127.0.0.1:8080/v1`
-- the Financial Research Agent web app on `http://127.0.0.1:8000`
-- a persistent Docker volume for local app data
-
-By default, Compose uses:
-
-```text
-unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL
-```
-
-The first run downloads the llama.cpp image and the selected GGUF model into your Hugging
-Face cache. Override the model if needed:
+Start an optional llama.cpp model profile through the cross-platform developer command:
 
 ```powershell
-$env:FRA_LOCAL_MODEL = "your-huggingface-gguf-repo:quant"
-docker compose up --build
+python scripts/dev.py docker-up --runtime cpu
+python scripts/dev.py docker-up --runtime cuda
 ```
+
+The CPU profile defaults to a small Gemma 3 1B GGUF. The CUDA profile defaults to Mistral
+Small 3.2 24B. Starting a model profile downloads its image and model on first use. Activate
+only one model profile at a time.
 
 Stop the stack:
 
 ```powershell
 docker compose down
 ```
+
+See [Local Development](docs/local-development.md) for profile overrides and clean-machine
+setup. See [Troubleshooting](docs/troubleshooting.md) for Docker, model, provider, and SQLite
+failures.
 
 ## Python Development
 
@@ -72,7 +70,7 @@ Install the project locally:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+python scripts/dev.py install
 ```
 
 Run the health check:
@@ -84,7 +82,7 @@ python -m financial_research_agent --pretty
 Run the web UI without Docker:
 
 ```powershell
-python -m financial_research_agent serve --host 127.0.0.1 --port 8000
+python scripts/dev.py run
 ```
 
 The default provider is `offline-test`, so the Python-only path works without API keys or
@@ -185,8 +183,9 @@ provider or specialist step fails.
 
 ## Configuration
 
-Settings are read from environment variables. `.env.example` documents the supported
-variables, but the app does not auto-load `.env` yet.
+CLI commands load `.env` from the current working directory. Existing process or container
+environment variables override values from that file. `.env.example` documents supported
+variables; never commit a real `.env` file.
 
 `FRA` means Financial Research Agent.
 
@@ -208,7 +207,8 @@ Common settings:
 | `FRA_PROMPT_BUDGET_OUTPUT_TOKENS` | Default response output budget | `1024` |
 | `FRA_EMBEDDING_CACHE_ENABLED` | Cache embeddings by provider/model/text hash | `true` |
 | `FRA_ALLOW_REMOTE_BIND` | Permit non-loopback web server binding | `false` |
-| `FRA_LOCAL_MODEL` | Docker Compose llama.cpp model | Mistral Small GGUF |
+| `FRA_CPU_MODEL` | Docker Compose CPU profile model | Gemma 3 1B GGUF |
+| `FRA_CUDA_MODEL` | Docker Compose CUDA profile model | Mistral Small GGUF |
 
 The settings UI can save non-secret runtime overrides under `FRA_HOME`. API keys remain
 environment-only and are shown only as configured/not-configured flags.
@@ -437,6 +437,7 @@ python -m ruff check .
 python -m ruff format --check .
 python -m compileall -q src tests
 python -m financial_research_agent eval --pretty
+python -m build
 git diff --check
 ```
 
@@ -448,7 +449,9 @@ skipped check unless a future milestone explicitly configures it.
 Validate Docker Compose without starting services:
 
 ```powershell
-docker compose config
+docker compose config --quiet
+docker compose --profile cpu config --quiet
+docker compose --profile cuda config --quiet
 ```
 
 ## Project Status

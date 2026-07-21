@@ -111,24 +111,26 @@ class SQLiteOperations:
 
     def restore(self, backup_id: str) -> dict[str, object]:
         record = self.validate_backup(backup_id)
-        self._require_exclusive_access()
-        pre_restore = self.backup()
-        source = self.backups_dir / backup_id / BACKUP_DATABASE_NAME
-        temp = self.database.path.with_suffix(f".restore-{uuid4().hex}.tmp")
-        try:
-            shutil.copy2(source, temp)
-            candidate = SQLiteDatabase(temp)
-            if not candidate.integrity(full=True).healthy:
-                raise ValueError("restored database integrity check failed")
-            candidate.prepare_for_atomic_move()
-            os.replace(temp, self.database.path)
-            _remove_sidecars(self.database.path)
-        except Exception as exc:
-            temp.unlink(missing_ok=True)
-            _remove_sidecars(temp)
-            raise PersistenceError(
-                PersistenceErrorCode.RESTORE_FAILED, "Could not restore SQLite backup."
-            ) from exc
+        with self.database.maintenance():
+            self._require_exclusive_access()
+            pre_restore = self.backup()
+            source = self.backups_dir / backup_id / BACKUP_DATABASE_NAME
+            temp = self.database.path.with_suffix(f".restore-{uuid4().hex}.tmp")
+            try:
+                shutil.copy2(source, temp)
+                candidate = SQLiteDatabase(temp)
+                if not candidate.integrity(full=True).healthy:
+                    raise ValueError("restored database integrity check failed")
+                candidate.prepare_for_atomic_move()
+                self.database.prepare_for_atomic_move()
+                _remove_sidecars(self.database.path)
+                os.replace(temp, self.database.path)
+            except Exception as exc:
+                temp.unlink(missing_ok=True)
+                _remove_sidecars(temp)
+                raise PersistenceError(
+                    PersistenceErrorCode.RESTORE_FAILED, "Could not restore SQLite backup."
+                ) from exc
         return {"restored_backup": record.to_dict(), "pre_restore_backup": pre_restore.to_dict()}
 
     def cleanup(
