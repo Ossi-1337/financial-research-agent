@@ -27,6 +27,7 @@ from financial_research_agent.report_exports import (
     ReportExportService,
     ReportExportSnapshot,
     ReportExportStore,
+    build_report_evidence_index,
     build_report_export_document,
     render_html,
     render_markdown,
@@ -52,6 +53,7 @@ def test_export_contracts_are_immutable_and_manifest_round_trips(tmp_path: Path)
 
 def test_source_resolver_deduplicates_sources_and_marks_unknown_evidence() -> None:
     document = _document()
+    evidence = build_report_evidence_index(_run(), redaction_policy=RedactionPolicy())
 
     assert [source.marker for source in document.sources] == ["[S1]", "[S2]", "[S3]", "[S4]"]
     assert document.sources[0].source_url == "https://example.test/filing"
@@ -62,6 +64,10 @@ def test_source_resolver_deduplicates_sources_and_marks_unknown_evidence() -> No
     assert unresolved.source_url is None
     assert "[S1]" in document.current_situation[0].source_markers
     assert unresolved.marker in document.risks[0].source_markers
+    assert evidence.evidence_markers["ev:financial"] == ("[S1]",)
+    assert evidence.handoff_markers["handoff_context"] == ("[S2]",)
+    assert evidence.unresolved_evidence_ids == ("ev:unknown",)
+    assert all(len(source.quote or "") <= MAX_SOURCE_QUOTE_CHARS for source in evidence.sources)
 
 
 def test_renderers_escape_untrusted_text_and_create_unicode_pdf() -> None:

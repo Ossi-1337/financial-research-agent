@@ -5,6 +5,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Self
 
 REPORT_EXPORT_MANIFEST_VERSION = 1
@@ -91,6 +92,44 @@ class ReportSourceReference:
             "retrieved_at": self.retrieved_at,
             "section": self.section,
             "quote": self.quote,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReportEvidenceIndex:
+    sources: tuple[ReportSourceReference, ...]
+    unresolved_evidence_ids: tuple[str, ...]
+    evidence_markers: Mapping[str, tuple[str, ...]]
+    handoff_markers: Mapping[str, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sources", _source_tuple(self.sources))
+        object.__setattr__(
+            self,
+            "unresolved_evidence_ids",
+            _text_tuple("unresolved_evidence_ids", self.unresolved_evidence_ids),
+        )
+        object.__setattr__(
+            self,
+            "evidence_markers",
+            _marker_mapping("evidence_markers", self.evidence_markers),
+        )
+        object.__setattr__(
+            self,
+            "handoff_markers",
+            _marker_mapping("handoff_markers", self.handoff_markers),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "sources": [source.to_dict() for source in self.sources],
+            "unresolved_evidence_ids": list(self.unresolved_evidence_ids),
+            "evidence_markers": {
+                key: list(markers) for key, markers in self.evidence_markers.items()
+            },
+            "handoff_markers": {
+                key: list(markers) for key, markers in self.handoff_markers.items()
+            },
         }
 
 
@@ -373,6 +412,19 @@ def _marker_tuple(name: str, values: Iterable[str]) -> tuple[str, ...]:
     if any(not _MARKER_PATTERN.fullmatch(marker) for marker in markers):
         raise ValueError(f"{name} contains an invalid source marker")
     return markers
+
+
+def _marker_mapping(
+    name: str, values: Mapping[str, Iterable[str]]
+) -> Mapping[str, tuple[str, ...]]:
+    if not isinstance(values, Mapping):
+        raise ValueError(f"{name} must be a mapping")
+    return MappingProxyType(
+        {
+            _require_text(f"{name}.key", key): _marker_tuple(f"{name}[{key!r}]", markers)
+            for key, markers in values.items()
+        }
+    )
 
 
 def _point_tuple(name: str, values: Iterable[ReportExportPoint]) -> tuple[ReportExportPoint, ...]:

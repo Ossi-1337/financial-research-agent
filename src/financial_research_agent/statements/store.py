@@ -208,6 +208,10 @@ def _source_from_payload(payload: Any) -> FinancialStatementSource:
         data_as_of=date.fromisoformat(data_as_of) if isinstance(data_as_of, str) else None,
         attribution=str(payload["attribution"]),
         freshness_warning=_optional_payload_text(payload, "freshness_warning"),
+        taxonomy_namespaces=tuple(str(item) for item in payload.get("taxonomy_namespaces", ())),
+        concept_mappings={
+            str(key): str(value) for key, value in payload.get("concept_mappings", {}).items()
+        },
     )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -59,7 +60,7 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     calculate_price_metrics,
 )
-from financial_research_agent.orchestration import OrchestratorRunStore
+from financial_research_agent.orchestration import OrchestratorRunStore, default_orchestrator_plan
 from financial_research_agent.reports import CitedResearchRunStore
 from financial_research_agent.retrieval import (
     IndexedChunk,
@@ -142,6 +143,11 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "createReportExport" in response.text
     assert "renderTraceTimeline" in response.text
     assert "loadRunTrace" in response.text
+    assert "scenarioCommand" in response.text
+    assert "/api/scenarios/" in response.text
+    assert "renderStockChart" in response.text
+    assert "renderRunEvidencePanel" in response.text
+    assert "/evidence" in response.text
     assert "/synthesis-report" in response.text
     assert "/trace" in response.text
     assert "researchCommand" in response.text
@@ -1138,6 +1144,62 @@ def test_session_synthesis_report_endpoint_runs_orchestrator_and_stores_report()
     assert "raw provider credentials" in debug_bundle["debug_bundle"]["excluded_items"]
 
 
+def test_novo_scenario_endpoint_uses_background_progress_evidence_and_exports(
+    tmp_path,
+) -> None:
+    secret = "TEST_ALPHA_VANTAGE_SECRET"
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_ALPHA_VANTAGE_API_KEY": secret,
+            "FRA_SEC_USER_AGENT": "financial-research-agent-tests test@example.com",
+        }
+    )
+    client = _client(settings=settings)
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    response = client.post(
+        "/api/scenarios/novo-nordisk/runs",
+        json={"session_id": session_id, "refresh": True, "with_local_qa": False},
+    )
+    job = _poll_background_job(client, response.json()["job"]["id"])
+    run_id = job["orchestrator_run_id"]
+    run_response = client.get(f"/api/orchestrator/runs/{run_id}")
+    evidence_response = client.get(f"/api/orchestrator/runs/{run_id}/evidence")
+    session = client.get(f"/api/sessions/{session_id}").json()["session"]
+    exports = client.get("/api/report-exports").json()["exports"]
+
+    assert response.status_code == 202
+    assert response.json()["scenario"]["preferred_ticker"] == "NVO"
+    assert job["status"] == "succeeded"
+    assert job["progress"]["total_steps"] == len(default_orchestrator_plan())
+    assert run_response.json()["run"]["scenario_id"] == "novo-nordisk"
+    assert evidence_response.status_code == 200
+    assert "sources" in evidence_response.json()["evidence"]
+    assert session["messages"][-1]["research_run_id"] == run_id
+    assert any(item["export"]["run_id"] == run_id for item in exports)
+    assert secret not in json.dumps(evidence_response.json())
+
+
+def test_novo_scenario_endpoint_maps_preflight_and_unknown_scenario_errors(tmp_path) -> None:
+    client = _client(settings=Settings.from_env({"FRA_HOME": str(tmp_path)}))
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    missing_key = client.post(
+        "/api/scenarios/novo-nordisk/runs",
+        json={"session_id": session_id},
+    )
+    unknown = client.post(
+        "/api/scenarios/missing/runs",
+        json={"session_id": session_id, "refresh": False},
+    )
+
+    assert missing_key.status_code == 409
+    assert missing_key.json()["detail"]["code"] == "missing_market_data_credentials"
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"]["code"] == "unknown_scenario"
+
+
 def test_orchestrator_trace_debug_bundle_redacts_failed_run(tmp_path) -> None:
     settings = Settings.from_env(
         {
@@ -1215,6 +1277,21 @@ def _client(
             runtime_settings_store=runtime_settings_store or RuntimeSettingsStore(),
         )
     )
+
+
+def _poll_background_job(
+    client: TestClient,
+    job_id: str,
+    *,
+    timeout: float = 5.0,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/background/research-runs/{job_id}").json()["job"]
+        if job["status"] in {"succeeded", "failed", "cancelled"}:
+            return job
+        time.sleep(0.02)
+    raise AssertionError("background scenario did not finish before timeout")
 
 
 class CapturingProvider:

@@ -480,6 +480,11 @@ h1 {
   font-size: 0.84rem;
 }
 
+.synthesis-timestamp {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .report-export {
   display: flex;
   flex-wrap: wrap;
@@ -532,8 +537,27 @@ h1 {
 }
 
 .synthesis-evidence-meta {
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
   margin-top: 3px;
+}
+
+.source-marker-button {
+  min-width: 0;
+  min-height: 0;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border));
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.source-marker-button:hover {
+  border-color: var(--accent);
 }
 
 .synthesis-scenario {
@@ -541,6 +565,96 @@ h1 {
   gap: 5px;
   padding-left: 12px;
   border-left: 3px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.stock-chart,
+.run-evidence-panel {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.stock-chart svg {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.stock-chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.stock-chart-line.series-1 {
+  stroke: #b25a24;
+}
+
+.stock-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.stock-chart-legend span::before {
+  display: inline-block;
+  width: 16px;
+  height: 3px;
+  margin: 0 5px 2px 0;
+  background: var(--accent);
+  content: "";
+}
+
+.stock-chart-legend span.series-1::before {
+  background: #b25a24;
+}
+
+.run-evidence-panel summary {
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.run-evidence-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 24px;
+}
+
+.run-evidence-source {
+  display: grid;
+  gap: 4px;
+  scroll-margin: 80px;
+}
+
+.run-evidence-source.unresolved {
+  color: var(--muted);
+}
+
+.run-evidence-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.run-evidence-header a {
+  color: var(--accent-strong);
+  overflow-wrap: anywhere;
+}
+
+.run-evidence-source p,
+.run-evidence-source small {
+  margin: 0;
 }
 
 .trace-card {

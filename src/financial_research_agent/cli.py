@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -45,11 +46,27 @@ def build_parser() -> argparse.ArgumentParser:
             "retrieval-status",
             "retrieval-clear",
             "eval",
+            "scenario-run",
         ],
         default="health",
         help="Command to run. Defaults to health.",
     )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    parser.add_argument(
+        "scenario_id",
+        nargs="?",
+        help="Scenario id used by scenario-run.",
+    )
+    parser.add_argument(
+        "--with-local-qa",
+        action="store_true",
+        help="Run optional source-bounded chat-provider Q&A after deterministic synthesis.",
+    )
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="Use stored provider data instead of requiring a live scenario refresh.",
+    )
     parser.add_argument(
         "--host",
         default="127.0.0.1",
@@ -200,6 +217,47 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_default_offline_evaluations()
         _print_json(result.to_dict(), pretty=args.pretty)
         return 0 if result.status == EvalSuiteStatus.PASSED else 1
+
+    if args.command == "scenario-run":
+        if not args.scenario_id:
+            parser.error("scenario-run requires a scenario id")
+        from financial_research_agent.scenarios import (
+            ScenarioError,
+            ScenarioExecutionStatus,
+            ScenarioRunner,
+        )
+        from financial_research_agent.settings import ProviderTask
+        from financial_research_agent.web import create_app
+
+        settings = Settings.from_env()
+        try:
+            app = create_app(settings=settings)
+            selection = settings.provider.selection_for_task(ProviderTask.CHAT)
+            runner = ScenarioRunner(
+                settings=settings,
+                catalog=app.state.scenario_catalog,
+                orchestrator=app.state.orchestrator,
+                export_service=app.state.report_export_service,
+                chat_provider=(
+                    app.state.provider_registry.chat_provider(selection.provider)
+                    if args.with_local_qa
+                    and app.state.provider_registry.has_chat_provider(selection.provider)
+                    else None
+                ),
+                chat_model=selection.model,
+            )
+            result = asyncio.run(
+                runner.run(
+                    args.scenario_id,
+                    refresh=not args.no_refresh,
+                    with_local_qa=args.with_local_qa,
+                )
+            )
+        except (PersistenceError, ScenarioError) as exc:
+            _print_json(exc.to_dict(), pretty=args.pretty)
+            return 1
+        _print_json(result.to_dict(), pretty=args.pretty)
+        return 0 if result.status != ScenarioExecutionStatus.FAILED else 1
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

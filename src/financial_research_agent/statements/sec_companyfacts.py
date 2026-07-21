@@ -25,7 +25,6 @@ SEC_COMPANY_FACTS_BASE_URL = "https://data.sec.gov/api/xbrl/companyfacts"
 SEC_COMPANY_FACTS_PROVIDER = FinancialStatementProviderName.SEC_COMPANY_FACTS.value
 SEC_COMPANY_FACTS_STATUS = "official"
 SEC_COMPANY_FACTS_ATTRIBUTION = "U.S. Securities and Exchange Commission EDGAR XBRL data"
-SEC_COMPANY_FACTS_CURRENCY = "USD"
 SEC_COMPANY_FACTS_FORMS = frozenset({"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"})
 
 SEC_COMPANY_FACTS_WARNING = (
@@ -37,14 +36,16 @@ SEC_COMPANY_FACTS_WARNING = (
 @dataclass(frozen=True, slots=True)
 class _ConceptDefinition:
     line_item: str
-    concepts: tuple[str, ...]
+    concepts: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _NormalizedFact:
     line_item: str
+    taxonomy_namespace: str
     concept: str
     concept_priority: int
+    currency: str
     value: Decimal
     fiscal_year: int
     fiscal_period: str
@@ -60,49 +61,99 @@ STATEMENT_CONCEPTS: Mapping[FinancialStatementType, tuple[_ConceptDefinition, ..
         _ConceptDefinition(
             "revenues",
             (
-                "RevenueFromContractWithCustomerExcludingAssessedTax",
-                "Revenues",
-                "SalesRevenueNet",
+                ("us-gaap", "RevenueFromContractWithCustomerExcludingAssessedTax"),
+                ("us-gaap", "Revenues"),
+                ("us-gaap", "SalesRevenueNet"),
+                ("ifrs-full", "Revenue"),
             ),
         ),
-        _ConceptDefinition("cost_of_revenue", ("CostOfRevenue", "CostOfGoodsAndServicesSold")),
-        _ConceptDefinition("gross_profit", ("GrossProfit",)),
-        _ConceptDefinition("operating_income_loss", ("OperatingIncomeLoss",)),
-        _ConceptDefinition("net_income_loss", ("NetIncomeLoss", "ProfitLoss")),
+        _ConceptDefinition(
+            "cost_of_revenue",
+            (
+                ("us-gaap", "CostOfRevenue"),
+                ("us-gaap", "CostOfGoodsAndServicesSold"),
+                ("ifrs-full", "CostOfSales"),
+            ),
+        ),
+        _ConceptDefinition(
+            "gross_profit", (("us-gaap", "GrossProfit"), ("ifrs-full", "GrossProfit"))
+        ),
+        _ConceptDefinition(
+            "operating_income_loss",
+            (
+                ("us-gaap", "OperatingIncomeLoss"),
+                ("ifrs-full", "ProfitLossFromOperatingActivities"),
+            ),
+        ),
+        _ConceptDefinition(
+            "net_income_loss",
+            (("us-gaap", "NetIncomeLoss"), ("ifrs-full", "ProfitLoss")),
+        ),
     ),
     FinancialStatementType.BALANCE_SHEET: (
-        _ConceptDefinition("assets", ("Assets",)),
-        _ConceptDefinition("assets_current", ("AssetsCurrent",)),
+        _ConceptDefinition("assets", (("us-gaap", "Assets"), ("ifrs-full", "Assets"))),
+        _ConceptDefinition(
+            "assets_current", (("us-gaap", "AssetsCurrent"), ("ifrs-full", "CurrentAssets"))
+        ),
         _ConceptDefinition(
             "cash_and_cash_equivalents",
-            ("CashAndCashEquivalentsAtCarryingValue", "CashAndDueFromBanks"),
+            (
+                ("us-gaap", "CashAndCashEquivalentsAtCarryingValue"),
+                ("us-gaap", "CashAndDueFromBanks"),
+                ("ifrs-full", "CashAndCashEquivalents"),
+            ),
         ),
-        _ConceptDefinition("liabilities", ("Liabilities",)),
-        _ConceptDefinition("liabilities_current", ("LiabilitiesCurrent",)),
+        _ConceptDefinition(
+            "liabilities",
+            (("us-gaap", "Liabilities"), ("ifrs-full", "Liabilities")),
+        ),
+        _ConceptDefinition(
+            "liabilities_current",
+            (("us-gaap", "LiabilitiesCurrent"), ("ifrs-full", "CurrentLiabilities")),
+        ),
         _ConceptDefinition(
             "stockholders_equity",
             (
-                "StockholdersEquity",
-                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+                ("us-gaap", "StockholdersEquity"),
+                (
+                    "us-gaap",
+                    "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+                ),
+                ("ifrs-full", "Equity"),
             ),
         ),
     ),
     FinancialStatementType.CASH_FLOW: (
         _ConceptDefinition(
             "net_cash_provided_by_operating_activities",
-            ("NetCashProvidedByUsedInOperatingActivities",),
+            (
+                ("us-gaap", "NetCashProvidedByUsedInOperatingActivities"),
+                ("ifrs-full", "CashFlowsFromUsedInOperatingActivities"),
+            ),
         ),
         _ConceptDefinition(
             "net_cash_provided_by_investing_activities",
-            ("NetCashProvidedByUsedInInvestingActivities",),
+            (
+                ("us-gaap", "NetCashProvidedByUsedInInvestingActivities"),
+                ("ifrs-full", "CashFlowsFromUsedInInvestingActivities"),
+            ),
         ),
         _ConceptDefinition(
             "net_cash_provided_by_financing_activities",
-            ("NetCashProvidedByUsedInFinancingActivities",),
+            (
+                ("us-gaap", "NetCashProvidedByUsedInFinancingActivities"),
+                ("ifrs-full", "CashFlowsFromUsedInFinancingActivities"),
+            ),
         ),
         _ConceptDefinition(
             "capital_expenditures",
-            ("PaymentsToAcquirePropertyPlantAndEquipment",),
+            (
+                ("us-gaap", "PaymentsToAcquirePropertyPlantAndEquipment"),
+                (
+                    "ifrs-full",
+                    "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+                ),
+            ),
         ),
     ),
 }
@@ -225,15 +276,15 @@ def _normalize_companyfacts(
     retrieved_at: datetime,
 ) -> FinancialStatementResult:
     company = _company_from_payload(payload, requested_company)
-    selected_facts: dict[tuple[str, int], _NormalizedFact] = {}
+    selected_facts: dict[tuple[str, int, str], _NormalizedFact] = {}
     duplicate_count = 0
     ignored_units: set[str] = set()
     for definitions in STATEMENT_CONCEPTS.values():
         for definition in definitions:
             facts, units = _facts_for_definition(payload, definition)
-            ignored_units.update(units - {SEC_COMPANY_FACTS_CURRENCY})
+            ignored_units.update(unit for unit in units if not _is_currency_unit(unit))
             for fact in facts:
-                key = (definition.line_item, fact.fiscal_year)
+                key = (definition.line_item, fact.fiscal_year, fact.currency)
                 existing = selected_facts.get(key)
                 if existing is not None:
                     duplicate_count += 1
@@ -245,25 +296,40 @@ def _normalize_companyfacts(
         raise FinancialStatementError(
             code=FinancialStatementErrorCode.NOT_FOUND,
             message=(
-                "SEC companyfacts did not include supported annual USD statement facts "
+                "SEC companyfacts did not include supported annual monetary statement facts "
                 f"for CIK {company.padded_cik}."
             ),
             provider=SEC_COMPANY_FACTS_PROVIDER,
         )
 
+    chosen_by_year: dict[int, tuple[str, dict[str, _NormalizedFact]]] = {}
+    chosen_facts: list[_NormalizedFact] = []
+    discarded_currencies: set[str] = set()
+    for fiscal_year in fiscal_year_order:
+        currency = _reporting_currency_for_year(selected_facts.values(), fiscal_year)
+        year_facts = {
+            line_item: fact
+            for (line_item, fact_year, fact_currency), fact in selected_facts.items()
+            if fact_year == fiscal_year and fact_currency == currency
+        }
+        discarded_currencies.update(
+            fact_currency
+            for (_line_item, fact_year, fact_currency) in selected_facts
+            if fact_year == fiscal_year and fact_currency != currency
+        )
+        chosen_by_year[fiscal_year] = (currency, year_facts)
+        chosen_facts.extend(year_facts.values())
+
     source = _source_metadata(
         source_url=source_url,
         retrieved_at=retrieved_at,
-        data_as_of=_latest_filed_at(selected_facts.values()),
+        data_as_of=_latest_filed_at(chosen_facts),
+        facts=chosen_facts,
     )
     statements: list[NormalizedFinancialStatement] = []
     for fiscal_year in fiscal_year_order:
-        year_facts = {
-            line_item: fact
-            for (line_item, fact_year), fact in selected_facts.items()
-            if fact_year == fiscal_year
-        }
-        statements.extend(_statements_for_year(company, fiscal_year, year_facts, source))
+        currency, year_facts = chosen_by_year[fiscal_year]
+        statements.extend(_statements_for_year(company, fiscal_year, currency, year_facts, source))
 
     warnings = [SEC_COMPANY_FACTS_WARNING]
     if len(fiscal_year_order) < fiscal_years:
@@ -279,8 +345,12 @@ def _normalize_companyfacts(
         )
     if ignored_units:
         warnings.append(
-            "Non-USD or non-statement SEC fact units were ignored: "
-            f"{', '.join(sorted(ignored_units))}."
+            f"Non-monetary SEC fact units were ignored: {', '.join(sorted(ignored_units))}."
+        )
+    if discarded_currencies:
+        warnings.append(
+            "Alternate currency facts were ignored to prevent mixed-currency statements: "
+            f"{', '.join(sorted(discarded_currencies))}."
         )
 
     return FinancialStatementResult(
@@ -313,30 +383,37 @@ def _facts_for_definition(
 ) -> tuple[tuple[_NormalizedFact, ...], set[str]]:
     facts: list[_NormalizedFact] = []
     seen_units: set[str] = set()
-    for priority, concept in enumerate(definition.concepts):
-        concept_payload = _concept_payload(payload, concept)
+    for priority, (namespace, concept) in enumerate(definition.concepts):
+        concept_payload = _concept_payload(payload, namespace, concept)
         if concept_payload is None:
             continue
         units = concept_payload.get("units")
         if not isinstance(units, Mapping):
             continue
         seen_units.update(str(unit) for unit in units)
-        usd_facts = units.get(SEC_COMPANY_FACTS_CURRENCY)
-        if not isinstance(usd_facts, Iterable) or isinstance(usd_facts, (str, bytes)):
-            continue
-        for fact_payload in usd_facts:
-            fact = _fact_from_payload(
-                fact_payload,
-                definition=definition,
-                concept=concept,
-                concept_priority=priority,
-            )
-            if fact is not None:
-                facts.append(fact)
+        for currency, currency_facts in units.items():
+            normalized_currency = str(currency).upper()
+            if not _is_currency_unit(normalized_currency):
+                continue
+            if not isinstance(currency_facts, Iterable) or isinstance(currency_facts, (str, bytes)):
+                continue
+            for fact_payload in currency_facts:
+                fact = _fact_from_payload(
+                    fact_payload,
+                    definition=definition,
+                    taxonomy_namespace=namespace,
+                    concept=concept,
+                    concept_priority=priority,
+                    currency=normalized_currency,
+                )
+                if fact is not None:
+                    facts.append(fact)
     return tuple(facts), seen_units
 
 
-def _concept_payload(payload: Mapping[str, Any], concept: str) -> Mapping[str, Any] | None:
+def _concept_payload(
+    payload: Mapping[str, Any], namespace: str, concept: str
+) -> Mapping[str, Any] | None:
     facts = payload.get("facts")
     if not isinstance(facts, Mapping):
         raise FinancialStatementError(
@@ -344,10 +421,10 @@ def _concept_payload(payload: Mapping[str, Any], concept: str) -> Mapping[str, A
             message="SEC companyfacts payload does not include a facts object.",
             provider=SEC_COMPANY_FACTS_PROVIDER,
         )
-    us_gaap = facts.get("us-gaap")
-    if not isinstance(us_gaap, Mapping):
+    taxonomy = facts.get(namespace)
+    if not isinstance(taxonomy, Mapping):
         return None
-    concept_payload = us_gaap.get(concept)
+    concept_payload = taxonomy.get(concept)
     return concept_payload if isinstance(concept_payload, Mapping) else None
 
 
@@ -355,8 +432,10 @@ def _fact_from_payload(
     payload: Any,
     *,
     definition: _ConceptDefinition,
+    taxonomy_namespace: str,
     concept: str,
     concept_priority: int,
+    currency: str,
 ) -> _NormalizedFact | None:
     if not isinstance(payload, Mapping):
         return None
@@ -378,8 +457,10 @@ def _fact_from_payload(
     filed_at = _date_or_none(filed_value)
     return _NormalizedFact(
         line_item=definition.line_item,
+        taxonomy_namespace=taxonomy_namespace,
         concept=concept,
         concept_priority=concept_priority,
+        currency=currency,
         value=value,
         fiscal_year=fiscal_year,
         fiscal_period=fiscal_period,
@@ -394,6 +475,7 @@ def _fact_from_payload(
 def _statements_for_year(
     company: FinancialStatementCompany,
     fiscal_year: int,
+    currency: str,
     year_facts: Mapping[str, _NormalizedFact],
     source: FinancialStatementSource,
 ) -> tuple[NormalizedFinancialStatement, ...]:
@@ -413,6 +495,7 @@ def _statements_for_year(
                 statement_type=statement_type,
                 period=period,
                 line_items=line_items,
+                currency=currency,
                 source=source,
             )
         )
@@ -425,6 +508,7 @@ def _statements_for_year(
                 statement_type=FinancialStatementType.KEY_RATIOS,
                 period=_period_for_facts(ratio_facts),
                 line_items=ratios,
+                currency=currency,
                 source=source,
             )
         )
@@ -474,6 +558,7 @@ def _statement(
     statement_type: FinancialStatementType,
     period: FinancialStatementPeriod,
     line_items: Mapping[str, Decimal],
+    currency: str,
     source: FinancialStatementSource,
 ) -> NormalizedFinancialStatement:
     return NormalizedFinancialStatement(
@@ -481,7 +566,7 @@ def _statement(
         company=company,
         statement_type=statement_type,
         period=period,
-        currency=SEC_COMPANY_FACTS_CURRENCY,
+        currency=currency,
         line_items=line_items,
         source=source,
     )
@@ -518,6 +603,20 @@ def _latest_filed_at(facts: Iterable[_NormalizedFact]) -> date | None:
     return max(filed_dates) if filed_dates else None
 
 
+def _reporting_currency_for_year(facts: Iterable[_NormalizedFact], fiscal_year: int) -> str:
+    coverage: dict[str, set[str]] = {}
+    for fact in facts:
+        if fact.fiscal_year == fiscal_year:
+            coverage.setdefault(fact.currency, set()).add(fact.line_item)
+    if not coverage:
+        raise ValueError(f"No reporting currency available for fiscal year {fiscal_year}")
+    return min(coverage, key=lambda currency: (-len(coverage[currency]), currency))
+
+
+def _is_currency_unit(value: str) -> bool:
+    return len(value) == 3 and value.isalpha() and value.upper() == value
+
+
 def _missing_statement_types(statements: Iterable[NormalizedFinancialStatement]) -> tuple[str, ...]:
     present = {statement.statement_type for statement in statements}
     required = {
@@ -542,7 +641,18 @@ def _source_metadata(
     source_url: str,
     retrieved_at: datetime,
     data_as_of: date | None,
+    facts: Iterable[_NormalizedFact],
 ) -> FinancialStatementSource:
+    selected = tuple(facts)
+    namespaces = tuple(dict.fromkeys(fact.taxonomy_namespace for fact in selected))
+    concept_mappings: dict[str, str] = {}
+    for fact in selected:
+        qualified = f"{fact.taxonomy_namespace}:{fact.concept}"
+        existing = concept_mappings.get(fact.line_item)
+        if existing is None:
+            concept_mappings[fact.line_item] = qualified
+        elif qualified not in existing.split(","):
+            concept_mappings[fact.line_item] = f"{existing},{qualified}"
     return FinancialStatementSource(
         provider=SEC_COMPANY_FACTS_PROVIDER,
         provider_status=SEC_COMPANY_FACTS_STATUS,
@@ -550,6 +660,8 @@ def _source_metadata(
         retrieved_at=retrieved_at,
         data_as_of=data_as_of,
         attribution=SEC_COMPANY_FACTS_ATTRIBUTION,
+        taxonomy_namespaces=namespaces,
+        concept_mappings=concept_mappings,
     )
 
 

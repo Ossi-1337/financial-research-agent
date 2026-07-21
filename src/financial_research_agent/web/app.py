@@ -108,6 +108,7 @@ from financial_research_agent.report_exports import (
     ReportExportService,
     ReportExportSnapshot,
     ReportExportStore,
+    build_report_evidence_index,
 )
 from financial_research_agent.reports import (
     CitedResearchRun,
@@ -127,6 +128,13 @@ from financial_research_agent.retrieval import (
     search_index,
 )
 from financial_research_agent.runtime_settings import RuntimeSettingsOverrides, RuntimeSettingsStore
+from financial_research_agent.scenarios import (
+    ScenarioError,
+    ScenarioErrorCode,
+    ScenarioExecutionStatus,
+    ScenarioRunner,
+    create_default_scenario_catalog,
+)
 from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.statements import (
     FinancialStatementCompany,
@@ -262,9 +270,16 @@ class OrchestratorResearchRequest(BaseModel):
     fiscal_years: int = Field(default=3, ge=1, le=10)
     filing_forms: tuple[str, ...] = ("10-K", "10-Q")
     filing_limit: int = Field(default=1, ge=1, le=5)
+    filing_form_limits: dict[str, int] = Field(default_factory=dict)
     market_outputsize: str = Field(default="compact", pattern="^(compact|full)$")
     benchmark_symbol: str | None = Field(default=None, min_length=1, max_length=32)
     context_source_items: tuple[ContextSourceItemRequest, ...] = ()
+
+
+class ScenarioRunRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=200)
+    refresh: bool = True
+    with_local_qa: bool = False
 
 
 class RuntimeSettingsRequest(BaseModel):
@@ -366,6 +381,7 @@ def create_app(
         store=report_exports,
         redaction_policy=RedactionPolicy.from_settings(app_settings),
     )
+    scenario_catalog = create_default_scenario_catalog()
     runtime_settings = runtime_settings_store or persistence.runtime_settings
     embeddings_cache = embedding_cache or LocalEmbeddingCache.from_settings(app_settings)
     background_research = background_runner or BackgroundResearchRunner(
@@ -423,6 +439,7 @@ def create_app(
     app.state.stock_price_agent = stock_price_agent
     app.state.context_agent = context_agent
     app.state.orchestrator = orchestrator
+    app.state.scenario_catalog = scenario_catalog
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -902,6 +919,71 @@ def create_app(
         job = await background_research.submit(research_input, run=orchestrator.run)
         return _background_job_payload(job, orchestrator_runs)
 
+    @app.post("/api/scenarios/{scenario_id}/runs", status_code=202)
+    async def enqueue_scenario_run(
+        scenario_id: str,
+        request: ScenarioRunRequest,
+    ) -> dict[str, Any]:
+        if sessions.get(request.session_id) is None:
+            raise HTTPException(status_code=404, detail={"error": "session_not_found"})
+        settings_for_request = current_settings()
+        selection = settings_for_request.provider.selection_for_task(ProviderTask.CHAT)
+        runner = ScenarioRunner(
+            settings=settings_for_request,
+            catalog=scenario_catalog,
+            orchestrator=orchestrator,
+            export_service=report_export_service,
+            chat_provider=(
+                current_registry().chat_provider(selection.provider)
+                if request.with_local_qa
+                and current_registry().has_chat_provider(selection.provider)
+                else None
+            ),
+            chat_model=selection.model,
+        )
+        try:
+            research_input = runner.prepare(scenario_id, refresh=request.refresh)
+            scenario = scenario_catalog.get(scenario_id)
+        except ScenarioError as exc:
+            raise HTTPException(
+                status_code=_status_for_scenario_error(exc.code),
+                detail=exc.to_dict(),
+            ) from exc
+
+        async def run_and_append(
+            input_request: OrchestratorResearchInput,
+        ) -> OrchestratedResearchRun:
+            run = await orchestrator.run(input_request)
+            result = await runner.finalize(
+                run,
+                scenario=scenario,
+                with_local_qa=request.with_local_qa,
+            )
+            report = _synthesis_report_from_run(run)
+            content = _synthesis_message_content(run, report)
+            if result.status == ScenarioExecutionStatus.FAILED:
+                content = f"Scenario validation found missing acceptance data.\n\n{content}"
+            sessions.append_exchange(
+                session_id=request.session_id,
+                user_content=f"/scenario {scenario.id}",
+                assistant_content=content,
+                provider="orchestrator",
+                model=run.execution_policy.value,
+                research_run_id=run.id,
+                synthesis_report=report,
+            )
+            return run
+
+        job = await background_research.submit(
+            research_input,
+            run=run_and_append,
+            metadata={"session_id": request.session_id, "scenario_id": scenario.id},
+        )
+        return {
+            **_background_job_payload(job, orchestrator_runs),
+            "scenario": scenario.to_dict(),
+        }
+
     @app.get("/api/background/research-runs")
     async def list_background_research_runs() -> dict[str, Any]:
         return {
@@ -1018,6 +1100,15 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail={"error": "orchestrator_run_not_found"})
         return {"run": run.to_dict(), "synthesis_report": _synthesis_report_from_run(run)}
+
+    @app.get("/api/orchestrator/runs/{run_id}/evidence")
+    def get_orchestrator_run_evidence(run_id: str) -> dict[str, Any]:
+        run = _orchestrator_run_or_404(orchestrator_runs, run_id)
+        evidence = build_report_evidence_index(
+            run,
+            redaction_policy=RedactionPolicy.from_settings(current_settings()),
+        )
+        return {"evidence": evidence.to_dict()}
 
     @app.post("/api/orchestrator/runs/{run_id}/exports", status_code=201)
     def create_report_export(run_id: str) -> dict[str, Any]:
@@ -1705,6 +1796,7 @@ def _orchestrator_input(request: OrchestratorResearchRequest) -> OrchestratorRes
         fiscal_years=request.fiscal_years,
         filing_forms=request.filing_forms,
         filing_limit=request.filing_limit,
+        filing_form_limits=request.filing_form_limits,
         market_outputsize=request.market_outputsize,
         benchmark_symbol=request.benchmark_symbol,
         context_source_items=tuple(
@@ -2082,6 +2174,17 @@ def _status_for_retrieval_error(code: RetrievalErrorCode) -> int:
         return 404
     if code == RetrievalErrorCode.VECTOR_DIMENSION_MISMATCH:
         return 400
+    return 503
+
+
+def _status_for_scenario_error(code: ScenarioErrorCode) -> int:
+    if code == ScenarioErrorCode.UNKNOWN_SCENARIO:
+        return 404
+    if code in {
+        ScenarioErrorCode.MISSING_MARKET_DATA_CREDENTIALS,
+        ScenarioErrorCode.INVALID_SEC_USER_AGENT,
+    }:
+        return 409
     return 503
 
 

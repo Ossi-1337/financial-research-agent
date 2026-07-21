@@ -598,6 +598,9 @@ class _EvidenceBuilder:
             "line_item": key,
             "currency": statement.currency,
         }
+        concept = statement.source.concept_mappings.get(key)
+        if concept:
+            metadata["taxonomy_concept"] = concept
         citation = Citation(
             id=citation_id,
             evidence_id=evidence_id,

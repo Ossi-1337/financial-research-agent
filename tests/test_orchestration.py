@@ -216,6 +216,48 @@ def test_orchestrator_marks_refresh_disabled_steps_as_skipped(tmp_path: Path) ->
     assert run_store.get(run.id) is not None
 
 
+def test_orchestrator_refreshes_benchmark_and_uses_per_form_filing_limits(
+    tmp_path: Path,
+) -> None:
+    market_provider = RecordingMarketDataProvider()
+    filing_provider = RecordingFilingProvider()
+    orchestrator = _orchestrator(
+        market_data_provider=market_provider,
+        filing_provider=filing_provider,
+        run_store=OrchestratorRunStore(storage_path=tmp_path / "orchestrator_runs.json"),
+    )
+
+    run = asyncio.run(
+        orchestrator.run(
+            OrchestratorResearchInput(
+                query="TEST FIXTURE benchmark and filings",
+                benchmark_symbol="SPY",
+                filing_forms=("20-F", "6-K"),
+                filing_form_limits={"20-F": 1, "6-K": 1},
+                scenario_id="novo-nordisk",
+                scenario_version="1.0.0",
+                context_source_items=_context_sources(),
+            )
+        )
+    )
+    market_handoff = next(
+        item for item in run.handoffs if item.kind == OrchestratorStepKind.MARKET_DATA_REFRESH
+    )
+    filing_handoff = next(
+        item for item in run.handoffs if item.kind == OrchestratorStepKind.FILING_REFRESH
+    )
+
+    assert market_provider.calls == [("AAPL", "compact"), ("SPY", "compact")]
+    assert "benchmark_history" in market_handoff.output
+    assert filing_provider.calls == [("20-F", 1), ("6-K", 1)]
+    assert [item["form_type"] for item in filing_handoff.output["filings"]["filings"]] == [
+        "20-F",
+        "6-K",
+    ]
+    assert run.scenario_id == "novo-nordisk"
+    assert run.scenario_version == "1.0.0"
+
+
 def test_orchestrator_no_company_match_stores_inspectable_failed_run(tmp_path: Path) -> None:
     run_store = OrchestratorRunStore(storage_path=tmp_path / "orchestrator_runs.json")
     orchestrator = _orchestrator(
@@ -382,6 +424,20 @@ class FakeMarketDataProvider:
 
     async def fetch_quote(self, security: MarketSecurity):
         raise NotImplementedError
+
+
+class RecordingMarketDataProvider(FakeMarketDataProvider):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def fetch_daily_prices(
+        self,
+        security: MarketSecurity,
+        *,
+        outputsize: str = "compact",
+    ) -> HistoricalPriceResult:
+        self.calls.append((security.symbol, outputsize))
+        return await super().fetch_daily_prices(security, outputsize=outputsize)
 
 
 class FailingMarketDataProvider:
@@ -565,10 +621,26 @@ class FailingFilingProvider(FakeFilingProvider):
         )
 
 
+class RecordingFilingProvider(FakeFilingProvider):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    async def ingest_latest(
+        self,
+        company: FilingCompany,
+        *,
+        forms: tuple[str, ...] = ("10-K", "10-Q"),
+        limit: int = 1,
+    ) -> FilingIngestionResult:
+        self.calls.append((forms[0], limit))
+        return await super().ingest_latest(company, forms=forms, limit=limit)
+
+
 def _orchestrator(
     *,
     company_search_provider=None,
     market_data_provider=None,
+    filing_provider=None,
     run_store: OrchestratorRunStore | None = None,
 ) -> ResearchOrchestrator:
     market_store = MarketDataStore()
@@ -580,7 +652,7 @@ def _orchestrator(
         market_data_store=market_store,
         financial_statement_provider=FakeFinancialStatementProvider(),
         financial_statement_store=statement_store,
-        filing_provider=FakeFilingProvider(),
+        filing_provider=filing_provider or FakeFilingProvider(),
         filing_store=filing_store,
         financial_report_agent=FinancialReportAnalysisAgent(
             statement_store=statement_store,

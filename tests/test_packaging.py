@@ -15,6 +15,11 @@ def test_required_runtime_resources_are_packaged() -> None:
     assert assets.joinpath("NotoSans-Regular.ttf").is_file()
     assert assets.joinpath("NotoSans-Bold.ttf").is_file()
     assert assets.joinpath("OFL.txt").is_file()
+    assert (
+        files("financial_research_agent.scenarios")
+        .joinpath("data/novo_nordisk_context.v1.json")
+        .is_file()
+    )
 
 
 def test_runtime_docker_stage_contains_only_installed_package() -> None:

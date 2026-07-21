@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -242,3 +243,52 @@ def test_eval_command_runs_default_offline_harness(capsys) -> None:
     assert payload["status"] == "passed"
     assert payload["case_count"] == 3
     assert payload["failed_count"] == 0
+
+
+def test_scenario_run_command_wires_profile_refresh_and_optional_qa(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    import financial_research_agent.scenarios as scenarios_module
+    import financial_research_agent.web as web_module
+
+    calls = {}
+
+    class FakeScenarioResult:
+        status = scenarios_module.ScenarioExecutionStatus.COMPLETE
+
+        def to_dict(self):
+            return {"scenario": {"id": "novo-nordisk"}, "status": "complete"}
+
+    class FakeScenarioRunner:
+        def __init__(self, **kwargs):
+            calls["init"] = kwargs
+
+        async def run(self, scenario_id, *, refresh, with_local_qa):
+            calls["run"] = (scenario_id, refresh, with_local_qa)
+            return FakeScenarioResult()
+
+    fake_app = SimpleNamespace(
+        state=SimpleNamespace(
+            scenario_catalog=object(),
+            orchestrator=object(),
+            report_export_service=object(),
+            provider_registry=SimpleNamespace(
+                chat_provider=lambda _provider: object(),
+                has_chat_provider=lambda _provider: True,
+            ),
+        )
+    )
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+    monkeypatch.setattr(web_module, "create_app", lambda **_kwargs: fake_app)
+    monkeypatch.setattr(scenarios_module, "ScenarioRunner", FakeScenarioRunner)
+
+    exit_code = main(
+        ["scenario-run", "novo-nordisk", "--no-refresh", "--with-local-qa", "--pretty"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert calls["run"] == ("novo-nordisk", False, True)
+    assert payload == {"scenario": {"id": "novo-nordisk"}, "status": "complete"}

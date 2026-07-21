@@ -23,15 +23,23 @@ from financial_research_agent.entities.contracts import (
     SourceMetadata,
 )
 
-SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 SEC_PROVIDER = "sec_company_tickers"
 SEC_PROVIDER_STATUS = "official"
 SEC_ATTRIBUTION = "U.S. Securities and Exchange Commission company tickers"
-SEC_CACHE_VERSION = 1
+SEC_CACHE_VERSION = 2
 SEC_COVERAGE_WARNING = (
-    "SEC company_tickers.json covers SEC filer ticker mappings and does not include exchange, "
-    "currency, country, or ISIN. Confirm identifiers with OpenFIGI or exchange metadata later."
+    "SEC company_tickers_exchange.json covers SEC filer ticker and exchange mappings but does "
+    "not include currency, country, or ISIN. Confirm unsupported identifiers with an official "
+    "identifier source."
 )
+
+_EXCHANGE_MICS = {
+    "NASDAQ": "XNAS",
+    "NYSE": "XNYS",
+    "NYSE ARCA": "ARCX",
+    "NYSE AMERICAN": "XASE",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,19 +47,26 @@ class SECCompanyTickerRecord:
     cik: int
     ticker: str
     title: str
+    exchange: str | None = None
 
     def __post_init__(self) -> None:
         if self.cik <= 0:
             raise ValueError("cik must be positive")
         object.__setattr__(self, "ticker", _require_text("ticker", self.ticker).upper())
         object.__setattr__(self, "title", _require_text("title", self.title))
+        object.__setattr__(self, "exchange", _optional_text(self.exchange))
 
     @property
     def padded_cik(self) -> str:
         return f"{self.cik:010d}"
 
     def to_dict(self) -> dict[str, object]:
-        return {"cik": self.cik, "ticker": self.ticker, "title": self.title}
+        return {
+            "cik": self.cik,
+            "ticker": self.ticker,
+            "title": self.title,
+            "exchange": self.exchange,
+        }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> SECCompanyTickerRecord:
@@ -60,6 +75,7 @@ class SECCompanyTickerRecord:
                 cik=int(payload["cik"]),
                 ticker=str(payload["ticker"]),
                 title=str(payload["title"]),
+                exchange=(str(payload["exchange"]) if payload.get("exchange") else None),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("Invalid cached SEC ticker record") from exc
@@ -94,16 +110,25 @@ class SECCompanyTickerProvider:
                 provider=SEC_PROVIDER,
             )
         records, source, warnings = await self._records()
-        scored = [
-            (score, reason, record)
-            for record in records
-            for score, reason in [_score_record(text, record)]
-            if score > 0
-        ]
-        scored.sort(key=lambda item: (-item[0], item[2].title, item[2].ticker))
+        scored = []
+        for group in _group_records_by_cik(records):
+            matches = tuple((_score_record(text, record), record) for record in group)
+            (score, reason), _record = max(
+                matches,
+                key=lambda item: (item[0][0], -_security_sort_key(text, item[1])[0]),
+            )
+            if score > 0:
+                scored.append((score, reason, group))
+        scored.sort(key=lambda item: (-item[0], item[2][0].title, item[2][0].cik))
         candidates = tuple(
-            _candidate_from_record(record, score=score, match_reason=reason, source=source)
-            for score, reason, record in scored[:limit]
+            _candidate_from_records(
+                group,
+                query=text,
+                score=score,
+                match_reason=reason,
+                source=source,
+            )
+            for score, reason, group in scored[:limit]
         )
         status = (
             CompanySearchStatus.REVIEW_REQUIRED if candidates else CompanySearchStatus.NO_MATCHES
@@ -276,6 +301,10 @@ def _parse_sec_payload(payload: Any) -> tuple[SECCompanyTickerRecord, ...]:
             message="SEC company ticker payload must be an object.",
             provider=SEC_PROVIDER,
         )
+    fields = payload.get("fields")
+    data = payload.get("data")
+    if isinstance(fields, list) and isinstance(data, list):
+        return _parse_exchange_rows(fields, data)
     records: list[SECCompanyTickerRecord] = []
     for value in payload.values():
         if not isinstance(value, Mapping):
@@ -290,6 +319,7 @@ def _parse_sec_payload(payload: Any) -> tuple[SECCompanyTickerRecord, ...]:
                     cik=int(value["cik_str"]),
                     ticker=str(value["ticker"]),
                     title=str(value["title"]),
+                    exchange=(str(value["exchange"]) if value.get("exchange") else None),
                 )
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -301,40 +331,102 @@ def _parse_sec_payload(payload: Any) -> tuple[SECCompanyTickerRecord, ...]:
     return tuple(records)
 
 
-def _candidate_from_record(
-    record: SECCompanyTickerRecord,
+def _parse_exchange_rows(fields: list[Any], rows: list[Any]) -> tuple[SECCompanyTickerRecord, ...]:
+    normalized_fields = tuple(str(field).strip().lower() for field in fields)
+    required = {"cik", "name", "ticker", "exchange"}
+    if not required.issubset(normalized_fields):
+        raise CompanySearchError(
+            code=CompanySearchErrorCode.MALFORMED_RESPONSE,
+            message="SEC company ticker exchange payload is missing required fields.",
+            provider=SEC_PROVIDER,
+        )
+    records: list[SECCompanyTickerRecord] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) != len(normalized_fields):
+            raise CompanySearchError(
+                code=CompanySearchErrorCode.MALFORMED_RESPONSE,
+                message="SEC company ticker exchange payload contains an invalid row.",
+                provider=SEC_PROVIDER,
+            )
+        value = dict(zip(normalized_fields, row, strict=True))
+        try:
+            records.append(
+                SECCompanyTickerRecord(
+                    cik=int(value["cik"]),
+                    ticker=str(value["ticker"]),
+                    title=str(value["name"]),
+                    exchange=(str(value["exchange"]) if value.get("exchange") else None),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise CompanySearchError(
+                code=CompanySearchErrorCode.MALFORMED_RESPONSE,
+                message="SEC company ticker exchange payload contains an invalid record.",
+                provider=SEC_PROVIDER,
+            ) from exc
+    return tuple(records)
+
+
+def _group_records_by_cik(
+    records: tuple[SECCompanyTickerRecord, ...],
+) -> tuple[tuple[SECCompanyTickerRecord, ...], ...]:
+    grouped: dict[int, list[SECCompanyTickerRecord]] = {}
+    for record in records:
+        grouped.setdefault(record.cik, []).append(record)
+    return tuple(tuple(group) for group in grouped.values())
+
+
+def _candidate_from_records(
+    records: tuple[SECCompanyTickerRecord, ...],
     *,
+    query: str,
     score: float,
     match_reason: str,
     source: SourceMetadata,
 ) -> CompanySearchCandidate:
+    record = records[0]
     cik_identifier = EntityIdentifier(
         identifier_type=EntityIdentifierType.CIK,
         value=record.padded_cik,
         source=SEC_PROVIDER,
     )
-    ticker_identifier = EntityIdentifier(
-        identifier_type=EntityIdentifierType.TICKER,
-        value=record.ticker,
-        source=SEC_PROVIDER,
+    ticker_identifiers = tuple(
+        EntityIdentifier(
+            identifier_type=EntityIdentifierType.TICKER,
+            value=item.ticker,
+            source=SEC_PROVIDER,
+        )
+        for item in records
     )
     company_id = f"sec:cik:{record.padded_cik}"
     company = ResolvedCompany(
         id=company_id,
         legal_name=record.title,
         display_name=record.title,
-        identifiers=(cik_identifier, ticker_identifier),
+        identifiers=(cik_identifier, *ticker_identifiers),
     )
-    security = ResolvedSecurity(
-        id=f"sec:ticker:{record.ticker}:cik:{record.padded_cik}",
-        company_id=company_id,
-        ticker=record.ticker,
-        name=record.title,
-        identifiers=(ticker_identifier, cik_identifier),
+    securities = tuple(
+        ResolvedSecurity(
+            id=f"sec:ticker:{item.ticker}:cik:{item.padded_cik}",
+            company_id=company_id,
+            ticker=item.ticker,
+            name=item.title,
+            exchange_mic=_exchange_mic(item.exchange),
+            exchange_name=item.exchange,
+            identifiers=(
+                EntityIdentifier(
+                    identifier_type=EntityIdentifierType.TICKER,
+                    value=item.ticker,
+                    source=SEC_PROVIDER,
+                ),
+                cik_identifier,
+            ),
+        )
+        for item in sorted(records, key=lambda item: _security_sort_key(query, item))
     )
     return CompanySearchCandidate(
         company=company,
-        securities=(security,),
+        securities=securities,
         score=score,
         match_reason=match_reason,
         source=source,
@@ -363,6 +455,18 @@ def _score_record(query: str, record: SECCompanyTickerRecord) -> tuple[float, st
     return 0.0, "no_match"
 
 
+def _security_sort_key(query: str, record: SECCompanyTickerRecord) -> tuple[int, int, str]:
+    exact_ticker = query.strip().upper() == record.ticker
+    is_otc = (record.exchange or "").strip().upper() == "OTC"
+    return (0 if exact_ticker else 1, 1 if is_otc or record.exchange is None else 0, record.ticker)
+
+
+def _exchange_mic(exchange: str | None) -> str | None:
+    if exchange is None:
+        return None
+    return _EXCHANGE_MICS.get(exchange.strip().upper())
+
+
 def _normalize(value: str) -> str:
     text = re.sub(r"[^a-z0-9]+", " ", value.casefold())
     return " ".join(text.split())
@@ -386,3 +490,10 @@ def _require_text(name: str, value: str) -> str:
     if text == "":
         raise ValueError(f"{name} is required")
     return text
+
+
+def _optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None

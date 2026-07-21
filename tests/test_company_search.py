@@ -25,6 +25,15 @@ SEC_FIXTURE = {
     "2": {"cik_str": 1000045, "ticker": "NVOX", "title": "NOVO INTEGRATED SCIENCES INC"},
 }
 
+SEC_EXCHANGE_FIXTURE = {
+    "fields": ["cik", "name", "ticker", "exchange"],
+    "data": [
+        [353278, "NOVO NORDISK A S", "NVO", "NYSE"],
+        [353278, "NOVO NORDISK A S", "NONOF", "OTC"],
+        [789019, "MICROSOFT CORP", "MSFT", "Nasdaq"],
+    ],
+}
+
 
 def test_company_entity_contracts_are_immutable_and_json_ready() -> None:
     retrieved_at = datetime(2026, 7, 4, tzinfo=UTC)
@@ -82,7 +91,7 @@ def test_sec_company_search_returns_reviewable_novo_candidates(tmp_path) -> None
     assert result.source.provider == "sec_company_tickers"
     assert result.source.provider_status == "official"
     assert result.source.retrieved_at == datetime(2026, 7, 4, tzinfo=UTC)
-    assert "SEC company_tickers.json covers SEC filer ticker mappings" in result.warnings[0]
+    assert "SEC company_tickers_exchange.json covers SEC filer ticker" in result.warnings[0]
     assert result.candidates[0].company.legal_name == "NOVO NORDISK A S"
     assert result.candidates[0].securities[0].ticker == "NVO"
     assert result.candidates[0].securities[0].isin is None
@@ -99,6 +108,35 @@ def test_sec_company_search_supports_ticker_match(tmp_path) -> None:
 
     assert result.candidates[0].match_reason == "ticker_exact"
     assert result.candidates[0].score == 100.0
+
+
+def test_sec_company_search_groups_cik_and_prefers_listed_security(tmp_path) -> None:
+    provider = SECCompanyTickerProvider(
+        cache_path=tmp_path / "sec_company_tickers.json",
+        user_agent="financial-research-agent-test/0.1",
+        http_client=_client_with_json(SEC_EXCHANGE_FIXTURE),
+    )
+
+    result = asyncio.run(provider.search("Novo Nordisk"))
+    candidate = result.candidates[0]
+
+    assert [security.ticker for security in candidate.securities] == ["NVO", "NONOF"]
+    assert candidate.securities[0].exchange_name == "NYSE"
+    assert candidate.securities[0].exchange_mic == "XNYS"
+    assert len(result.candidates) == 1
+
+
+def test_sec_company_search_honors_explicit_otc_ticker_query(tmp_path) -> None:
+    provider = SECCompanyTickerProvider(
+        cache_path=tmp_path / "sec_company_tickers.json",
+        user_agent="financial-research-agent-test/0.1",
+        http_client=_client_with_json(SEC_EXCHANGE_FIXTURE),
+    )
+
+    result = asyncio.run(provider.search("NONOF"))
+
+    assert result.candidates[0].securities[0].ticker == "NONOF"
+    assert result.candidates[0].match_reason == "ticker_exact"
 
 
 def test_sec_company_search_uses_fresh_cache_without_network(tmp_path) -> None:

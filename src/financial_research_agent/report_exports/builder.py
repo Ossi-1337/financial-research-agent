@@ -10,6 +10,7 @@ from financial_research_agent.orchestration import OrchestratedResearchRun, Orch
 
 from .contracts import (
     MAX_SOURCE_QUOTE_CHARS,
+    ReportEvidenceIndex,
     ReportExportDocument,
     ReportExportPoint,
     ReportExportScenario,
@@ -50,17 +51,10 @@ def build_report_export_document(
     if report is None:
         return None
 
-    candidates = _source_candidates(payload)
-    report_evidence_ids = _report_evidence_ids(report)
-    known_evidence_ids = {
-        evidence_id for candidate in candidates for evidence_id in candidate.evidence_ids
-    }
-    candidates.extend(
-        _SourceCandidate(evidence_ids=[evidence_id], source_url=None)
-        for evidence_id in report_evidence_ids
-        if evidence_id not in known_evidence_ids
-    )
-    sources, evidence_markers, handoff_markers = _finalize_sources(candidates)
+    evidence_index = _evidence_index_from_payload(payload, report)
+    sources = evidence_index.sources
+    evidence_markers = evidence_index.evidence_markers
+    handoff_markers = evidence_index.handoff_markers
 
     sections = _mapping(report.get("sections"))
     scenarios = _mapping(report.get("scenarios"))
@@ -120,6 +114,43 @@ def build_report_export_document(
             "This report is research only and is not financial advice.",
         ),
         sources=sources,
+    )
+
+
+def build_report_evidence_index(
+    run: OrchestratedResearchRun,
+    *,
+    redaction_policy: RedactionPolicy,
+) -> ReportEvidenceIndex:
+    payload = _redacted_run_payload(run, redaction_policy)
+    return _evidence_index_from_payload(payload, _synthesis_report(payload))
+
+
+def _evidence_index_from_payload(
+    payload: Mapping[str, Any],
+    report: Mapping[str, Any] | None,
+) -> ReportEvidenceIndex:
+    candidates = _source_candidates(payload)
+    report_evidence_ids = _report_evidence_ids(report or {})
+    known_evidence_ids = {
+        evidence_id for candidate in candidates for evidence_id in candidate.evidence_ids
+    }
+    candidates.extend(
+        _SourceCandidate(evidence_ids=[evidence_id], source_url=None)
+        for evidence_id in report_evidence_ids
+        if evidence_id not in known_evidence_ids
+    )
+    sources, evidence_markers, handoff_markers = _finalize_sources(candidates)
+    return ReportEvidenceIndex(
+        sources=sources,
+        unresolved_evidence_ids=tuple(
+            evidence_id
+            for source in sources
+            if not source.resolved
+            for evidence_id in source.evidence_ids
+        ),
+        evidence_markers=evidence_markers,
+        handoff_markers=handoff_markers,
     )
 
 

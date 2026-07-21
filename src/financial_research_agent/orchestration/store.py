@@ -106,6 +106,8 @@ def orchestrated_research_run_from_dict(payload: Any) -> OrchestratedResearchRun
         warnings=tuple(str(item) for item in payload.get("warnings", ())),
         limitations=tuple(str(item) for item in payload.get("limitations", ())),
         no_recommendation_notice=str(payload["no_recommendation_notice"]),
+        scenario_id=_optional_payload_text(payload, "scenario_id"),
+        scenario_version=_optional_payload_text(payload, "scenario_version"),
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -23,6 +23,7 @@ from financial_research_agent.entities import (
 from financial_research_agent.filings import (
     FilingCompany,
     FilingError,
+    FilingIngestionResult,
     FilingProvider,
     FilingStore,
 )
@@ -111,6 +112,8 @@ class ResearchOrchestrator:
                 "Execution policy is sequential_local_safe to avoid overloading local model "
                 "and provider resources.",
             ),
+            scenario_id=request.scenario_id,
+            scenario_version=request.scenario_version,
         )
         run = self._save(run)
 
@@ -261,9 +264,19 @@ class ResearchOrchestrator:
             )
 
         handoffs = [
-            await self._refresh_market_data(security, request.market_outputsize),
+            await self._refresh_market_data(
+                security,
+                request.market_outputsize,
+                request.benchmark_symbol,
+            ),
             await self._refresh_financial_statements(candidate, cik, request.fiscal_years),
-            await self._refresh_filings(candidate, cik, request.filing_forms, request.filing_limit),
+            await self._refresh_filings(
+                candidate,
+                cik,
+                request.filing_forms,
+                request.filing_limit,
+                request.filing_form_limits,
+            ),
         ]
         return tuple(handoffs)
 
@@ -271,6 +284,7 @@ class ResearchOrchestrator:
         self,
         security: ResolvedSecurity,
         outputsize: str,
+        benchmark_symbol: str | None,
     ) -> AgentHandoff:
         started_at = _aware_now(self._now())
         market_security = MarketSecurity(
@@ -296,16 +310,49 @@ class ResearchOrchestrator:
                 error_code=exc.code.value,
                 error_message=exc.message,
             )
+        output: dict[str, object] = {"history": stored.to_dict()}
+        warnings = list(stored.warnings)
+        limitations: list[str] = []
+        status = OrchestratorHandoffStatus.SUCCEEDED
+        error_code = None
+        error_message = None
+        if benchmark_symbol is not None and benchmark_symbol != market_security.symbol:
+            benchmark_security = MarketSecurity(
+                symbol=benchmark_symbol,
+                security_id=f"benchmark:{benchmark_symbol}",
+            )
+            try:
+                benchmark = await self._market_data_provider.fetch_daily_prices(
+                    benchmark_security,
+                    outputsize=outputsize,
+                )
+                stored_benchmark = self._market_data_store.save_history(benchmark)
+                output["benchmark_history"] = stored_benchmark.to_dict()
+                warnings.extend(stored_benchmark.warnings)
+            except MarketDataError as exc:
+                status = OrchestratorHandoffStatus.PARTIAL
+                error_code = exc.code.value
+                error_message = exc.message
+                limitations.append(
+                    f"Benchmark {benchmark_symbol} could not be refreshed: {exc.message}"
+                )
         return _handoff(
             kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
             step_id="refresh_market_data",
-            status=OrchestratorHandoffStatus.SUCCEEDED,
+            status=status,
             started_at=started_at,
             completed_at=_aware_now(self._now()),
-            input_summary={"symbol": market_security.symbol, "outputsize": outputsize},
-            output={"history": stored.to_dict()},
-            warnings=stored.warnings,
+            input_summary={
+                "symbol": market_security.symbol,
+                "outputsize": outputsize,
+                **({"benchmark_symbol": benchmark_symbol} if benchmark_symbol else {}),
+            },
+            output=output,
+            warnings=tuple(dict.fromkeys(warnings)),
+            limitations=tuple(limitations),
             confidence=HandoffConfidence.HIGH,
+            error_code=error_code,
+            error_message=error_message,
         )
 
     async def _refresh_financial_statements(
@@ -361,6 +408,7 @@ class ResearchOrchestrator:
         cik: str | None,
         forms: tuple[str, ...],
         limit: int,
+        form_limits: Mapping[str, int],
     ) -> AgentHandoff:
         if cik is None:
             return _skipped_handoff(
@@ -376,10 +424,11 @@ class ResearchOrchestrator:
             legal_name=candidate.company.legal_name,
         )
         try:
-            result = await self._filing_provider.ingest_latest(
+            result, partial_errors = await self._ingest_filings(
                 company,
                 forms=forms,
                 limit=limit,
+                form_limits=form_limits,
             )
             stored = self._filing_store.save_result(result)
         except FilingError as exc:
@@ -388,20 +437,79 @@ class ResearchOrchestrator:
                 step_id="refresh_filings",
                 started_at=started_at,
                 completed_at=_aware_now(self._now()),
-                input_summary={"cik": cik, "forms": ",".join(forms), "limit": str(limit)},
+                input_summary={
+                    "cik": cik,
+                    "forms": ",".join(forms),
+                    "limit": str(limit),
+                    **({"form_limits": _format_form_limits(form_limits)} if form_limits else {}),
+                },
                 error_code=exc.code.value,
                 error_message=exc.message,
             )
         return _handoff(
             kind=OrchestratorStepKind.FILING_REFRESH,
             step_id="refresh_filings",
-            status=OrchestratorHandoffStatus.SUCCEEDED,
+            status=(
+                OrchestratorHandoffStatus.PARTIAL
+                if partial_errors
+                else OrchestratorHandoffStatus.SUCCEEDED
+            ),
             started_at=started_at,
             completed_at=_aware_now(self._now()),
-            input_summary={"cik": cik, "forms": ",".join(forms), "limit": str(limit)},
+            input_summary={
+                "cik": cik,
+                "forms": ",".join(forms),
+                "limit": str(limit),
+                **({"form_limits": _format_form_limits(form_limits)} if form_limits else {}),
+            },
             output={"filings": stored.to_dict()},
             warnings=stored.warnings,
+            limitations=partial_errors,
             confidence=HandoffConfidence.HIGH,
+        )
+
+    async def _ingest_filings(
+        self,
+        company: FilingCompany,
+        *,
+        forms: tuple[str, ...],
+        limit: int,
+        form_limits: Mapping[str, int],
+    ) -> tuple[FilingIngestionResult, tuple[str, ...]]:
+        if not form_limits:
+            return (
+                await self._filing_provider.ingest_latest(company, forms=forms, limit=limit),
+                (),
+            )
+        results: list[FilingIngestionResult] = []
+        errors: list[str] = []
+        last_error: FilingError | None = None
+        for form, form_limit in form_limits.items():
+            try:
+                results.append(
+                    await self._filing_provider.ingest_latest(
+                        company,
+                        forms=(form,),
+                        limit=form_limit,
+                    )
+                )
+            except FilingError as exc:
+                last_error = exc
+                errors.append(f"{form} ingestion failed: {exc.message}")
+        if not results:
+            assert last_error is not None
+            raise last_error
+        return (
+            FilingIngestionResult(
+                company=company,
+                filings=tuple(filing for result in results for filing in result.filings),
+                chunks=tuple(chunk for result in results for chunk in result.chunks),
+                source=results[0].source,
+                warnings=tuple(
+                    dict.fromkeys(warning for result in results for warning in result.warnings)
+                ),
+            ),
+            tuple(errors),
         )
 
     def _run_specialists(
@@ -732,6 +840,10 @@ def _candidate_identifier(
             if identifier.identifier_type == identifier_type:
                 return identifier.value
     return None
+
+
+def _format_form_limits(values: Mapping[str, int]) -> str:
+    return ",".join(f"{form}:{limit}" for form, limit in values.items())
 
 
 def _report_handoff_status(

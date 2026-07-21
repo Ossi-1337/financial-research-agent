@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -101,6 +101,8 @@ class FinancialStatementSource:
     attribution: str
     data_as_of: date | None = None
     freshness_warning: str | None = None
+    taxonomy_namespaces: tuple[str, ...] = ()
+    concept_mappings: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider", _require_text("provider", self.provider))
@@ -113,6 +115,16 @@ class FinancialStatementSource:
         object.__setattr__(self, "retrieved_at", _aware_datetime("retrieved_at", self.retrieved_at))
         object.__setattr__(self, "attribution", _require_text("attribution", self.attribution))
         object.__setattr__(self, "freshness_warning", _optional_text(self.freshness_warning))
+        object.__setattr__(
+            self,
+            "taxonomy_namespaces",
+            _text_tuple("taxonomy_namespaces", self.taxonomy_namespaces),
+        )
+        object.__setattr__(
+            self,
+            "concept_mappings",
+            _text_mapping("concept_mappings", self.concept_mappings),
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -123,6 +135,8 @@ class FinancialStatementSource:
             "data_as_of": self.data_as_of.isoformat() if self.data_as_of is not None else None,
             "attribution": self.attribution,
             "freshness_warning": self.freshness_warning,
+            "taxonomy_namespaces": list(self.taxonomy_namespaces),
+            "concept_mappings": dict(self.concept_mappings),
         }
 
 
@@ -271,6 +285,17 @@ def _decimal_mapping(name: str, values: Mapping[str, object]) -> Mapping[str, De
     return MappingProxyType(
         {
             _require_text(f"{name}.key", key): _decimal(f"{name}[{key!r}]", value)
+            for key, value in values.items()
+        }
+    )
+
+
+def _text_mapping(name: str, values: Mapping[str, str]) -> Mapping[str, str]:
+    if not isinstance(values, Mapping):
+        raise ValueError(f"{name} must be a mapping")
+    return MappingProxyType(
+        {
+            _require_text(f"{name}.key", key): _require_text(f"{name}[{key!r}]", value)
             for key, value in values.items()
         }
     )

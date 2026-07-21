@@ -11,6 +11,8 @@ const state = {
   activeBackgroundJobId: null,
   tracesByRunId: {},
   exportsByRunId: {},
+  evidenceByRunId: {},
+  runsByRunId: {},
   settings: null,
 };
 
@@ -210,6 +212,13 @@ function renderSynthesisReport(container, message) {
 
   header.append(title, badges);
   wrapper.append(header);
+  if (report.created_at) {
+    const timestamp = document.createElement("time");
+    timestamp.className = "synthesis-timestamp";
+    timestamp.dateTime = report.created_at;
+    timestamp.textContent = `Generated ${new Date(report.created_at).toLocaleString()}`;
+    wrapper.append(timestamp);
+  }
   wrapper.append(renderReportExportControl(message.research_run_id));
 
   const notice = document.createElement("p");
@@ -226,7 +235,13 @@ function renderSynthesisReport(container, message) {
     "risks",
     "unknowns",
   ]) {
-    wrapper.append(renderSynthesisSection(titleFromKey(key), sections[key] || []));
+    wrapper.append(
+      renderSynthesisSection(
+        titleFromKey(key),
+        sections[key] || [],
+        message.research_run_id
+      )
+    );
   }
 
   const scenarios = report.scenarios || {};
@@ -235,9 +250,13 @@ function renderSynthesisReport(container, message) {
   const scenarioTitle = document.createElement("h3");
   scenarioTitle.textContent = "Scenarios";
   scenarioSection.append(scenarioTitle);
-  scenarioSection.append(renderScenario("Upside", scenarios.upside));
-  scenarioSection.append(renderScenario("Downside", scenarios.downside));
+  scenarioSection.append(renderScenario("Upside", scenarios.upside, message.research_run_id));
+  scenarioSection.append(
+    renderScenario("Downside", scenarios.downside, message.research_run_id)
+  );
   wrapper.append(scenarioSection);
+  wrapper.append(renderStockChart(message.research_run_id));
+  wrapper.append(renderRunEvidencePanel(message.research_run_id));
 
   container.append(wrapper);
 }
@@ -374,7 +393,7 @@ function renderTraceTimeline(trace) {
   return timeline;
 }
 
-function renderSynthesisSection(titleText, points) {
+function renderSynthesisSection(titleText, points, runId) {
   const section = document.createElement("section");
   section.className = "synthesis-section";
   const title = document.createElement("h3");
@@ -397,14 +416,14 @@ function renderSynthesisSection(titleText, points) {
     const summary = document.createElement("span");
     summary.textContent = ` ${point.summary || ""}`;
     item.append(heading, summary);
-    item.append(renderEvidenceMeta(point));
+    item.append(renderEvidenceMeta(point, runId));
     list.append(item);
   }
   section.append(list);
   return section;
 }
 
-function renderScenario(titleText, scenario) {
+function renderScenario(titleText, scenario, runId) {
   const item = document.createElement("div");
   item.className = "synthesis-scenario";
   const title = document.createElement("strong");
@@ -424,12 +443,12 @@ function renderScenario(titleText, scenario) {
     paragraph.textContent = text;
     item.append(paragraph);
   }
-  item.append(renderEvidenceMeta(scenario));
+  item.append(renderEvidenceMeta(scenario, runId));
   return item;
 }
 
-function renderEvidenceMeta(item) {
-  const meta = document.createElement("small");
+function renderEvidenceMeta(item, runId) {
+  const meta = document.createElement("div");
   meta.className = "synthesis-evidence-meta";
   const evidenceIds = item.evidence_ids || [];
   const handoffIds = item.source_handoff_ids || [];
@@ -437,14 +456,168 @@ function renderEvidenceMeta(item) {
   if (item.confidence) {
     parts.push(`confidence: ${item.confidence}`);
   }
-  if (evidenceIds.length) {
-    parts.push(`evidence: ${evidenceIds.join(", ")}`);
-  }
   if (handoffIds.length) {
     parts.push(`handoffs: ${handoffIds.length}`);
   }
-  meta.textContent = parts.join(" / ");
+  const label = document.createElement("small");
+  label.textContent = parts.join(" / ");
+  meta.append(label);
+  const evidence = state.evidenceByRunId[runId];
+  const markers = new Set();
+  for (const evidenceId of evidenceIds) {
+    for (const marker of evidence?.evidence_markers?.[evidenceId] || []) {
+      markers.add(marker);
+    }
+  }
+  for (const handoffId of handoffIds) {
+    for (const marker of evidence?.handoff_markers?.[handoffId] || []) {
+      markers.add(marker);
+    }
+  }
+  for (const marker of markers) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "source-marker-button";
+    button.textContent = marker;
+    button.addEventListener("click", () => {
+      document.querySelector(sourceElementSelector(runId, marker))?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+    meta.append(button);
+  }
   return meta;
+}
+
+function renderRunEvidencePanel(runId) {
+  const wrapper = document.createElement("details");
+  wrapper.className = "run-evidence-panel";
+  if (!runId || !state.evidenceByRunId[runId]) {
+    wrapper.hidden = true;
+    return wrapper;
+  }
+  const evidence = state.evidenceByRunId[runId];
+  const summary = document.createElement("summary");
+  summary.textContent = `Sources (${evidence.sources?.length || 0})`;
+  wrapper.append(summary);
+  const list = document.createElement("ol");
+  list.className = "run-evidence-list";
+  for (const source of evidence.sources || []) {
+    const item = document.createElement("li");
+    item.id = sourceElementId(runId, source.marker);
+    item.className = source.resolved ? "run-evidence-source" : "run-evidence-source unresolved";
+    const header = document.createElement("div");
+    header.className = "run-evidence-header";
+    const marker = document.createElement("strong");
+    marker.textContent = source.marker;
+    const safeUrl = safeExternalUrl(source.source_url);
+    const sourceName = document.createElement(safeUrl ? "a" : "span");
+    sourceName.textContent = source.source_name || "Unresolved source";
+    if (safeUrl) {
+      sourceName.href = safeUrl;
+      sourceName.target = "_blank";
+      sourceName.rel = "noreferrer";
+    }
+    header.append(marker, sourceName);
+    item.append(header);
+    const metadata = [source.source_date, source.retrieved_at, source.section]
+      .filter(Boolean)
+      .join(" / ");
+    if (metadata) {
+      const meta = document.createElement("small");
+      meta.textContent = metadata;
+      item.append(meta);
+    }
+    if (source.quote) {
+      const quote = document.createElement("p");
+      quote.textContent = source.quote;
+      item.append(quote);
+    }
+    const ids = document.createElement("small");
+    ids.textContent = `Evidence: ${(source.evidence_ids || []).join(", ")}`;
+    item.append(ids);
+    list.append(item);
+  }
+  wrapper.append(list);
+  return wrapper;
+}
+
+function renderStockChart(runId) {
+  const wrapper = document.createElement("section");
+  wrapper.className = "stock-chart";
+  const run = state.runsByRunId[runId];
+  const handoff = run?.handoffs?.find((item) => item.kind === "stock_price_analysis");
+  const series = handoff?.output?.analysis?.chart_series || [];
+  if (!series.length) {
+    wrapper.hidden = true;
+    return wrapper;
+  }
+  const title = document.createElement("h3");
+  title.textContent = "Indexed Price Development";
+  const note = document.createElement("small");
+  note.textContent = "Each series starts at 100. Historical data is not a forecast.";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 720 260");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Indexed historical price chart");
+  const normalized = series.map((item) => normalizeChartSeries(item)).filter(Boolean);
+  if (!normalized.length) {
+    wrapper.hidden = true;
+    return wrapper;
+  }
+  const values = normalized.flatMap((item) => item.values);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  normalized.forEach((item, index) => {
+    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    polyline.setAttribute("class", `stock-chart-line series-${index}`);
+    polyline.setAttribute("points", chartPoints(item.values, minValue, maxValue));
+    svg.append(polyline);
+  });
+  const legend = document.createElement("div");
+  legend.className = "stock-chart-legend";
+  normalized.forEach((item, index) => {
+    const label = document.createElement("span");
+    label.className = `series-${index}`;
+    label.textContent = `${item.symbol}: ${item.values.at(-1).toFixed(1)}`;
+    legend.append(label);
+  });
+  wrapper.append(title, note, svg, legend);
+  return wrapper;
+}
+
+function normalizeChartSeries(series) {
+  const points = (series.points || []).filter((point) => Number(point.adjusted_close || point.close));
+  if (!points.length) {
+    return null;
+  }
+  const base = Number(points[0].adjusted_close || points[0].close);
+  return {
+    symbol: series.symbol,
+    values: points.map((point) => (Number(point.adjusted_close || point.close) / base) * 100),
+  };
+}
+
+function chartPoints(values, minValue, maxValue) {
+  const width = 680;
+  const height = 210;
+  const range = Math.max(maxValue - minValue, 1);
+  return values
+    .map((value, index) => {
+      const x = 20 + (index / Math.max(values.length - 1, 1)) * width;
+      const y = 20 + ((maxValue - value) / range) * height;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function sourceElementId(runId, marker) {
+  return `source-${String(runId).replace(/[^a-zA-Z0-9_-]/g, "-")}-${marker.replace(/\D/g, "")}`;
+}
+
+function sourceElementSelector(runId, marker) {
+  return `#${sourceElementId(runId, marker)}`;
 }
 
 function renderMentionChip(mention) {
@@ -993,6 +1166,7 @@ async function openSession(sessionId, allowBusy = false) {
     state.sessionId = payload.session.id;
     state.messages = payload.session.messages;
     sessionLabel.textContent = payload.session.id;
+    await loadRunArtifactsForMessages();
     await loadSessions();
     renderMessages();
   } catch (error) {
@@ -1153,6 +1327,40 @@ async function createReportExport(runId) {
   renderMessages();
 }
 
+async function loadRunArtifactsForMessages() {
+  const runIds = [
+    ...new Set(
+      state.messages
+        .map((message) => message.research_run_id)
+        .filter((runId) => String(runId || "").startsWith("orchestrator_run_"))
+    ),
+  ];
+  await Promise.all(runIds.map((runId) => loadRunArtifacts(runId)));
+}
+
+async function loadRunArtifacts(runId) {
+  try {
+    const [runPayload, evidencePayload, exportsPayload] = await Promise.all([
+      requestJson(`/api/orchestrator/runs/${runId}`),
+      requestJson(`/api/orchestrator/runs/${runId}/evidence`),
+      requestJson("/api/report-exports"),
+    ]);
+    state.runsByRunId[runId] = runPayload.run;
+    state.evidenceByRunId[runId] = evidencePayload.evidence;
+    const existing = (exportsPayload.exports || []).find(
+      (item) => item.export?.run_id === runId
+    );
+    if (existing && !state.exportsByRunId[runId]) {
+      state.exportsByRunId[runId] = { payload: existing };
+    }
+  } catch (error) {
+    state.evidenceByRunId[runId] = {
+      error: error instanceof Error ? error.message : "Could not load run evidence.",
+      sources: [],
+    };
+  }
+}
+
 function researchCommand(content) {
   const match = content.match(/^\/research\s+(.+)$/i);
   if (!match) {
@@ -1160,6 +1368,26 @@ function researchCommand(content) {
   }
   const query = match[1].trim();
   return query ? { query } : null;
+}
+
+function scenarioCommand(content) {
+  const match = content.match(/^\/scenario\s+([a-z0-9-]+)(?:\s+(--with-local-qa))?$/i);
+  if (!match) {
+    return null;
+  }
+  return { id: match[1].toLowerCase(), withLocalQa: Boolean(match[2]) };
+}
+
+async function sendScenario(scenario) {
+  const payload = await requestJson(`/api/scenarios/${encodeURIComponent(scenario.id)}/runs`, {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: state.sessionId,
+      refresh: true,
+      with_local_qa: scenario.withLocalQa,
+    }),
+  });
+  return payload.job;
 }
 
 input.addEventListener("input", () => {
@@ -1324,7 +1552,12 @@ form.addEventListener("submit", async (event) => {
   setBusy(true);
   try {
     const research = researchCommand(content);
-    if (research) {
+    const scenario = scenarioCommand(content);
+    if (scenario) {
+      const job = await sendScenario(scenario);
+      updateAssistantContent(pending.assistantId, backgroundJobText(job));
+      await pollBackgroundResearchJob(job.id, pending.assistantId);
+    } else if (research) {
       const job = await sendSynthesisReport(research.query);
       updateAssistantContent(pending.assistantId, backgroundJobText(job));
       await pollBackgroundResearchJob(job.id, pending.assistantId);

@@ -59,9 +59,12 @@ class OrchestratorResearchInput:
     fiscal_years: int = 3
     filing_forms: tuple[str, ...] = ("10-K", "10-Q")
     filing_limit: int = 1
+    filing_form_limits: Mapping[str, int] = field(default_factory=dict)
     market_outputsize: str = "compact"
     benchmark_symbol: str | None = None
     context_source_items: tuple[ContextSourceItem, ...] = ()
+    scenario_id: str | None = None
+    scenario_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "query", _require_text("query", self.query))
@@ -75,10 +78,19 @@ class OrchestratorResearchInput:
         object.__setattr__(self, "filing_forms", _text_tuple("filing_forms", self.filing_forms))
         object.__setattr__(
             self,
+            "filing_form_limits",
+            _positive_int_mapping("filing_form_limits", self.filing_form_limits),
+        )
+        object.__setattr__(
+            self,
             "market_outputsize",
             _require_text("market_outputsize", self.market_outputsize),
         )
         object.__setattr__(self, "benchmark_symbol", _optional_upper_text(self.benchmark_symbol))
+        object.__setattr__(self, "scenario_id", _optional_text(self.scenario_id))
+        object.__setattr__(self, "scenario_version", _optional_text(self.scenario_version))
+        if (self.scenario_id is None) != (self.scenario_version is None):
+            raise ValueError("scenario_id and scenario_version must be provided together")
         object.__setattr__(
             self,
             "context_source_items",
@@ -183,6 +195,8 @@ class OrchestratedResearchRun:
     warnings: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
     no_recommendation_notice: str = NO_ORCHESTRATOR_RECOMMENDATION_NOTICE
+    scenario_id: str | None = None
+    scenario_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _require_text("id", self.id))
@@ -217,6 +231,10 @@ class OrchestratedResearchRun:
             "no_recommendation_notice",
             _require_text("no_recommendation_notice", self.no_recommendation_notice),
         )
+        object.__setattr__(self, "scenario_id", _optional_text(self.scenario_id))
+        object.__setattr__(self, "scenario_version", _optional_text(self.scenario_version))
+        if (self.scenario_id is None) != (self.scenario_version is None):
+            raise ValueError("scenario_id and scenario_version must be provided together")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -238,6 +256,8 @@ class OrchestratedResearchRun:
             "warnings": list(self.warnings),
             "limitations": list(self.limitations),
             "no_recommendation_notice": self.no_recommendation_notice,
+            "scenario_id": self.scenario_id,
+            "scenario_version": self.scenario_version,
         }
 
 
@@ -330,6 +350,18 @@ def _text_mapping(name: str, values: Mapping[str, str]) -> Mapping[str, str]:
             for key, value in values.items()
         }
     )
+
+
+def _positive_int_mapping(name: str, values: Mapping[str, int]) -> Mapping[str, int]:
+    if not isinstance(values, Mapping):
+        raise ValueError(f"{name} must be a mapping")
+    normalized: dict[str, int] = {}
+    for key, value in values.items():
+        form = _require_text(f"{name}.key", key).upper()
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"{name}[{key!r}] must be a positive integer")
+        normalized[form] = value
+    return MappingProxyType(normalized)
 
 
 def _object_mapping(name: str, values: Mapping[str, object]) -> Mapping[str, object]:

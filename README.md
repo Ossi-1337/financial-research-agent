@@ -125,6 +125,9 @@ a local model server. Configure `local-openai` or `openai` when you want real mo
   coverage indicators.
 - Immutable local synthesis report exports in Markdown, self-contained HTML, and PDF,
   with source appendix, timestamps, hashes, limitations, and no-advice framing.
+- A versioned Novo Nordisk end-to-end scenario that binds NVO/NYSE, SPY benchmark data,
+  annual IFRS/DKK statements, one 20-F, one 6-K, dated context sources, evidence, charts,
+  synthesis, and all three export formats. Live acceptance requires configured data access.
 - Local observability for orchestrator runs, including redacted trace timelines,
   stored-result replay plans, and exportable debug bundles without hosted telemetry.
 - Offline deterministic evaluation harness for fixture-labeled research artifacts,
@@ -262,6 +265,7 @@ python -m financial_research_agent data-reset --yes --pretty
 python -m financial_research_agent retrieval-status --pretty
 python -m financial_research_agent retrieval-clear --pretty
 python -m financial_research_agent eval --pretty
+python -m financial_research_agent scenario-run novo-nordisk --pretty
 ```
 
 The installed console script is also available after `pip install -e .`:
@@ -306,7 +310,9 @@ Core endpoints:
 | `POST /api/background/research-runs` | Queue a background research workflow |
 | `GET /api/background/research-runs/{job_id}` | Inspect background run status and progress |
 | `POST /api/background/research-runs/{job_id}/cancel` | Cancel a queued or running background run |
+| `POST /api/scenarios/novo-nordisk/runs` | Queue the versioned Novo Nordisk scenario |
 | `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
+| `GET /api/orchestrator/runs/{run_id}/evidence` | Inspect deduplicated sources and unresolved evidence IDs |
 | `POST /api/orchestrator/runs/{run_id}/exports` | Create a saved Markdown/HTML/PDF report snapshot |
 | `GET /api/report-exports` | List saved local report exports |
 | `GET /api/report-exports/{export_id}` | Inspect an export manifest |
@@ -330,6 +336,34 @@ In the chat UI, an explicit `/research Apple financial situation` message queues
 bounded workflow in the background, shows progress, and renders the synthesis report when
 the run completes. Ordinary chat messages remain direct LLM chat and do not automatically
 run research tools.
+
+### Novo Nordisk Scenario
+
+The `novo-nordisk` profile provides one reproducible real-data path through the complete
+research workflow. Configure a real SEC contact and Alpha Vantage key in `.env`:
+
+```dotenv
+FRA_SEC_USER_AGENT=financial-research-agent/0.1 your-real-email@your-domain.example
+FRA_ALPHA_VANTAGE_API_KEY=your-alpha-vantage-key
+```
+
+Then run it from the CLI:
+
+```powershell
+python -m financial_research_agent scenario-run novo-nordisk --pretty
+```
+
+Or enter this command in chat to run it as a background job with progress:
+
+```text
+/scenario novo-nordisk
+```
+
+The deterministic synthesis remains the source of truth. Add `--with-local-qa` to the CLI
+command, or append it to the chat command, for one optional source-marker-bounded answer from
+the configured chat provider. That answer does not modify the report or determine whether the
+scenario passed. Without valid live-data configuration, the scenario exits safely and its
+roadmap status remains in progress.
 
 Synthesis messages include an optional run trace inspector. Trace and debug-bundle
 payloads redact configured secrets and sensitive local paths, and replay plans use stored
@@ -462,12 +496,10 @@ platform.
 
 Near-term direction:
 
-- stronger orchestrated synthesis over stored specialist outputs
 - more provider adapters
 - optional narrative report writing over source-backed exports
 - better identifier resolution
 - PDF and additional document formats
-- stronger persistence options
 - more complete retrieval workflows
 
 ## References
