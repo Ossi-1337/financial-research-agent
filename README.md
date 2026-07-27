@@ -48,28 +48,6 @@ python scripts/dev.py check
 CLI commands load the repository `.env` without overriding existing process environment
 variables. Start from `.env.example`; `.env` is ignored by Git.
 
-## Real-Data Scenario
-
-The versioned Novo Nordisk scenario exercises entity resolution, NVO and SPY market data,
-IFRS/DKK statements, SEC filings, specialist handoffs, evidence, charts, and Markdown/HTML/PDF
-exports.
-
-Configure `FRA_ALPHA_VANTAGE_API_KEY` and an identifying `FRA_SEC_USER_AGENT`, start the Compose
-stack, then run:
-
-```powershell
-docker compose exec app financial-research-agent scenario-run novo-nordisk --pretty
-```
-
-The same flow is available in chat:
-
-```text
-/scenario novo-nordisk
-/scenario novo-nordisk --with-local-qa
-```
-
-Local Q&A is labeled separately and never replaces the deterministic source-backed report.
-
 ## Project Status
 
 Implemented:
