@@ -68,6 +68,17 @@ def test_clean_sqlite_setup_applies_pragmas_and_schema(tmp_path: Path) -> None:
     assert report.counts["chat_sessions"] == 0
 
 
+def test_concurrent_database_initialization_tolerates_wal_race(tmp_path: Path) -> None:
+    path = tmp_path / "data" / "financial_research_agent.sqlite3"
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        tuple(executor.map(lambda _index: SQLiteDatabase(path).initialize(), range(5)))
+
+    database = SQLiteDatabase(path)
+    assert database.schema_version() == CURRENT_SCHEMA_VERSION
+    assert database.integrity().healthy is True
+
+
 def test_chat_repository_round_trip_ordering_and_concurrent_access(tmp_path: Path) -> None:
     store = create_persistence(_settings(tmp_path)).sessions
 

@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import local
+from time import monotonic, sleep
 from uuid import uuid4
 
 from financial_research_agent.persistence.contracts import (
@@ -116,17 +117,30 @@ class SQLiteDatabase:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
-            connection.execute("PRAGMA journal_mode = WAL")
+            self._enable_wal(connection)
             return connection
         except sqlite3.OperationalError as exc:
             if connection is not None:
                 connection.close()
-            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+            if _is_database_busy(exc):
                 raise PersistenceError(
                     PersistenceErrorCode.DATABASE_BUSY,
                     "SQLite database is busy; stop active app processes and retry.",
                 ) from exc
             raise
+
+    def _enable_wal(self, connection: sqlite3.Connection) -> None:
+        deadline = monotonic() + (self.busy_timeout_ms / 1000)
+        while True:
+            try:
+                mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                if mode != "wal":
+                    connection.execute("PRAGMA journal_mode = WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_database_busy(exc) or monotonic() >= deadline:
+                    raise
+                sleep(0.025)
 
     @contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:
@@ -156,7 +170,7 @@ class SQLiteDatabase:
             connection.commit()
         except sqlite3.OperationalError as exc:
             connection.rollback()
-            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+            if _is_database_busy(exc):
                 raise PersistenceError(
                     PersistenceErrorCode.DATABASE_BUSY,
                     "SQLite database is busy; stop active app processes and retry.",
@@ -390,3 +404,8 @@ def _database_busy() -> PersistenceError:
         PersistenceErrorCode.DATABASE_BUSY,
         "SQLite maintenance is active; stop active app processes or clear a stale lock and retry.",
     )
+
+
+def _is_database_busy(error: sqlite3.OperationalError) -> bool:
+    message = str(error).lower()
+    return "locked" in message or "busy" in message

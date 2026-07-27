@@ -236,19 +236,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             role = AgentRole(args.role)
             app = create_a2a_app(settings=settings, role=role)
-        except ModuleNotFoundError as exc:
-            if exc.name and (
-                exc.name == "a2a" or exc.name.startswith(("a2a.", "grpc", "google.protobuf"))
-            ):
-                _print_json(
-                    {
-                        "error": "a2a_extra_required",
-                        "message": "Install A2A support with: pip install -e '.[a2a]'",
-                    },
-                    pretty=args.pretty,
-                )
-                return 1
-            raise
         except (PersistenceError, ValueError) as exc:
             payload = (
                 exc.to_dict()

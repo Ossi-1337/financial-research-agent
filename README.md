@@ -6,15 +6,14 @@
 [![llama.cpp](https://img.shields.io/badge/local%20LLM-llama.cpp-555555)](https://github.com/ggml-org/llama.cpp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Financial Research Agent is a local-first Python research workspace for company and stock
-analysis. It combines real financial data, deterministic specialist workflows, source-linked
-evidence, optional local LLMs, and exportable reports behind a FastAPI application.
+Financial Research Agent is a local-first Python multi-agent system for company and stock
+analysis. One orchestrator agent receives chat requests and delegates research through A2A to
+financial-report, stock, context, and synthesis specialists. Each specialist owns its bounded
+tools, data access, retrieval, and prompt contract.
 
 The project is built for inspectability rather than autonomous trading. Deterministic research
 remains the source of truth; LLM output is bounded, labeled, and kept separate from financial
 evidence.
-
-![Deterministic Novo Nordisk research report](docs/assets/demo/novo-report-desktop.jpg)
 
 ## Requirements
 
@@ -26,14 +25,15 @@ evidence.
 
 ## Quick Start
 
-Start the credential-free offline UI:
+Start the complete credential-free local topology:
 
 ```powershell
 docker compose up --build
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). This path uses the deterministic
-`offline-test` provider and downloads no model.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Compose starts the web/orchestrator
+process and four internal A2A specialist services. Only the web UI is published to the host.
+The default uses `offline-test` and downloads no model.
 
 For direct Python development:
 
@@ -47,47 +47,17 @@ python scripts/dev.py run
 CLI commands load `.env` from the repository root without overriding existing environment
 variables. Start from `.env.example`; keep real credentials in `.env`, which is ignored by Git.
 
-Optional local llama.cpp profiles:
+Local llama.cpp profiles:
 
 ```powershell
-python scripts/dev.py docker-up --runtime cpu --detach
-python scripts/dev.py docker-up --runtime cuda --detach
+docker compose --profile cpu up --build -d
+docker compose --profile cuda up --build -d
 ```
 
 Use one profile at a time. First startup may download the selected GGUF model.
 The Settings model control lists models reported by the connected provider; it is not a
 free-text model field. `docker compose up` without a runtime profile intentionally remains
 on `offline-test`.
-
-Optional local A2A 1.0 task server:
-
-```powershell
-python -m pip install -e ".[a2a]"
-$env:FRA_A2A_ENABLED = "true"
-python -m financial_research_agent a2a-serve --host 127.0.0.1 --port 8001
-```
-
-Or start its separate Compose profile:
-
-```powershell
-docker compose --profile a2a up --build
-```
-
-Discovery is available at
-[`http://127.0.0.1:8001/.well-known/agent-card.json`](http://127.0.0.1:8001/.well-known/agent-card.json).
-One generic `company_research` skill accepts bounded text requests for any company. It does not
-create company-specific endpoints.
-
-For the opt-in five-process local topology:
-
-```powershell
-docker compose --profile a2a-distributed up --build
-```
-
-This starts one public orchestrator on `127.0.0.1:8001` plus internal financial-report,
-stock, context, and synthesis services. The `a2a` and `a2a-distributed` profiles are alternative
-modes; do not start both together. The web UI and scenario CLI continue to use the normal
-single-process workflow.
 
 ## Demo
 
@@ -111,36 +81,37 @@ In the chat UI:
 The second command adds one source-bounded local-LLM answer. It does not rewrite or change the
 deterministic report.
 
-See the [reproducible demo walkthrough](docs/demo.md) for setup, evidence inspection, exports,
-and cleanup.
-
 ## Architecture
 
 ```mermaid
 flowchart LR
-    UI["FastAPI + vanilla chat UI"] --> WF["Bounded research workflow"]
-    WF --> DS["SEC + Alpha Vantage adapters"]
-    WF --> AG["Deterministic specialist agents"]
-    AG --> SY["Deterministic synthesis"]
-    SY --> EV["Evidence + citations"]
-    SY --> EX["Markdown / HTML / PDF exports"]
+    UI["FastAPI + chat UI"] --> ORC["Orchestrator agent"]
+    ORC -->|A2A| FIN["Financial-report agent"]
+    ORC -->|A2A| STOCK["Stock agent"]
+    ORC -->|A2A| CONTEXT["Context agent"]
+    ORC -->|A2A| SYNTH["Synthesis agent"]
+    FIN --> SEC["SEC tools + filing RAG"]
+    STOCK --> MARKET["Market tools + calculations"]
+    CONTEXT --> SOURCES["Bounded context sources"]
+    SYNTH --> EV["Validated handoffs + evidence"]
+    SYNTH --> EX["Markdown / HTML / PDF exports"]
     UI --> LLM["Provider-neutral LLM boundary"]
-    A2A["Separate A2A 1.0 task server"] --> WF
     LLM --> OFF["offline-test"]
     LLM --> LOC["llama.cpp / local OpenAI-compatible"]
     LLM --> OAI["Hosted OpenAI"]
     LLM --> ANT["Anthropic"]
     LLM --> GEM["Gemini"]
     LLM --> GW["LiteLLM gateway"]
-    WF --> DB["SQLite structured state"]
-    WF --> FS["Local files, caches, and indexes"]
+    ORC --> DB["SQLite structured state"]
+    FIN --> FS["Local filings + retrieval index"]
 ```
 
 Core boundaries:
 
 - Provider-neutral async LLM contracts for chat, streaming, tools, structured output, and
   embeddings.
-- Deterministic tools and specialists for data acquisition, analysis, evidence, and synthesis.
+- A2A is the single internal transport between orchestrator and specialist agents.
+- Specialist-owned tools and retrieval for data acquisition, analysis, evidence, and synthesis.
 - SQLite for structured state; filesystem storage for source documents, vector indexes, caches,
   and immutable report exports.
 - Local-first operation with loopback binding, environment-only secrets, and no shell tool.
@@ -160,8 +131,8 @@ Implemented:
 - Local vector retrieval and explicit cited answers over stored filing chunks.
 - Immutable Markdown, self-contained HTML, and PDF report snapshots.
 - SQLite migrations, integrity checks, backup, restore, cleanup, and guarded legacy JSON import.
-- Offline evaluation harness, Docker packaging, local llama.cpp profiles, an optional A2A 1.0
-  task server with a five-process local topology, and a bounded read-only MCP spike.
+- Offline evaluation harness, Docker packaging, local llama.cpp profiles, a canonical local A2A
+  agent topology, and a bounded read-only MCP spike.
 - Swappable OpenAI, Anthropic, Gemini, and LiteLLM provider adapters with explicit capability
   and credential status.
 - One reproducible Novo Nordisk integration scenario. This demonstrates system integration, not
@@ -172,8 +143,7 @@ Intentional limitations:
 - No buy/sell/hold recommendations, trading, broker integration, price targets, or alerts.
 - No automatic news/macro ingestion, PDF extraction, or automatic RAG on every chat message.
 - No remote A2A deployment claim, durable distributed queue, hosted telemetry, automatic
-  provider fallback, or public
-  benchmark claims.
+  provider fallback, or public benchmark claims.
 - Market data may be delayed or provider-limited. SEC coverage is limited to SEC filers.
 - Local LLM quality depends on the selected model, runtime, prompt budget, and hardware.
 
@@ -212,10 +182,6 @@ evaluation, and package build.
 ## Documentation
 
 - [Architecture](docs/architecture.md)
-- [Demo walkthrough](docs/demo.md)
-- [Engineering notes](docs/engineering-notes.md)
-- [LLM providers](docs/providers.md)
-- [Troubleshooting](docs/troubleshooting.md)
 
 ## License
 

@@ -41,7 +41,7 @@ def test_runtime_docker_stage_contains_only_installed_package() -> None:
     assert ".env" not in runtime
 
 
-def test_compose_default_is_offline_and_model_services_use_profiles() -> None:
+def test_compose_default_starts_orchestrator_and_specialist_topology() -> None:
     root = Path(__file__).resolve().parents[1]
     compose = root.joinpath("docker-compose.yml").read_text(encoding="utf-8")
     app_image = compose.split("services:", maxsplit=1)[0]
@@ -52,8 +52,13 @@ def test_compose_default_is_offline_and_model_services_use_profiles() -> None:
     assert "condition: service_completed_successfully" in compose
     assert "profiles: [cpu]" in compose
     assert "profiles: [cuda]" in compose
-    assert "profiles: [a2a]" in compose
-    assert "target: a2a-runtime" in compose
+    assert "profiles: [a2a]" not in compose
+    assert "a2a-distributed" not in compose
+    assert "financial-report-agent:" in compose
+    assert "stock-agent:" in compose
+    assert "context-agent:" in compose
+    assert "synthesis-agent:" in compose
+    assert "target: a2a-runtime" not in compose
     assert 'FRA_A2A_ENABLED: "true"' in compose
     assert "ghcr.io/ggml-org/llama.cpp:server}" in compose
     assert "ghcr.io/ggml-org/llama.cpp:server-cuda}" in compose

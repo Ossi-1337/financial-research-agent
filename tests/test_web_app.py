@@ -9,6 +9,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from financial_research_agent.a2a import A2AResearchStepDispatcher
 from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.entities import (
     CompanySearchCandidate,
@@ -154,12 +155,15 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "loadRunTrace" in response.text
     assert "scenarioCommand" in response.text
     assert "/api/scenarios/" in response.text
+    assert "routeChatMessage" in response.text
+    assert "/api/chat/route" in response.text
+    assert "if (!allowBusy && (state.busy || sessionId === state.sessionId))" in response.text
     assert "renderStockChart" in response.text
     assert "renderRunEvidencePanel" in response.text
     assert "/evidence" in response.text
     assert "/synthesis-report" in response.text
     assert "/trace" in response.text
-    assert "researchCommand" in response.text
+    assert "researchCommand" not in response.text
     assert "/api/settings" in response.text
     assert "/api/settings/provider-health" in response.text
     assert "refreshProviderModels" in response.text
@@ -169,6 +173,53 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "citation-list" in response.text
     assert 'item.className = "loading-row"' in response.text
     assert "message.provider" not in response.text
+
+
+def test_chat_route_uses_research_for_company_mentions_and_current_financial_questions() -> None:
+    client = _client()
+    mention = {
+        "id": "mention_tsla",
+        "label": "@TSLA",
+        "company_id": "company_sec_1318605",
+        "legal_name": "Tesla, Inc.",
+        "ticker": "TSLA",
+        "cik": "1318605",
+        "source_provider": "sec",
+    }
+
+    mentioned = client.post(
+        "/api/chat/route",
+        json={"content": "Tell me about @TSLA", "mentions": [mention]},
+    )
+    current = client.post(
+        "/api/chat/route",
+        json={"content": "How is Tesla stock performing at this time?", "mentions": []},
+    )
+
+    assert mentioned.status_code == 200
+    assert mentioned.json()["route"] == "research"
+    assert mentioned.json()["reason"] == "resolved_company_reference"
+    assert mentioned.json()["company_query"] == "Tesla, Inc."
+    assert current.status_code == 200
+    assert current.json()["route"] == "research"
+    assert current.json()["reason"] == "current_financial_information"
+    assert current.json()["company_query"] == "Tesla"
+
+
+def test_chat_route_keeps_general_and_conceptual_questions_in_direct_chat() -> None:
+    client = _client()
+
+    general = client.post(
+        "/api/chat/route",
+        json={"content": "Write a Python function.", "mentions": []},
+    )
+    conceptual = client.post(
+        "/api/chat/route",
+        json={"content": "What does a stock represent?", "mentions": []},
+    )
+
+    assert general.json()["route"] == "chat"
+    assert conceptual.json()["route"] == "chat"
 
 
 def test_runtime_settings_endpoint_returns_redacted_provider_management_payload() -> None:
@@ -307,9 +358,19 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["report_runs"]["stored_run_count"] == 0
     assert payload["context_analysis"]["source"] == "explicit_source_items"
     assert payload["context_analysis"]["recommendations"] == "disabled"
-    assert payload["orchestration"]["execution_policy"] == "sequential_local_safe"
+    assert payload["orchestration"]["execution_policy"] == "distributed_a2a"
     assert payload["orchestration"]["stored_run_count"] == 0
     assert payload["orchestration"]["recommendations"] == "disabled"
+    assert payload["a2a"]["enabled"] is False
+    assert payload["a2a"]["role"] == "orchestrator"
+    assert set(payload["a2a"]["specialists"]) == {
+        "financial_report",
+        "stock",
+        "context",
+        "synthesis",
+    }
+    assert "public_base_url" not in payload["a2a"]
+    assert "api_key_configured" not in payload["a2a"]
     assert payload["security"]["allow_remote_bind"] is False
     assert payload["security"]["secret_storage"] == "environment_only"
     assert payload["synthesis"]["source"] == "orchestrator_specialist_handoffs"
@@ -328,6 +389,14 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert payload["interoperability"]["api_key_configured"] is False
     assert payload["storage"]["provider"] == "sqlite"
     assert "secret-value" not in json.dumps(payload)
+
+
+def test_default_web_runtime_uses_a2a_specialist_dispatcher(tmp_path) -> None:
+    app = create_app(settings=Settings.from_env({"FRA_HOME": str(tmp_path)}))
+
+    assert isinstance(app.state.research_dispatcher, A2AResearchStepDispatcher)
+    status = TestClient(app).get("/api/status").json()
+    assert status["a2a"]["enabled"] is True
 
 
 def test_interop_endpoints_are_disabled_by_default() -> None:

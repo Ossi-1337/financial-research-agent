@@ -12,6 +12,19 @@ from financial_research_agent.context_analysis import (
     NewsMacroSectorAgent,
     SourceReliability,
 )
+from financial_research_agent.filings import (
+    FilingCompany,
+    FilingError,
+    FilingIngestionResult,
+    FilingProvider,
+    FilingStore,
+)
+from financial_research_agent.market_data import (
+    MarketDataError,
+    MarketDataProvider,
+    MarketDataStore,
+    MarketSecurity,
+)
 from financial_research_agent.orchestration import (
     AgentHandoff,
     AgentRole,
@@ -25,6 +38,12 @@ from financial_research_agent.report_analysis import (
     FinancialReportAnalysisAgent,
     FinancialReportAnalysisCompany,
     FinancialReportAnalysisStatus,
+)
+from financial_research_agent.statements import (
+    FinancialStatementCompany,
+    FinancialStatementError,
+    FinancialStatementProvider,
+    FinancialStatementStore,
 )
 from financial_research_agent.stock_analysis import (
     StockPriceAnalysisAgent,
@@ -41,6 +60,12 @@ class SpecialistExecutionService:
         financial_report_agent: FinancialReportAnalysisAgent,
         stock_price_agent: StockPriceAnalysisAgent,
         context_agent: NewsMacroSectorAgent,
+        market_data_provider: MarketDataProvider | None = None,
+        market_data_store: MarketDataStore | None = None,
+        financial_statement_provider: FinancialStatementProvider | None = None,
+        financial_statement_store: FinancialStatementStore | None = None,
+        filing_provider: FilingProvider | None = None,
+        filing_store: FilingStore | None = None,
         synthesis_agent: SynthesisAgent | None = None,
         run_store: object | None = None,
         now: Callable[[], datetime] | None = None,
@@ -48,11 +73,23 @@ class SpecialistExecutionService:
         self.financial_report_agent = financial_report_agent
         self.stock_price_agent = stock_price_agent
         self.context_agent = context_agent
+        self.market_data_provider = market_data_provider
+        self.market_data_store = market_data_store
+        self.financial_statement_provider = financial_statement_provider
+        self.financial_statement_store = financial_statement_store
+        self.filing_provider = filing_provider
+        self.filing_store = filing_store
         self.synthesis_agent = synthesis_agent or SynthesisAgent()
         self.run_store = run_store
         self._now = now or (lambda: datetime.now(UTC))
 
     async def execute(self, request: DelegationRequest) -> AgentHandoff:
+        if request.expected_kind == OrchestratorStepKind.MARKET_DATA_REFRESH:
+            return await self._refresh_market_data(request)
+        if request.expected_kind == OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH:
+            return await self._refresh_financial_statements(request)
+        if request.expected_kind == OrchestratorStepKind.FILING_REFRESH:
+            return await self._refresh_filings(request)
         if request.role == AgentRole.FINANCIAL_REPORT:
             return self._financial_report(request)
         if request.role == AgentRole.STOCK:
@@ -62,6 +99,166 @@ class SpecialistExecutionService:
         if request.role == AgentRole.SYNTHESIS:
             return self._synthesis(request)
         raise ValueError(f"unsupported specialist role: {request.role.value}")
+
+    async def _refresh_market_data(self, request: DelegationRequest) -> AgentHandoff:
+        started_at = _aware_now(self._now())
+        if request.role != AgentRole.STOCK:
+            raise ValueError("market data refresh requires stock specialist")
+        provider = _required_dependency(self.market_data_provider, "market_data_provider")
+        store = _required_dependency(self.market_data_store, "market_data_store")
+        security = MarketSecurity(
+            symbol=_text(request.payload, "ticker"),
+            security_id=_optional_text(request.payload.get("security_id")),
+            exchange_mic=_optional_text(request.payload.get("exchange_mic")),
+            exchange_name=_optional_text(request.payload.get("exchange_name")),
+            currency=_optional_text(request.payload.get("currency")),
+        )
+        outputsize = _text(request.payload, "outputsize")
+        benchmark_symbol = _optional_text(request.payload.get("benchmark_symbol"))
+        try:
+            history = await provider.fetch_daily_prices(security, outputsize=outputsize)
+            stored = store.save_history(history)
+        except MarketDataError as exc:
+            return _provider_failure(request, started_at, self._now(), exc.code.value, exc.message)
+
+        output: dict[str, object] = {"history": stored.to_dict()}
+        warnings = list(stored.warnings)
+        limitations: list[str] = []
+        status = OrchestratorHandoffStatus.SUCCEEDED
+        error_code = None
+        error_message = None
+        if benchmark_symbol is not None and benchmark_symbol != security.symbol:
+            try:
+                benchmark = await provider.fetch_daily_prices(
+                    MarketSecurity(
+                        symbol=benchmark_symbol,
+                        security_id=f"benchmark:{benchmark_symbol}",
+                    ),
+                    outputsize=outputsize,
+                )
+                stored_benchmark = store.save_history(benchmark)
+                output["benchmark_history"] = stored_benchmark.to_dict()
+                warnings.extend(stored_benchmark.warnings)
+            except MarketDataError as exc:
+                status = OrchestratorHandoffStatus.PARTIAL
+                error_code = exc.code.value
+                error_message = exc.message
+                limitations.append(
+                    f"Benchmark {benchmark_symbol} could not be refreshed: {exc.message}"
+                )
+        return _handoff(
+            request=request,
+            status=status,
+            started_at=started_at,
+            completed_at=_aware_now(self._now()),
+            input_summary={
+                "symbol": security.symbol,
+                "outputsize": outputsize,
+                **({"benchmark_symbol": benchmark_symbol} if benchmark_symbol else {}),
+            },
+            output=output,
+            warnings=tuple(dict.fromkeys(warnings)),
+            limitations=tuple(limitations),
+            confidence=HandoffConfidence.HIGH,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+    async def _refresh_financial_statements(
+        self,
+        request: DelegationRequest,
+    ) -> AgentHandoff:
+        started_at = _aware_now(self._now())
+        if request.role != AgentRole.FINANCIAL_REPORT:
+            raise ValueError("statement refresh requires financial-report specialist")
+        cik = _optional_text(request.payload.get("cik"))
+        if cik is None:
+            return _skipped_handoff(
+                request,
+                started_at,
+                "No CIK was available from company resolution.",
+            )
+        provider = _required_dependency(
+            self.financial_statement_provider,
+            "financial_statement_provider",
+        )
+        store = _required_dependency(
+            self.financial_statement_store,
+            "financial_statement_store",
+        )
+        fiscal_years = _positive_int(request.payload, "fiscal_years")
+        company = FinancialStatementCompany(
+            cik=cik,
+            company_id=_optional_text(request.payload.get("company_id")),
+            legal_name=_optional_text(request.payload.get("legal_name")),
+        )
+        try:
+            result = await provider.fetch_statements(company, fiscal_years=fiscal_years)
+            stored = store.save_result(result)
+        except FinancialStatementError as exc:
+            return _provider_failure(request, started_at, self._now(), exc.code.value, exc.message)
+        return _handoff(
+            request=request,
+            status=OrchestratorHandoffStatus.SUCCEEDED,
+            started_at=started_at,
+            completed_at=_aware_now(self._now()),
+            input_summary={"cik": cik, "fiscal_years": str(fiscal_years)},
+            output={"statements": stored.to_dict()},
+            warnings=stored.warnings,
+            confidence=HandoffConfidence.HIGH,
+        )
+
+    async def _refresh_filings(self, request: DelegationRequest) -> AgentHandoff:
+        started_at = _aware_now(self._now())
+        if request.role != AgentRole.FINANCIAL_REPORT:
+            raise ValueError("filing refresh requires financial-report specialist")
+        cik = _optional_text(request.payload.get("cik"))
+        if cik is None:
+            return _skipped_handoff(
+                request,
+                started_at,
+                "No CIK was available from company resolution.",
+            )
+        provider = _required_dependency(self.filing_provider, "filing_provider")
+        store = _required_dependency(self.filing_store, "filing_store")
+        forms = _text_tuple(request.payload, "forms")
+        limit = _positive_int(request.payload, "limit")
+        form_limits = _positive_int_mapping(request.payload.get("form_limits", {}))
+        company = FilingCompany(
+            cik=cik,
+            company_id=_optional_text(request.payload.get("company_id")),
+            legal_name=_optional_text(request.payload.get("legal_name")),
+        )
+        try:
+            result, partial_errors = await _ingest_filings(
+                provider,
+                company,
+                forms=forms,
+                limit=limit,
+                form_limits=form_limits,
+            )
+            stored = store.save_result(result)
+        except FilingError as exc:
+            return _provider_failure(request, started_at, self._now(), exc.code.value, exc.message)
+        return _handoff(
+            request=request,
+            status=(
+                OrchestratorHandoffStatus.PARTIAL
+                if partial_errors
+                else OrchestratorHandoffStatus.SUCCEEDED
+            ),
+            started_at=started_at,
+            completed_at=_aware_now(self._now()),
+            input_summary={
+                "cik": cik,
+                "forms": ",".join(forms),
+                "limit": str(limit),
+            },
+            output={"filings": stored.to_dict()},
+            warnings=stored.warnings,
+            limitations=partial_errors,
+            confidence=HandoffConfidence.HIGH,
+        )
 
     def _financial_report(self, request: DelegationRequest) -> AgentHandoff:
         started_at = _aware_now(self._now())
@@ -267,6 +464,74 @@ def _failed_handoff(
     )
 
 
+def _provider_failure(
+    request: DelegationRequest,
+    started_at: datetime,
+    now: datetime,
+    error_code: str,
+    error_message: str,
+) -> AgentHandoff:
+    return _handoff(
+        request=request,
+        status=OrchestratorHandoffStatus.FAILED,
+        started_at=started_at,
+        completed_at=_aware_now(now),
+        error_code=error_code,
+        error_message=error_message,
+        limitations=(error_message,),
+    )
+
+
+def _skipped_handoff(
+    request: DelegationRequest,
+    started_at: datetime,
+    reason: str,
+) -> AgentHandoff:
+    return _handoff(
+        request=request,
+        status=OrchestratorHandoffStatus.SKIPPED,
+        started_at=started_at,
+        completed_at=started_at,
+        limitations=(reason,),
+    )
+
+
+async def _ingest_filings(
+    provider: FilingProvider,
+    company: FilingCompany,
+    *,
+    forms: tuple[str, ...],
+    limit: int,
+    form_limits: Mapping[str, int],
+) -> tuple[FilingIngestionResult, tuple[str, ...]]:
+    if not form_limits:
+        return await provider.ingest_latest(company, forms=forms, limit=limit), ()
+    results: list[FilingIngestionResult] = []
+    errors: list[str] = []
+    last_error: FilingError | None = None
+    for form, form_limit in form_limits.items():
+        try:
+            results.append(await provider.ingest_latest(company, forms=(form,), limit=form_limit))
+        except FilingError as exc:
+            last_error = exc
+            errors.append(f"{form} ingestion failed: {exc.message}")
+    if not results:
+        assert last_error is not None
+        raise last_error
+    return (
+        FilingIngestionResult(
+            company=company,
+            filings=tuple(filing for result in results for filing in result.filings),
+            chunks=tuple(chunk for result in results for chunk in result.chunks),
+            source=results[0].source,
+            warnings=tuple(
+                dict.fromkeys(warning for result in results for warning in result.warnings)
+            ),
+        ),
+        tuple(errors),
+    )
+
+
 def _analysis_status(value: object) -> OrchestratorHandoffStatus:
     if value in {
         FinancialReportAnalysisStatus.COMPLETE,
@@ -350,6 +615,38 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 def _mapping_list(value: object) -> tuple[Mapping[str, object], ...]:
     return tuple(_mapping(item) for item in _list(value))
+
+
+def _positive_int(payload: Mapping[str, object], name: str) -> int:
+    value = payload.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _positive_int_mapping(value: object) -> dict[str, int]:
+    mapping = _mapping(value)
+    result: dict[str, int] = {}
+    for key, item in mapping.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("mapping keys must be non-empty strings")
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            raise ValueError("mapping values must be positive integers")
+        result[key.strip()] = item
+    return result
+
+
+def _text_tuple(payload: Mapping[str, object], name: str) -> tuple[str, ...]:
+    values = tuple(str(item).strip() for item in _list(payload.get(name)))
+    if not values or any(not item for item in values):
+        raise ValueError(f"{name} must contain non-empty strings")
+    return values
+
+
+def _required_dependency(value, name: str):
+    if value is None:
+        raise ValueError(f"{name} is unavailable")
+    return value
 
 
 def _datetime(payload: Mapping[str, object], name: str) -> datetime:

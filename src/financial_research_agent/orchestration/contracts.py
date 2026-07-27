@@ -95,6 +95,7 @@ class AgentExecutionMetadata:
 @dataclass(frozen=True, slots=True)
 class OrchestratorResearchInput:
     query: str
+    company_query: str | None = None
     run_id: str | None = None
     refresh: bool = True
     company_search_limit: int = 3
@@ -110,6 +111,7 @@ class OrchestratorResearchInput:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "query", _require_text("query", self.query))
+        object.__setattr__(self, "company_query", _optional_text(self.company_query))
         object.__setattr__(self, "run_id", _optional_text(self.run_id))
         if self.company_search_limit <= 0:
             raise ValueError("company_search_limit must be positive")

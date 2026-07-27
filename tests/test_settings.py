@@ -44,7 +44,6 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.a2a.max_queued_tasks == 8
     assert settings.a2a.max_input_chars == 4_000
     assert settings.a2a.public_base_url == "http://127.0.0.1:8001"
-    assert settings.a2a.topology == "single"
     assert settings.a2a.financial_report_url == "http://127.0.0.1:8002"
     assert settings.a2a.stock_url == "http://127.0.0.1:8003"
     assert settings.a2a.context_url == "http://127.0.0.1:8004"
@@ -125,7 +124,6 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_A2A_MAX_QUEUED_TASKS": "5",
             "FRA_A2A_MAX_INPUT_CHARS": "2000",
             "FRA_A2A_PUBLIC_BASE_URL": "https://a2a.example.test",
-            "FRA_A2A_TOPOLOGY": "distributed",
             "FRA_A2A_FINANCIAL_REPORT_URL": "http://financial.test",
             "FRA_A2A_STOCK_URL": "http://stock.test",
             "FRA_A2A_CONTEXT_URL": "http://context.test",
@@ -154,7 +152,6 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.a2a.max_queued_tasks == 5
     assert settings.a2a.max_input_chars == 2_000
     assert settings.a2a.public_base_url == "https://a2a.example.test"
-    assert settings.a2a.topology == "distributed"
     assert settings.a2a.financial_report_url == "http://financial.test"
     assert settings.a2a.stock_url == "http://stock.test"
     assert settings.a2a.context_url == "http://context.test"

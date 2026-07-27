@@ -150,7 +150,7 @@ class ResearchOrchestrator:
             progress_observer,
         )
 
-        for handoff in await self._refresh_data(request, candidate, security, cik):
+        for handoff in await self._refresh_data(request, run, candidate, security, cik):
             run = self._append_handoff(run, handoff, progress_observer)
 
         for handoff in await self._dispatch_specialists(
@@ -265,8 +265,9 @@ class ResearchOrchestrator:
     ) -> tuple[AgentHandoff, CompanySearchResult | None, CompanySearchCandidate | None]:
         started_at = _aware_now(self._now())
         try:
+            company_query = request.company_query or request.query
             result = await self._company_search_provider.search(
-                request.query,
+                company_query,
                 limit=request.company_search_limit,
             )
         except CompanySearchError as exc:
@@ -276,7 +277,7 @@ class ResearchOrchestrator:
                     step_id="resolve_company",
                     started_at=started_at,
                     completed_at=_aware_now(self._now()),
-                    input_summary={"query": request.query},
+                    input_summary={"query": company_query},
                     error_code=exc.code.value,
                     error_message=exc.message,
                 ),
@@ -293,7 +294,7 @@ class ResearchOrchestrator:
                     status=OrchestratorHandoffStatus.FAILED,
                     started_at=started_at,
                     completed_at=_aware_now(self._now()),
-                    input_summary={"query": request.query},
+                    input_summary={"query": company_query},
                     output=result.to_dict(),
                     limitations=(limitation,),
                     confidence=HandoffConfidence.UNKNOWN,
@@ -324,7 +325,7 @@ class ResearchOrchestrator:
                 status=OrchestratorHandoffStatus.SUCCEEDED,
                 started_at=started_at,
                 completed_at=_aware_now(self._now()),
-                input_summary={"query": request.query},
+                input_summary={"query": company_query},
                 output={"result": result.to_dict(), "selected_candidate": candidate.to_dict()},
                 warnings=warnings,
                 confidence=HandoffConfidence.MEDIUM,
@@ -336,6 +337,7 @@ class ResearchOrchestrator:
     async def _refresh_data(
         self,
         request: OrchestratorResearchInput,
+        run: OrchestratedResearchRun,
         candidate: CompanySearchCandidate,
         security: ResolvedSecurity,
         cik: str | None,
@@ -363,7 +365,59 @@ class ResearchOrchestrator:
                 ),
             )
 
-        handoffs = [
+        if self._step_dispatcher is not None:
+            requests = (
+                DelegationRequest(
+                    role=AgentRole.STOCK,
+                    run_id=run.id,
+                    step_id="refresh_market_data",
+                    correlation_id=run.id,
+                    expected_kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
+                    payload={
+                        "security_id": security.id,
+                        "ticker": security.ticker,
+                        "exchange_mic": security.exchange_mic,
+                        "exchange_name": security.exchange_name,
+                        "currency": security.currency,
+                        "outputsize": request.market_outputsize,
+                        "benchmark_symbol": request.benchmark_symbol,
+                    },
+                ),
+                DelegationRequest(
+                    role=AgentRole.FINANCIAL_REPORT,
+                    run_id=run.id,
+                    step_id="refresh_financial_statements",
+                    correlation_id=run.id,
+                    expected_kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
+                    payload={
+                        "company_id": candidate.company.id,
+                        "legal_name": candidate.company.legal_name,
+                        "cik": cik or "",
+                        "fiscal_years": request.fiscal_years,
+                    },
+                ),
+                DelegationRequest(
+                    role=AgentRole.FINANCIAL_REPORT,
+                    run_id=run.id,
+                    step_id="refresh_filings",
+                    correlation_id=run.id,
+                    expected_kind=OrchestratorStepKind.FILING_REFRESH,
+                    payload={
+                        "company_id": candidate.company.id,
+                        "legal_name": candidate.company.legal_name,
+                        "cik": cik or "",
+                        "forms": list(request.filing_forms),
+                        "limit": request.filing_limit,
+                        "form_limits": dict(request.filing_form_limits),
+                    },
+                ),
+            )
+            results = await asyncio.gather(
+                *(self._step_dispatcher.dispatch(delegation, run=run) for delegation in requests)
+            )
+            return tuple(result.handoff for result in results)
+
+        return (
             await self._refresh_market_data(
                 security,
                 request.market_outputsize,
@@ -377,8 +431,7 @@ class ResearchOrchestrator:
                 request.filing_limit,
                 request.filing_form_limits,
             ),
-        ]
-        return tuple(handoffs)
+        )
 
     async def _refresh_market_data(
         self,

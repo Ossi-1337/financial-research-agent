@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from financial_research_agent.a2a.specialists import SpecialistExecutionService
 from financial_research_agent.context_analysis import (
     ContextScope,
     ContextSourceItem,
@@ -51,6 +52,7 @@ from financial_research_agent.market_data import (
 from financial_research_agent.orchestration import (
     AgentHandoff,
     AgentRole,
+    DelegationRequest,
     DelegationResult,
     HandoffConfidence,
     OrchestratedResearchRun,
@@ -80,6 +82,13 @@ from financial_research_agent.web import ChatSessionStore, create_app
 NOW = datetime(2026, 7, 5, 12, tzinfo=UTC)
 
 
+async def _execute_specialist_requests(
+    service: SpecialistExecutionService,
+    requests: tuple[DelegationRequest, ...],
+) -> tuple[AgentHandoff, ...]:
+    return tuple([await service.execute(request) for request in requests])
+
+
 def test_orchestrator_contracts_are_immutable_and_plan_is_sequential() -> None:
     step = default_orchestrator_plan()[0]
     handoff = AgentHandoff(
@@ -99,6 +108,83 @@ def test_orchestrator_contracts_are_immutable_and_plan_is_sequential() -> None:
     assert default_orchestrator_plan()[0].kind == OrchestratorStepKind.COMPANY_RESOLUTION
     with pytest.raises(ValueError, match="query is required"):
         OrchestratorResearchInput(query=" ")
+
+
+def test_specialist_services_own_data_refresh_tools() -> None:
+    market_store = MarketDataStore()
+    statement_store = FinancialStatementStore()
+    filing_store = FilingStore()
+    service = SpecialistExecutionService(
+        financial_report_agent=FinancialReportAnalysisAgent(
+            statement_store=statement_store,
+            filing_store=filing_store,
+            statement_provider="sec-companyfacts",
+            filing_provider="sec-edgar",
+        ),
+        stock_price_agent=StockPriceAnalysisAgent(
+            market_data_store=market_store,
+            market_data_provider="alpha-vantage",
+        ),
+        context_agent=NewsMacroSectorAgent(now=lambda: NOW),
+        market_data_provider=FakeMarketDataProvider(),
+        market_data_store=market_store,
+        financial_statement_provider=FakeFinancialStatementProvider(),
+        financial_statement_store=statement_store,
+        filing_provider=FakeFilingProvider(),
+        filing_store=filing_store,
+        now=lambda: NOW,
+    )
+    requests = (
+        DelegationRequest(
+            role=AgentRole.STOCK,
+            run_id="run:test",
+            step_id="refresh_market_data",
+            correlation_id="run:test",
+            expected_kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
+            payload={
+                "security_id": "fixture:security:aapl",
+                "ticker": "AAPL",
+                "outputsize": "compact",
+                "benchmark_symbol": "SPY",
+            },
+        ),
+        DelegationRequest(
+            role=AgentRole.FINANCIAL_REPORT,
+            run_id="run:test",
+            step_id="refresh_financial_statements",
+            correlation_id="run:test",
+            expected_kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
+            payload={
+                "company_id": "fixture:company:apple",
+                "legal_name": "TEST TOOL OUTPUT APPLE INC.",
+                "cik": "320193",
+                "fiscal_years": 3,
+            },
+        ),
+        DelegationRequest(
+            role=AgentRole.FINANCIAL_REPORT,
+            run_id="run:test",
+            step_id="refresh_filings",
+            correlation_id="run:test",
+            expected_kind=OrchestratorStepKind.FILING_REFRESH,
+            payload={
+                "company_id": "fixture:company:apple",
+                "legal_name": "TEST TOOL OUTPUT APPLE INC.",
+                "cik": "320193",
+                "forms": ["10-K"],
+                "limit": 1,
+                "form_limits": {},
+            },
+        ),
+    )
+
+    handoffs = asyncio.run(_execute_specialist_requests(service, requests))
+
+    assert all(item.status == OrchestratorHandoffStatus.SUCCEEDED for item in handoffs)
+    assert market_store.get_history(symbol="AAPL", provider="alpha-vantage") is not None
+    assert market_store.get_history(symbol="SPY", provider="alpha-vantage") is not None
+    assert statement_store.get_result(cik="320193", provider="sec-companyfacts") is not None
+    assert filing_store.get_result(cik="320193", provider="sec-edgar") is not None
 
 
 def test_orchestrator_runs_workflow_and_persists_specialist_handoffs(tmp_path: Path) -> None:
@@ -219,6 +305,11 @@ def test_distributed_dispatch_runs_specialists_concurrently_in_stable_order(
 
     assert run.execution_policy == OrchestratorExecutionPolicy.DISTRIBUTED_A2A
     assert dispatcher.max_active == 3
+    assert dispatcher.kinds[:3] == [
+        OrchestratorStepKind.MARKET_DATA_REFRESH,
+        OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
+        OrchestratorStepKind.FILING_REFRESH,
+    ]
     assert specialist_kinds == [
         OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
         OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
@@ -254,7 +345,7 @@ def test_distributed_specialist_outage_stays_partial_without_local_fallback(
     assert run.status == OrchestratorRunStatus.PARTIAL
     assert stock.status == OrchestratorHandoffStatus.FAILED
     assert stock.error_code == "a2a_agent_unavailable"
-    assert dispatcher.calls.count(AgentRole.STOCK) == 1
+    assert dispatcher.calls.count(AgentRole.STOCK) == 2
 
 
 def test_orchestrator_marks_refresh_disabled_steps_as_skipped(tmp_path: Path) -> None:
@@ -750,9 +841,11 @@ class RecordingDistributedDispatcher:
         self.max_active = 0
         self.failing_role = failing_role
         self.calls: list[AgentRole] = []
+        self.kinds: list[OrchestratorStepKind] = []
 
     async def dispatch(self, request, *, run=None) -> DelegationResult:
         self.calls.append(request.role)
+        self.kinds.append(request.expected_kind)
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         if request.expected_kind != OrchestratorStepKind.SYNTHESIS:

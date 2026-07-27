@@ -23,7 +23,6 @@ from financial_research_agent.orchestration import (
     AgentEndpoint,
     AgentHandoff,
     AgentRole,
-    AgentTopologyMode,
     DelegationRequest,
     HandoffConfidence,
     OrchestratorHandoffStatus,
@@ -75,7 +74,6 @@ def test_topology_contracts_are_immutable_and_validate_urls() -> None:
     request = _stock_request()
 
     assert endpoint.base_url == "http://127.0.0.1:8003"
-    assert AgentTopologyMode("distributed") == AgentTopologyMode.DISTRIBUTED
     assert request.to_dict()["schema_version"] == 1
     with pytest.raises(FrozenInstanceError):
         endpoint.service_id = "other"  # type: ignore[misc]

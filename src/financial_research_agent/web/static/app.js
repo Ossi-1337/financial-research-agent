@@ -1256,7 +1256,7 @@ async function loadSessions() {
 }
 
 async function openSession(sessionId, allowBusy = false) {
-  if ((!allowBusy && state.busy) || sessionId === state.sessionId) {
+  if (!allowBusy && (state.busy || sessionId === state.sessionId)) {
     return;
   }
   clearError();
@@ -1329,12 +1329,13 @@ async function sendMessage(content, mentions, assistantId) {
   state.abortController = null;
 }
 
-async function sendSynthesisReport(query) {
+async function sendSynthesisReport(query, companyQuery) {
   const response = await fetch(`/api/sessions/${state.sessionId}/synthesis-report/background`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query,
+      company_query: companyQuery,
       refresh: true,
       context_source_items: [],
     }),
@@ -1461,13 +1462,14 @@ async function loadRunArtifacts(runId) {
   }
 }
 
-function researchCommand(content) {
-  const match = content.match(/^\/research\s+(.+)$/i);
-  if (!match) {
-    return null;
-  }
-  const query = match[1].trim();
-  return query ? { query } : null;
+async function routeChatMessage(content, mentions) {
+  const payload = await requestJson("/api/chat/route", {
+    method: "POST",
+    body: JSON.stringify({ content, mentions }),
+  });
+  return payload.route === "research"
+    ? { query: payload.query, companyQuery: payload.company_query }
+    : null;
 }
 
 function scenarioCommand(content) {
@@ -1657,18 +1659,20 @@ form.addEventListener("submit", async (event) => {
   const pending = appendOptimisticExchange(content, mentions);
   setBusy(true);
   try {
-    const research = researchCommand(content);
     const scenario = scenarioCommand(content);
     if (scenario) {
       const job = await sendScenario(scenario);
       updateAssistantContent(pending.assistantId, backgroundJobText(job));
       await pollBackgroundResearchJob(job.id, pending.assistantId);
-    } else if (research) {
-      const job = await sendSynthesisReport(research.query);
-      updateAssistantContent(pending.assistantId, backgroundJobText(job));
-      await pollBackgroundResearchJob(job.id, pending.assistantId);
     } else {
-      await sendMessage(content, mentions, pending.assistantId);
+      const research = await routeChatMessage(content, mentions);
+      if (research) {
+        const job = await sendSynthesisReport(research.query, research.companyQuery);
+        updateAssistantContent(pending.assistantId, backgroundJobText(job));
+        await pollBackgroundResearchJob(job.id, pending.assistantId);
+      } else {
+        await sendMessage(content, mentions, pending.assistantId);
+      }
     }
   } catch (error) {
     removeOptimisticExchange(pending);

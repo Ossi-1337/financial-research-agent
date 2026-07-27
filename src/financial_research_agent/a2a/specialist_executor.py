@@ -22,7 +22,15 @@ from financial_research_agent.orchestration import (
 
 MAX_DELEGATION_PAYLOAD_BYTES = 65_536
 _ALLOWED_PAYLOAD_KEYS = {
-    AgentRole.FINANCIAL_REPORT: {"company_id", "legal_name", "cik"},
+    AgentRole.FINANCIAL_REPORT: {
+        "company_id",
+        "legal_name",
+        "cik",
+        "fiscal_years",
+        "forms",
+        "limit",
+        "form_limits",
+    },
     AgentRole.STOCK: {
         "security_id",
         "ticker",
@@ -30,6 +38,7 @@ _ALLOWED_PAYLOAD_KEYS = {
         "exchange_name",
         "currency",
         "benchmark_symbol",
+        "outputsize",
     },
     AgentRole.CONTEXT: {"query", "company_symbols", "source_items"},
     AgentRole.SYNTHESIS: {"handoff_ids"},

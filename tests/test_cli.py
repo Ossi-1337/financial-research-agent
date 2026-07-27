@@ -9,7 +9,10 @@ import pytest
 from financial_research_agent.cli import main
 
 
-def test_health_command_outputs_json(capsys) -> None:
+def test_health_command_outputs_json(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FRA_LLM_PROVIDER", "offline-test")
+    monkeypatch.setenv("FRA_LLM_MODEL", "offline-test")
     exit_code = main(["health"])
 
     captured = capsys.readouterr()
@@ -21,7 +24,10 @@ def test_health_command_outputs_json(capsys) -> None:
     assert payload["provider"]["llm_provider"] == "offline-test"
 
 
-def test_default_command_is_health(capsys) -> None:
+def test_default_command_is_health(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FRA_LLM_PROVIDER", "offline-test")
+    monkeypatch.setenv("FRA_LLM_MODEL", "offline-test")
     exit_code = main([])
 
     captured = capsys.readouterr()

@@ -14,6 +14,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
+from financial_research_agent.a2a import (
+    SQLiteA2ADelegationStore,
+    create_a2a_dispatcher,
+)
 from financial_research_agent.background import (
     BackgroundResearchJob,
     BackgroundResearchRunner,
@@ -83,6 +87,7 @@ from financial_research_agent.orchestration import (
     OrchestratorRunStatus,
     OrchestratorRunStore,
     ResearchOrchestrator,
+    ResearchStepDispatcher,
     default_orchestrator_plan,
 )
 from financial_research_agent.performance import (
@@ -161,6 +166,43 @@ SYSTEM_PROMPT = (
     "or citations. If the user asks for current company or market facts, explain that they "
     "must fetch and inspect source data first. Do not provide buy, sell, or hold "
     "recommendations."
+)
+
+_FINANCIAL_RESEARCH_TERMS = (
+    "aktie",
+    "aktiekurs",
+    "balance sheet",
+    "cash flow",
+    "earnings",
+    "financial",
+    "financials",
+    "gæld",
+    "indtjening",
+    "market cap",
+    "omsætning",
+    "performance",
+    "price",
+    "regnskab",
+    "revenue",
+    "share",
+    "stock",
+    "valuation",
+    "værdiansættelse",
+)
+_CURRENT_RESEARCH_TERMS = (
+    "at this time",
+    "current",
+    "currently",
+    "doing",
+    "how is",
+    "i dag",
+    "lige nu",
+    "latest",
+    "now",
+    "nuværende",
+    "performing",
+    "seneste",
+    "today",
 )
 
 
@@ -268,6 +310,7 @@ class ContextAnalysisRequest(BaseModel):
 
 class OrchestratorResearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2_000)
+    company_query: str | None = Field(default=None, min_length=1, max_length=300)
     refresh: bool = True
     company_search_limit: int = Field(default=3, ge=1, le=10)
     fiscal_years: int = Field(default=3, ge=1, le=10)
@@ -352,9 +395,23 @@ def create_app(
     background_runner: BackgroundResearchRunner | None = None,
     runtime_settings_store: RuntimeSettingsStore | None = None,
     embedding_cache: LocalEmbeddingCache | None = None,
+    research_dispatcher: ResearchStepDispatcher | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
+    uses_default_research_runtime = all(
+        dependency is None
+        for dependency in (
+            company_search_provider,
+            market_data_provider,
+            market_data_store,
+            financial_statement_provider,
+            financial_statement_store,
+            filing_provider,
+            filing_store,
+            orchestrator_run_store,
+        )
+    )
     all_stores_injected = all(
         store is not None
         for store in (
@@ -405,6 +462,17 @@ def create_app(
         market_data_provider=app_settings.data_sources.market_data_provider,
     )
     context_agent = NewsMacroSectorAgent()
+    dispatcher = research_dispatcher
+    if (
+        dispatcher is None
+        and uses_default_research_runtime
+        and persistence is not None
+        and persistence.database is not None
+    ):
+        dispatcher = create_a2a_dispatcher(
+            app_settings,
+            delegation_store=SQLiteA2ADelegationStore(persistence.database),
+        )
     orchestrator = ResearchOrchestrator(
         company_search_provider=company_search,
         market_data_provider=market_provider,
@@ -417,6 +485,7 @@ def create_app(
         stock_price_agent=stock_price_agent,
         context_agent=context_agent,
         run_store=orchestrator_runs,
+        step_dispatcher=dispatcher,
     )
     static_dir = Path(__file__).with_name("static")
 
@@ -444,6 +513,7 @@ def create_app(
     app.state.financial_report_agent = financial_report_agent
     app.state.stock_price_agent = stock_price_agent
     app.state.context_agent = context_agent
+    app.state.research_dispatcher = dispatcher
     app.state.orchestrator = orchestrator
     app.state.scenario_catalog = scenario_catalog
 
@@ -507,6 +577,7 @@ def create_app(
         embedding_selection = settings_for_request.provider.selection_for_task(
             ProviderTask.EMBEDDINGS
         )
+        a2a_settings = settings_for_request.a2a.to_dict()
         background_stats = await background_research.stats()
         return {
             "app": "financial-research-agent",
@@ -577,7 +648,7 @@ def create_app(
                 "recommendations": "disabled",
             },
             "orchestration": {
-                "execution_policy": "sequential_local_safe",
+                "execution_policy": "distributed_a2a",
                 "stored_run_count": orchestrator_runs.count(),
                 "recommendations": "disabled",
             },
@@ -596,7 +667,20 @@ def create_app(
                 "debug_bundle": "redacted_local_json",
             },
             "interoperability": settings_for_request.interoperability.to_dict(),
-            "a2a": settings_for_request.a2a.to_dict(),
+            "a2a": {
+                "enabled": dispatcher is not None,
+                "role": "orchestrator",
+                "protocol_version": a2a_settings["protocol_version"],
+                "protocol_binding": a2a_settings["protocol_binding"],
+                "delegation_timeout_seconds": (settings_for_request.a2a.delegation_timeout_seconds),
+                "delegation_max_attempts": (settings_for_request.a2a.delegation_max_attempts),
+                "specialists": {
+                    "financial_report": settings_for_request.a2a.financial_report_url,
+                    "stock": settings_for_request.a2a.stock_url,
+                    "context": settings_for_request.a2a.context_url,
+                    "synthesis": settings_for_request.a2a.synthesis_url,
+                },
+            },
             "security": settings_for_request.security.to_dict(),
             "storage": {
                 "provider": settings_for_request.storage.provider,
@@ -726,6 +810,17 @@ def create_app(
                 detail=exc.to_dict(),
             ) from exc
         return {"result": result.to_dict()}
+
+    @app.post("/api/chat/route")
+    def route_chat_message(request: MessageRequest) -> dict[str, str | None]:
+        content = _message_content(request.content)
+        route, query, company_query, reason = _chat_route(content, request.mentions)
+        return {
+            "route": route,
+            "query": query,
+            "company_query": company_query,
+            "reason": reason,
+        }
 
     @app.get("/api/market-data/history/{symbol}")
     def get_market_history(symbol: str) -> dict[str, Any]:
@@ -1808,6 +1903,9 @@ def _require_interop_access(
 def _orchestrator_input(request: OrchestratorResearchRequest) -> OrchestratorResearchInput:
     return OrchestratorResearchInput(
         query=_message_content(request.query),
+        company_query=(
+            _message_content(request.company_query) if request.company_query is not None else None
+        ),
         refresh=request.refresh,
         company_search_limit=request.company_search_limit,
         fiscal_years=request.fiscal_years,
@@ -1820,6 +1918,57 @@ def _orchestrator_input(request: OrchestratorResearchRequest) -> OrchestratorRes
             _context_source_item(item) for item in request.context_source_items
         ),
     )
+
+
+def _chat_route(
+    content: str,
+    mentions: tuple[MentionRequest, ...],
+) -> tuple[str, str, str | None, str]:
+    if mentions:
+        mention = mentions[0]
+        return "research", content, mention.legal_name, "resolved_company_reference"
+
+    normalized = " ".join(content.casefold().split())
+    has_financial_topic = any(term in normalized for term in _FINANCIAL_RESEARCH_TERMS)
+    has_current_intent = any(term in normalized for term in _CURRENT_RESEARCH_TERMS)
+    if has_financial_topic and has_current_intent:
+        return (
+            "research",
+            content,
+            _company_query_from_content(content),
+            "current_financial_information",
+        )
+    return "chat", content, None, "general_conversation"
+
+
+def _company_query_from_content(content: str) -> str:
+    words = content.replace("?", " ").replace(",", " ").split()
+    stop_words = {
+        "how",
+        "is",
+        "are",
+        "the",
+        "a",
+        "an",
+        "at",
+        "this",
+        "time",
+        "stock",
+        "share",
+        "price",
+        "performing",
+        "doing",
+        "current",
+        "currently",
+        "latest",
+        "today",
+        "now",
+        "tell",
+        "me",
+        "about",
+    }
+    candidates = [word for word in words if word.casefold() not in stop_words]
+    return " ".join(candidates).strip() or content
 
 
 def _synthesis_report_from_run(run: OrchestratedResearchRun) -> dict[str, object] | None:

@@ -50,6 +50,8 @@ def test_docker_up_selects_local_runtime_profile(
     calls = []
     monkeypatch.setattr(dev, "_require_docker", lambda: None)
     monkeypatch.setattr(dev, "_require_cuda_runtime", lambda: None)
+    monkeypatch.delenv(model_variable, raising=False)
+    monkeypatch.delenv("FRA_HUGGINGFACE_CACHE", raising=False)
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))

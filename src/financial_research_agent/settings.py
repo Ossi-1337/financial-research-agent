@@ -44,7 +44,6 @@ DEFAULT_A2A_MAX_CONCURRENT_TASKS = 1
 DEFAULT_A2A_MAX_QUEUED_TASKS = 8
 DEFAULT_A2A_MAX_INPUT_CHARS = 4_000
 DEFAULT_A2A_PUBLIC_BASE_URL = "http://127.0.0.1:8001"
-DEFAULT_A2A_TOPOLOGY = "single"
 DEFAULT_A2A_FINANCIAL_REPORT_URL = "http://127.0.0.1:8002"
 DEFAULT_A2A_STOCK_URL = "http://127.0.0.1:8003"
 DEFAULT_A2A_CONTEXT_URL = "http://127.0.0.1:8004"
@@ -396,7 +395,6 @@ class A2ASettings:
     max_queued_tasks: int = DEFAULT_A2A_MAX_QUEUED_TASKS
     max_input_chars: int = DEFAULT_A2A_MAX_INPUT_CHARS
     public_base_url: str = DEFAULT_A2A_PUBLIC_BASE_URL
-    topology: str = DEFAULT_A2A_TOPOLOGY
     financial_report_url: str = DEFAULT_A2A_FINANCIAL_REPORT_URL
     stock_url: str = DEFAULT_A2A_STOCK_URL
     context_url: str = DEFAULT_A2A_CONTEXT_URL
@@ -410,10 +408,6 @@ class A2ASettings:
         if not base_url.startswith(("http://", "https://")):
             raise ValueError("FRA_A2A_PUBLIC_BASE_URL must use http or https")
         object.__setattr__(self, "public_base_url", base_url)
-        topology = _require_text(self.topology)
-        if topology not in {"single", "distributed"}:
-            raise ValueError("FRA_A2A_TOPOLOGY must be single or distributed")
-        object.__setattr__(self, "topology", topology)
         for name in (
             "financial_report_url",
             "stock_url",
@@ -448,7 +442,6 @@ class A2ASettings:
             "max_queued_tasks": self.max_queued_tasks,
             "max_input_chars": self.max_input_chars,
             "public_base_url": self.public_base_url,
-            "topology": self.topology,
             "financial_report_url": self.financial_report_url,
             "stock_url": self.stock_url,
             "context_url": self.context_url,
@@ -717,7 +710,6 @@ class Settings:
                     "FRA_A2A_PUBLIC_BASE_URL",
                     DEFAULT_A2A_PUBLIC_BASE_URL,
                 ),
-                topology=_env_value(env, "FRA_A2A_TOPOLOGY", DEFAULT_A2A_TOPOLOGY),
                 financial_report_url=_env_value(
                     env,
                     "FRA_A2A_FINANCIAL_REPORT_URL",

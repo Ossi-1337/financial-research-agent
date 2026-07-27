@@ -21,11 +21,6 @@ class AgentRole(StrEnum):
     SYNTHESIS = "synthesis"
 
 
-class AgentTopologyMode(StrEnum):
-    SINGLE = "single"
-    DISTRIBUTED = "distributed"
-
-
 @dataclass(frozen=True, slots=True)
 class AgentEndpoint:
     role: AgentRole

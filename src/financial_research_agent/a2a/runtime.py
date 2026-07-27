@@ -66,18 +66,21 @@ def create_default_a2a_runtime(
         financial_report_agent=financial_report_agent,
         stock_price_agent=stock_price_agent,
         context_agent=NewsMacroSectorAgent(),
+        market_data_provider=market_provider,
+        market_data_store=persistence.market_data,
+        financial_statement_provider=statement_provider,
+        financial_statement_store=persistence.financial_statements,
+        filing_provider=filing_provider,
+        filing_store=persistence.filings,
         run_store=persistence.orchestrator_runs,
     )
     delegation_store = SQLiteA2ADelegationStore(persistence.database)
     dispatcher = (
-        A2AResearchStepDispatcher(
-            endpoints=_agent_endpoints(settings),
-            timeout_seconds=settings.a2a.delegation_timeout_seconds,
-            max_attempts=settings.a2a.delegation_max_attempts,
-            api_key=settings.a2a.api_key,
+        create_a2a_dispatcher(
+            settings,
             delegation_store=delegation_store,
         )
-        if role == AgentRole.COMPANY_RESEARCH and settings.a2a.topology == "distributed"
+        if role == AgentRole.COMPANY_RESEARCH
         else None
     )
     orchestrator = ResearchOrchestrator(
@@ -138,3 +141,17 @@ def _agent_endpoints(settings: Settings) -> dict[AgentRole, AgentEndpoint]:
             skill_id="research_synthesis",
         ),
     }
+
+
+def create_a2a_dispatcher(
+    settings: Settings,
+    *,
+    delegation_store: SQLiteA2ADelegationStore | None = None,
+) -> A2AResearchStepDispatcher:
+    return A2AResearchStepDispatcher(
+        endpoints=_agent_endpoints(settings),
+        timeout_seconds=settings.a2a.delegation_timeout_seconds,
+        max_attempts=settings.a2a.delegation_max_attempts,
+        api_key=settings.a2a.api_key,
+        delegation_store=delegation_store,
+    )

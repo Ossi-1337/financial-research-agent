@@ -7,6 +7,35 @@ x-app-image: &app-image
     dockerfile: Dockerfile
     target: runtime
 
+x-runtime-environment: &runtime-environment
+  FRA_ENV: ${FRA_ENV:-local}
+  FRA_HOME: /data
+  FRA_STORAGE_PROVIDER: ${FRA_STORAGE_PROVIDER:-sqlite}
+  FRA_RETRIEVAL_PROVIDER: ${FRA_RETRIEVAL_PROVIDER:-local-vector}
+  FRA_LLM_PROVIDER: ${FRA_LLM_PROVIDER:-offline-test}
+  FRA_LLM_MODEL: ${FRA_LLM_MODEL:-offline-test}
+  FRA_LLM_BASE_URL: ${FRA_LLM_BASE_URL:-http://llama-cpp:8080/v1}
+  FRA_LLM_LOCAL_RUNTIME: ${FRA_LLM_LOCAL_RUNTIME:-llama.cpp}
+  FRA_LLM_TIMEOUT_SECONDS: ${FRA_LLM_TIMEOUT_SECONDS:-30}
+  FRA_EMBEDDING_PROVIDER: ${FRA_EMBEDDING_PROVIDER:-disabled}
+  FRA_EMBEDDING_MODEL: ${FRA_EMBEDDING_MODEL:-}
+  FRA_OPENAI_API_KEY: ${FRA_OPENAI_API_KEY:-}
+  FRA_ANTHROPIC_API_KEY: ${FRA_ANTHROPIC_API_KEY:-}
+  FRA_GEMINI_API_KEY: ${FRA_GEMINI_API_KEY:-}
+  FRA_LITELLM_API_KEY: ${FRA_LITELLM_API_KEY:-}
+  FRA_ALPHA_VANTAGE_API_KEY: ${FRA_ALPHA_VANTAGE_API_KEY:-}
+  FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
+  FRA_ALLOW_REMOTE_BIND: "true"
+
+x-a2a-service: &a2a-service
+  <<: *app-image
+  depends_on:
+    data-init:
+      condition: service_completed_successfully
+  volumes:
+    - fra-data:/data
+  restart: unless-stopped
+
 services:
   data-init:
     <<: *app-image
@@ -22,193 +51,96 @@ services:
     depends_on:
       data-init:
         condition: service_completed_successfully
+      financial-report-agent:
+        condition: service_healthy
+      stock-agent:
+        condition: service_healthy
+      context-agent:
+        condition: service_healthy
+      synthesis-agent:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${FRA_APP_PORT:-8000}:8000"
     environment:
-      FRA_ENV: ${FRA_ENV:-local}
-      FRA_HOME: /data
-      FRA_STORAGE_PROVIDER: ${FRA_STORAGE_PROVIDER:-sqlite}
-      FRA_RETRIEVAL_PROVIDER: ${FRA_RETRIEVAL_PROVIDER:-local-vector}
-      FRA_LLM_PROVIDER: ${FRA_LLM_PROVIDER:-offline-test}
-      FRA_LLM_MODEL: ${FRA_LLM_MODEL:-offline-test}
-      FRA_LLM_BASE_URL: ${FRA_LLM_BASE_URL:-http://llama-cpp:8080/v1}
-      FRA_LLM_LOCAL_RUNTIME: ${FRA_LLM_LOCAL_RUNTIME:-llama.cpp}
-      FRA_LLM_TIMEOUT_SECONDS: ${FRA_LLM_TIMEOUT_SECONDS:-30}
-      FRA_EMBEDDING_PROVIDER: ${FRA_EMBEDDING_PROVIDER:-disabled}
-      FRA_EMBEDDING_MODEL: ${FRA_EMBEDDING_MODEL:-}
-      FRA_OPENAI_API_KEY: ${FRA_OPENAI_API_KEY:-}
-      FRA_ALPHA_VANTAGE_API_KEY: ${FRA_ALPHA_VANTAGE_API_KEY:-}
-      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
-      FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS: ${FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS:-1}
-      FRA_ALLOW_REMOTE_BIND: "true"
-    volumes:
-      - fra-data:/data
-
-  a2a:
-    image: financial-research-agent-a2a:local
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: a2a-runtime
-    profiles: [a2a]
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
-    ports:
-      - "127.0.0.1:${FRA_A2A_PORT:-8001}:8001"
-    environment:
-      FRA_ENV: ${FRA_ENV:-local}
-      FRA_HOME: /data
-      FRA_STORAGE_PROVIDER: sqlite
-      FRA_A2A_ENABLED: "true"
-      FRA_A2A_LOCAL_ONLY: "true"
-      FRA_A2A_PUBLIC_BASE_URL: ${FRA_A2A_PUBLIC_BASE_URL:-http://127.0.0.1:8001}
-      FRA_A2A_PORT: "8001"
-      FRA_A2A_MAX_CONCURRENT_TASKS: ${FRA_A2A_MAX_CONCURRENT_TASKS:-1}
-      FRA_A2A_MAX_QUEUED_TASKS: ${FRA_A2A_MAX_QUEUED_TASKS:-8}
-      FRA_A2A_MAX_INPUT_CHARS: ${FRA_A2A_MAX_INPUT_CHARS:-4000}
-      FRA_COMPANY_LOOKUP_PROVIDER: ${FRA_COMPANY_LOOKUP_PROVIDER:-sec}
-      FRA_MARKET_DATA_PROVIDER: ${FRA_MARKET_DATA_PROVIDER:-alpha-vantage}
-      FRA_FINANCIAL_STATEMENT_PROVIDER: ${FRA_FINANCIAL_STATEMENT_PROVIDER:-sec-companyfacts}
-      FRA_FILING_PROVIDER: ${FRA_FILING_PROVIDER:-sec-edgar}
-      FRA_ALPHA_VANTAGE_API_KEY: ${FRA_ALPHA_VANTAGE_API_KEY:-}
-      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
-      FRA_ALLOW_REMOTE_BIND: "true"
-    volumes:
-      - fra-data:/data
-
-  a2a-orchestrator:
-    image: financial-research-agent-a2a:local
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: a2a-runtime
-    profiles: [a2a-distributed]
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
-      a2a-financial-report:
-        condition: service_healthy
-      a2a-stock:
-        condition: service_healthy
-      a2a-context:
-        condition: service_healthy
-      a2a-synthesis:
-        condition: service_healthy
-    command:
-      - financial-research-agent
-      - a2a-serve
-      - --role
-      - company-research
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8001"
-    ports:
-      - "127.0.0.1:${FRA_A2A_PORT:-8001}:8001"
-    environment:
-      FRA_ENV: ${FRA_ENV:-local}
-      FRA_HOME: /data
-      FRA_STORAGE_PROVIDER: sqlite
-      FRA_A2A_ENABLED: "true"
-      FRA_A2A_LOCAL_ONLY: "true"
-      FRA_A2A_TOPOLOGY: distributed
-      FRA_A2A_PORT: "8001"
-      FRA_A2A_PUBLIC_BASE_URL: http://127.0.0.1:8001
-      FRA_A2A_FINANCIAL_REPORT_URL: http://a2a-financial-report:8002
-      FRA_A2A_STOCK_URL: http://a2a-stock:8003
-      FRA_A2A_CONTEXT_URL: http://a2a-context:8004
-      FRA_A2A_SYNTHESIS_URL: http://a2a-synthesis:8005
+      <<: *runtime-environment
+      FRA_A2A_FINANCIAL_REPORT_URL: http://financial-report-agent:8002
+      FRA_A2A_STOCK_URL: http://stock-agent:8003
+      FRA_A2A_CONTEXT_URL: http://context-agent:8004
+      FRA_A2A_SYNTHESIS_URL: http://synthesis-agent:8005
       FRA_A2A_DELEGATION_TIMEOUT_SECONDS: ${FRA_A2A_DELEGATION_TIMEOUT_SECONDS:-60}
       FRA_A2A_DELEGATION_MAX_ATTEMPTS: ${FRA_A2A_DELEGATION_MAX_ATTEMPTS:-2}
-      FRA_A2A_MAX_CONCURRENT_TASKS: ${FRA_A2A_MAX_CONCURRENT_TASKS:-1}
-      FRA_A2A_MAX_QUEUED_TASKS: ${FRA_A2A_MAX_QUEUED_TASKS:-8}
-      FRA_A2A_MAX_INPUT_CHARS: ${FRA_A2A_MAX_INPUT_CHARS:-4000}
-      FRA_COMPANY_LOOKUP_PROVIDER: ${FRA_COMPANY_LOOKUP_PROVIDER:-sec}
-      FRA_MARKET_DATA_PROVIDER: ${FRA_MARKET_DATA_PROVIDER:-alpha-vantage}
-      FRA_FINANCIAL_STATEMENT_PROVIDER: ${FRA_FINANCIAL_STATEMENT_PROVIDER:-sec-companyfacts}
-      FRA_FILING_PROVIDER: ${FRA_FILING_PROVIDER:-sec-edgar}
-      FRA_ALPHA_VANTAGE_API_KEY: ${FRA_ALPHA_VANTAGE_API_KEY:-}
-      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
-      FRA_ALLOW_REMOTE_BIND: "true"
+      FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS: ${FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS:-1}
     volumes:
       - fra-data:/data
+    restart: unless-stopped
 
-  a2a-financial-report:
-    image: financial-research-agent-a2a:local
-    profiles: [a2a-distributed]
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
+  financial-report-agent:
+    <<: *a2a-service
     command: [financial-research-agent, a2a-serve, --role, financial-report, --host, 0.0.0.0, --port, "8002"]
     expose: ["8002"]
     environment:
-      FRA_HOME: /data
-      FRA_STORAGE_PROVIDER: sqlite
+      <<: *runtime-environment
       FRA_A2A_ENABLED: "true"
       FRA_A2A_LOCAL_ONLY: "true"
       FRA_A2A_PORT: "8002"
-      FRA_A2A_PUBLIC_BASE_URL: http://a2a-financial-report:8002
-      FRA_ALLOW_REMOTE_BIND: "true"
-    volumes:
-      - fra-data:/data
+      FRA_A2A_PUBLIC_BASE_URL: http://financial-report-agent:8002
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/.well-known/agent-card.json', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
 
-  a2a-stock:
-    image: financial-research-agent-a2a:local
-    profiles: [a2a-distributed]
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
+  stock-agent:
+    <<: *a2a-service
     command: [financial-research-agent, a2a-serve, --role, stock, --host, 0.0.0.0, --port, "8003"]
     expose: ["8003"]
     environment:
-      FRA_HOME: /data
-      FRA_STORAGE_PROVIDER: sqlite
+      <<: *runtime-environment
       FRA_A2A_ENABLED: "true"
       FRA_A2A_LOCAL_ONLY: "true"
       FRA_A2A_PORT: "8003"
-      FRA_A2A_PUBLIC_BASE_URL: http://a2a-stock:8003
-      FRA_ALLOW_REMOTE_BIND: "true"
-    volumes:
-      - fra-data:/data
+      FRA_A2A_PUBLIC_BASE_URL: http://stock-agent:8003
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/.well-known/agent-card.json', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
 
-  a2a-context:
-    image: financial-research-agent-a2a:local
-    profiles: [a2a-distributed]
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
+  context-agent:
+    <<: *a2a-service
     command: [financial-research-agent, a2a-serve, --role, context, --host, 0.0.0.0, --port, "8004"]
     expose: ["8004"]
     environment:
-      FRA_HOME: /data
-      FRA_STORAGE_PROVIDER: sqlite
+      <<: *runtime-environment
       FRA_A2A_ENABLED: "true"
       FRA_A2A_LOCAL_ONLY: "true"
       FRA_A2A_PORT: "8004"
-      FRA_A2A_PUBLIC_BASE_URL: http://a2a-context:8004
-      FRA_ALLOW_REMOTE_BIND: "true"
-    volumes:
-      - fra-data:/data
+      FRA_A2A_PUBLIC_BASE_URL: http://context-agent:8004
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/.well-known/agent-card.json', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
 
-  a2a-synthesis:
-    image: financial-research-agent-a2a:local
-    profiles: [a2a-distributed]
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
+  synthesis-agent:
+    <<: *a2a-service
     command: [financial-research-agent, a2a-serve, --role, synthesis, --host, 0.0.0.0, --port, "8005"]
     expose: ["8005"]
     environment:
-      FRA_HOME: /data
-      FRA_STORAGE_PROVIDER: sqlite
+      <<: *runtime-environment
       FRA_A2A_ENABLED: "true"
       FRA_A2A_LOCAL_ONLY: "true"
       FRA_A2A_PORT: "8005"
-      FRA_A2A_PUBLIC_BASE_URL: http://a2a-synthesis:8005
-      FRA_ALLOW_REMOTE_BIND: "true"
-    volumes:
-      - fra-data:/data
+      FRA_A2A_PUBLIC_BASE_URL: http://synthesis-agent:8005
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/.well-known/agent-card.json', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
 
   llama-cpp-cpu:
     image: ${FRA_LLAMA_CPP_CPU_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}

@@ -18,7 +18,6 @@ from financial_research_agent.orchestration.contracts import (
 from financial_research_agent.orchestration.dispatch import (
     AgentEndpoint,
     AgentRole,
-    AgentTopologyMode,
     DelegationRequest,
     DelegationResult,
     LocalResearchStepDispatcher,
@@ -35,7 +34,6 @@ __all__ = [
     "AgentExecutionMode",
     "AgentHandoff",
     "AgentRole",
-    "AgentTopologyMode",
     "DelegationRequest",
     "DelegationResult",
     "HandoffConfidence",
