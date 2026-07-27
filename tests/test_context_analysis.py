@@ -4,7 +4,6 @@ from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
 
 from financial_research_agent.context_analysis import (
     ConfidenceLabel,
@@ -19,9 +18,6 @@ from financial_research_agent.context_analysis import (
     SourceReliability,
     create_default_context_source_strategy,
 )
-from financial_research_agent.llm.registry import create_offline_provider_registry
-from financial_research_agent.settings import Settings
-from financial_research_agent.web import ChatSessionStore, create_app
 
 NOW = datetime(2026, 7, 5, 12, tzinfo=UTC)
 
@@ -232,79 +228,6 @@ def test_agent_marks_stale_reliable_context_as_partial() -> None:
     assert company_finding.limitations == (
         "Company-Specific Events uses non-recent source items; refresh before relying on it.",
     )
-
-
-def test_context_analysis_api_returns_source_linked_output(tmp_path) -> None:
-    client = TestClient(
-        create_app(
-            settings=Settings.from_env({"FRA_HOME": str(tmp_path)}),
-            registry=create_offline_provider_registry(),
-            session_store=ChatSessionStore(),
-        )
-    )
-
-    response = client.post(
-        "/api/context-analysis",
-        json={
-            "query": "What is the current macro context?",
-            "region": "US",
-            "source_items": [
-                {
-                    "id": "fed-rates",
-                    "title": "Federal Reserve rate release",
-                    "summary": "TEST TOOL OUTPUT official macro context.",
-                    "source_url": "https://example.test/fed-rates",
-                    "source_name": "Federal Reserve",
-                    "source_type": "rates",
-                    "reliability": "official",
-                    "scope": "macro",
-                    "retrieved_at": NOW.isoformat(),
-                    "published_at": datetime(2026, 7, 4, tzinfo=UTC).isoformat(),
-                    "region": "US",
-                }
-            ],
-        },
-    )
-    analysis = response.json()["analysis"]
-
-    assert response.status_code == 200
-    assert analysis["status"] == "partial"
-    assert analysis["source_items"][0]["source_url"] == "https://example.test/fed-rates"
-    assert analysis["findings"][1]["source_item_ids"] == ["fed-rates"]
-    assert analysis["source_strategy"][0]["category"] == "company_news"
-
-
-def test_context_analysis_api_rejects_invalid_source_metadata(tmp_path) -> None:
-    client = TestClient(
-        create_app(
-            settings=Settings.from_env({"FRA_HOME": str(tmp_path)}),
-            registry=create_offline_provider_registry(),
-            session_store=ChatSessionStore(),
-        )
-    )
-
-    response = client.post(
-        "/api/context-analysis",
-        json={
-            "query": "Bad source.",
-            "source_items": [
-                {
-                    "id": "bad",
-                    "title": "Bad source",
-                    "summary": "TEST TOOL OUTPUT invalid URL.",
-                    "source_url": "file:///tmp/source",
-                    "source_name": "Bad Source",
-                    "source_type": "company_news",
-                    "reliability": "official",
-                    "scope": "company",
-                    "retrieved_at": NOW.isoformat(),
-                }
-            ],
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"]["error"] == "invalid_context_source"
 
 
 def _source_item(

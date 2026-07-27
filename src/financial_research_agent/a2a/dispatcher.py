@@ -81,6 +81,22 @@ class A2AResearchStepDispatcher:
                     remote_task_id=task_id,
                     service_id=endpoint.service_id,
                     attempt_count=attempt,
+                    prompt_id=(
+                        handoff.execution.prompt_id if handoff.execution is not None else None
+                    ),
+                    prompt_version=(
+                        handoff.execution.prompt_version if handoff.execution is not None else None
+                    ),
+                    provider=handoff.execution.provider if handoff.execution is not None else None,
+                    model=handoff.execution.model if handoff.execution is not None else None,
+                    tool_status=(
+                        handoff.execution.tool_status if handoff.execution is not None else None
+                    ),
+                    reasoning_summary=(
+                        handoff.execution.reasoning_summary
+                        if handoff.execution is not None
+                        else None
+                    ),
                 )
                 result = DelegationResult(
                     handoff=replace(handoff, execution=metadata),

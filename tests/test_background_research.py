@@ -4,7 +4,6 @@ import asyncio
 import time
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,11 +24,8 @@ from financial_research_agent.orchestration import (
     OrchestratorExecutionPolicy,
     OrchestratorResearchInput,
     OrchestratorRunStatus,
-    OrchestratorRunStore,
     default_orchestrator_plan,
 )
-from financial_research_agent.settings import Settings
-from financial_research_agent.web import ChatSessionStore, create_app
 
 NOW = datetime(2026, 7, 7, 12, tzinfo=UTC)
 
@@ -136,55 +132,6 @@ def test_background_runner_admits_queued_jobs_atomically() -> None:
             await runner.cancel(job.id)
 
     asyncio.run(scenario())
-
-
-def test_background_research_web_endpoint_queues_and_exposes_partial_run(
-    tmp_path: Path,
-) -> None:
-    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
-    run_store = OrchestratorRunStore(storage_path=tmp_path / "orchestrator_runs.json")
-    client = TestClient(
-        create_app(
-            settings=settings,
-            session_store=ChatSessionStore(),
-            company_search_provider=NoMatchCompanySearchProvider(),
-            orchestrator_run_store=run_store,
-            background_runner=BackgroundResearchRunner(max_concurrent_runs=1),
-        )
-    )
-
-    response = client.post("/api/background/research-runs", json={"query": "Unknown company"})
-    job = response.json()["job"]
-    final_job = _poll_job(client, job["id"])
-    status = client.get("/api/status").json()
-
-    assert response.status_code == 202
-    assert final_job["status"] == "succeeded"
-    assert final_job["orchestrator_run_id"].startswith("orchestrator_run_")
-    assert final_job["orchestrator_run"]["status"] == "failed"
-    assert final_job["progress"]["completed_steps"] == 1
-    assert status["background_research"]["max_concurrent_runs"] == 1
-    assert status["background_research"]["queue"] == "in_process"
-
-
-def test_background_research_cancel_marks_job_cancelled(tmp_path: Path) -> None:
-    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
-    client = TestClient(
-        create_app(
-            settings=settings,
-            session_store=ChatSessionStore(),
-            company_search_provider=SlowNoMatchCompanySearchProvider(),
-            background_runner=BackgroundResearchRunner(max_concurrent_runs=1),
-        )
-    )
-
-    response = client.post("/api/background/research-runs", json={"query": "Slow company"})
-    job_id = response.json()["job"]["id"]
-    cancelled = client.post(f"/api/background/research-runs/{job_id}/cancel").json()["job"]
-
-    assert response.status_code == 202
-    assert cancelled["status"] == "cancelled"
-    assert cancelled["error_code"] == "cancelled"
 
 
 async def _wait_for(predicate, *, timeout: float = 2.0) -> None:

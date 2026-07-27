@@ -18,7 +18,6 @@ from financial_research_agent.a2a import (
     SQLiteA2ATaskStore,
     create_a2a_app,
 )
-from financial_research_agent.background import BackgroundResearchRunner
 from financial_research_agent.orchestration import (
     AgentEndpoint,
     AgentHandoff,
@@ -223,10 +222,7 @@ def _runtime(
     persistence = create_persistence(settings)
     assert persistence.database is not None
     return settings, A2AResearchRuntime(
-        orchestrator=object(),  # type: ignore[arg-type]
-        background_runner=BackgroundResearchRunner(max_concurrent_runs=1),
         task_store=SQLiteA2ATaskStore(persistence.database, owner=role.value),
-        orchestrator_run_store=persistence.orchestrator_runs,
         persistence=persistence,
         role=role,
         specialist_service=StubSpecialistService(),  # type: ignore[arg-type]

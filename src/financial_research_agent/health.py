@@ -54,7 +54,6 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
                 embedding_selection.provider
             ),
         },
-        "interoperability": settings.interoperability.to_dict(),
         "a2a": settings.a2a.to_dict(),
         "background": settings.background.to_dict(),
         "performance": {

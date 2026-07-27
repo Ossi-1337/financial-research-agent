@@ -23,7 +23,6 @@ _SECRET_FIELD_NAMES = {
     "gemini_api_key",
     "litellm_api_key",
     "alpha_vantage_api_key",
-    "interop_api_key",
     "api_key",
 }
 

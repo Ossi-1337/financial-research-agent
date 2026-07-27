@@ -81,9 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--role",
-        choices=["company-research", "financial-report", "stock", "context", "synthesis"],
-        default="company-research",
-        help="Agent role for a2a-serve. Defaults to company-research.",
+        choices=["financial-report", "stock", "context", "synthesis"],
+        default=None,
+        help="Required specialist role for a2a-serve.",
     )
     parser.add_argument(
         "--yes",
@@ -216,6 +216,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "a2a-serve":
+        if args.role is None:
+            parser.error("a2a-serve requires --role")
         settings = Settings.from_env()
         if (
             not is_loopback_host(args.host)
@@ -245,7 +247,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(payload, pretty=args.pretty)
             return 1
         default_ports = {
-            "company-research": 8001,
             "financial-report": 8002,
             "stock": 8003,
             "context": 8004,

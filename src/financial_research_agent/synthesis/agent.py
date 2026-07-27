@@ -131,6 +131,130 @@ class SynthesisAgent:
             limitations=limitations,
         )
 
+    def synthesize_agent_output(
+        self,
+        *,
+        query: str,
+        handoffs: tuple[AgentHandoff, ...],
+        agent_output: Mapping[str, object],
+        selected_company: Mapping[str, object] | None = None,
+        selected_security: Mapping[str, object] | None = None,
+        created_at: datetime | None = None,
+    ) -> SynthesisReport:
+        created = created_at or self._now or datetime.now(UTC)
+        specialist_handoffs = tuple(
+            handoff for handoff in handoffs if handoff.kind in SUPPORTED_SPECIALIST_KINDS
+        )
+        handoff_ids = tuple(handoff.id for handoff in specialist_handoffs)
+        buckets = _empty_buckets()
+
+        for value in _list(agent_output.get("facts")):
+            item = _mapping(value)
+            buckets[SynthesisSection.CURRENT_SITUATION].append(
+                _agent_point(item, SynthesisSection.CURRENT_SITUATION, handoff_ids)
+            )
+        for value in _list(agent_output.get("findings")):
+            item = _mapping(value)
+            section = _agent_section(str(item.get("category", "")))
+            buckets[section].append(_agent_point(item, section, handoff_ids))
+        for value in _list(agent_output.get("risks")):
+            item = _mapping(value)
+            buckets[SynthesisSection.RISKS].append(
+                _point(
+                    section=SynthesisSection.RISKS,
+                    title=_payload_text(item, "title", fallback="Risk"),
+                    summary=_payload_text(
+                        item, "description", fallback="Risk details unavailable."
+                    ),
+                    confidence=_confidence(str(item.get("severity", "unknown"))),
+                    evidence_ids=_texts(item.get("evidence_ids")),
+                    source_handoff_ids=handoff_ids,
+                )
+            )
+
+        uncertainty = _mapping(agent_output.get("uncertainty"))
+        missing = _texts(uncertainty.get("missing_evidence"))
+        uncertainty_limitations = _texts(uncertainty.get("limitations"))
+        if missing or uncertainty_limitations:
+            buckets[SynthesisSection.UNKNOWNS].append(
+                _point(
+                    section=SynthesisSection.UNKNOWNS,
+                    title="Uncertainty and missing evidence",
+                    summary="; ".join(missing) or "The available evidence has stated limitations.",
+                    confidence=_confidence(str(uncertainty.get("confidence", "unknown"))),
+                    source_handoff_ids=handoff_ids,
+                    limitations=uncertainty_limitations or missing,
+                )
+            )
+        if not buckets[SynthesisSection.CURRENT_SITUATION]:
+            buckets[SynthesisSection.CURRENT_SITUATION].append(
+                _point(
+                    section=SynthesisSection.CURRENT_SITUATION,
+                    title="Current situation unavailable",
+                    summary="Synthesis agent returned no supported current-situation facts.",
+                    confidence=ConfidenceLabel.UNKNOWN,
+                    limitations=("No validated current-situation finding was returned.",),
+                )
+            )
+
+        scenarios = tuple(_mapping(item) for item in _list(agent_output.get("scenarios")))
+        upside = _agent_scenario(
+            next(
+                (item for item in scenarios if "down" not in str(item.get("name", "")).casefold()),
+                scenarios[0] if scenarios else {},
+            ),
+            ScenarioDirection.UPSIDE,
+            handoff_ids,
+        )
+        downside = _agent_scenario(
+            next(
+                (item for item in scenarios if "down" in str(item.get("name", "")).casefold()),
+                scenarios[1] if len(scenarios) > 1 else {},
+            ),
+            ScenarioDirection.DOWNSIDE,
+            handoff_ids,
+        )
+        confidence = _overall_confidence(buckets)
+        coverage_ratio, coverage = _evidence_coverage(buckets)
+        warnings = _unique(
+            warning for handoff in specialist_handoffs for warning in handoff.warnings
+        )
+        limitations = _unique(
+            (
+                *(
+                    limitation
+                    for handoff in specialist_handoffs
+                    for limitation in handoff.limitations
+                ),
+                *uncertainty_limitations,
+            )
+        )
+        company_name = _mapping_text(selected_company, "legal_name") or _mapping_text(
+            selected_company,
+            "display_name",
+        )
+        return SynthesisReport(
+            id=f"synthesis_report_{uuid4().hex}",
+            query=query,
+            status=_status(specialist_handoffs, coverage),
+            created_at=created,
+            company_name=company_name,
+            security_symbol=_mapping_text(selected_security, "ticker"),
+            current_situation=tuple(buckets[SynthesisSection.CURRENT_SITUATION]),
+            strengths=tuple(buckets[SynthesisSection.STRENGTHS]),
+            weaknesses=tuple(buckets[SynthesisSection.WEAKNESSES]),
+            opportunities=tuple(buckets[SynthesisSection.OPPORTUNITIES]),
+            risks=tuple(buckets[SynthesisSection.RISKS]),
+            upside_scenario=upside,
+            downside_scenario=downside,
+            unknowns=tuple(buckets[SynthesisSection.UNKNOWNS]),
+            overall_confidence=confidence,
+            evidence_coverage=coverage,
+            evidence_coverage_ratio=coverage_ratio,
+            warnings=warnings,
+            limitations=limitations,
+        )
+
 
 def _points_from_handoff(handoff: AgentHandoff) -> tuple[SynthesisPoint, ...]:
     if handoff.status in {OrchestratorHandoffStatus.FAILED, OrchestratorHandoffStatus.SKIPPED}:
@@ -399,6 +523,65 @@ def _context_target_section(title: str, summary: str) -> SynthesisSection:
     return SynthesisSection.CURRENT_SITUATION
 
 
+def _agent_section(category: str) -> SynthesisSection:
+    normalized = category.casefold().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "strength": SynthesisSection.STRENGTHS,
+        "strengths": SynthesisSection.STRENGTHS,
+        "weakness": SynthesisSection.WEAKNESSES,
+        "weaknesses": SynthesisSection.WEAKNESSES,
+        "opportunity": SynthesisSection.OPPORTUNITIES,
+        "opportunities": SynthesisSection.OPPORTUNITIES,
+        "risk": SynthesisSection.RISKS,
+        "risks": SynthesisSection.RISKS,
+    }
+    return aliases.get(normalized, SynthesisSection.CURRENT_SITUATION)
+
+
+def _agent_point(
+    payload: Mapping[str, object],
+    section: SynthesisSection,
+    handoff_ids: tuple[str, ...],
+) -> SynthesisPoint:
+    statement = _payload_text(payload, "statement", fallback="Supported finding unavailable.")
+    return _point(
+        section=section,
+        title=_payload_text(payload, "category", fallback=section.value.replace("_", " ").title()),
+        summary=statement,
+        confidence=_confidence(str(payload.get("confidence", "unknown"))),
+        evidence_ids=_texts(payload.get("evidence_ids")),
+        source_handoff_ids=handoff_ids,
+    )
+
+
+def _agent_scenario(
+    payload: Mapping[str, object],
+    direction: ScenarioDirection,
+    handoff_ids: tuple[str, ...],
+) -> SynthesisScenario:
+    description = _payload_text(
+        payload,
+        "description",
+        fallback="Available evidence does not support a detailed scenario.",
+    )
+    evidence_ids = _texts(payload.get("evidence_ids"))
+    return SynthesisScenario(
+        id=f"scenario_{direction.value}_{uuid4().hex}",
+        direction=direction,
+        title=_payload_text(
+            payload,
+            "name",
+            fallback=f"Conditional {direction.value} scenario",
+        ),
+        condition=f"If the stated conditions hold, {description}",
+        potential_development=f"If that occurs, {description}",
+        confidence=ConfidenceLabel.LOW if evidence_ids else ConfidenceLabel.UNKNOWN,
+        evidence_ids=evidence_ids,
+        source_handoff_ids=handoff_ids,
+        limitations=() if evidence_ids else ("No evidence-backed scenario was returned.",),
+    )
+
+
 def _status(
     handoffs: tuple[AgentHandoff, ...],
     coverage: EvidenceCoverage,
@@ -523,7 +706,11 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 
 def _list(value: object) -> list[object]:
-    return value if isinstance(value, list) else []
+    return list(value) if isinstance(value, list | tuple) else []
+
+
+def _texts(value: object) -> tuple[str, ...]:
+    return _unique(_list(value))
 
 
 def _payload_text(payload: Mapping[str, object], name: str, *, fallback: str) -> str:

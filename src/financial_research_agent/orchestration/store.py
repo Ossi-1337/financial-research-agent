@@ -164,6 +164,12 @@ def _execution_from_payload(value: Any) -> AgentExecutionMetadata | None:
         remote_task_id=_optional_payload_text(value, "remote_task_id"),
         service_id=_optional_payload_text(value, "service_id"),
         attempt_count=int(value.get("attempt_count", 1)),
+        prompt_id=_optional_payload_text(value, "prompt_id"),
+        prompt_version=_optional_payload_text(value, "prompt_version"),
+        provider=_optional_payload_text(value, "provider"),
+        model=_optional_payload_text(value, "model"),
+        tool_status=_optional_payload_text(value, "tool_status"),
+        reasoning_summary=_optional_payload_text(value, "reasoning_summary"),
     )
 
 

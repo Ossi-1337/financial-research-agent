@@ -110,20 +110,12 @@ def test_serve_allows_remote_bind_with_explicit_opt_in(monkeypatch) -> None:
     assert calls["host"] == "0.0.0.0"
 
 
-def test_a2a_serve_uses_separate_default_port(monkeypatch, tmp_path: Path) -> None:
-    calls = {}
-
-    def fake_run(app, *, host, port):
-        calls.update(app=app, host=host, port=port)
-
+def test_a2a_serve_requires_specialist_role(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FRA_HOME", str(tmp_path))
     monkeypatch.setenv("FRA_A2A_ENABLED", "true")
-    monkeypatch.setattr("financial_research_agent.cli.uvicorn.run", fake_run)
 
-    assert main(["a2a-serve"]) == 0
-    assert calls["app"].title == "Financial Research Agent A2A"
-    assert calls["host"] == "127.0.0.1"
-    assert calls["port"] == 8001
+    with pytest.raises(SystemExit):
+        main(["a2a-serve"])
 
 
 def test_a2a_serve_selects_specialist_role_and_port(monkeypatch, tmp_path: Path) -> None:

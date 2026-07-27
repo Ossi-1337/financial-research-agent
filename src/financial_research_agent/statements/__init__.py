@@ -11,6 +11,7 @@ from financial_research_agent.statements.contracts import (
     FinancialStatementProviderName,
     FinancialStatementResult,
     FinancialStatementSource,
+    FinancialStatementType,
     NormalizedFinancialStatement,
 )
 from financial_research_agent.statements.sec_companyfacts import SECCompanyFactsProvider
@@ -35,6 +36,7 @@ __all__ = [
     "FinancialStatementResult",
     "FinancialStatementSource",
     "FinancialStatementStore",
+    "FinancialStatementType",
     "NormalizedFinancialStatement",
     "SECCompanyFactsProvider",
     "create_default_financial_statement_provider",

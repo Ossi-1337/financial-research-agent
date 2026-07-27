@@ -11,10 +11,19 @@ from financial_research_agent.report_analysis.contracts import (
     FinancialReportQuestion,
     FinancialReportSection,
 )
+from financial_research_agent.report_analysis.retrieval import (
+    FilingChunkMatch,
+    FilingRetrievalMethod,
+    FilingVectorReranker,
+    retrieve_filing_chunks,
+)
 
 __all__ = [
     "NO_RECOMMENDATION_NOTICE",
     "ConfidenceLabel",
+    "FilingChunkMatch",
+    "FilingRetrievalMethod",
+    "FilingVectorReranker",
     "FinancialReportAnalysisAgent",
     "FinancialReportAnalysisCompany",
     "FinancialReportAnalysisResult",
@@ -22,4 +31,5 @@ __all__ = [
     "FinancialReportFinding",
     "FinancialReportQuestion",
     "FinancialReportSection",
+    "retrieve_filing_chunks",
 ]

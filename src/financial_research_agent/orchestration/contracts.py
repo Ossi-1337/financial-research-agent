@@ -65,6 +65,12 @@ class AgentExecutionMetadata:
     remote_task_id: str | None = None
     service_id: str | None = None
     attempt_count: int = 1
+    prompt_id: str | None = None
+    prompt_version: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    tool_status: str | None = None
+    reasoning_summary: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "mode", AgentExecutionMode(self.mode))
@@ -77,6 +83,12 @@ class AgentExecutionMetadata:
         object.__setattr__(self, "delegation_id", _optional_text(self.delegation_id))
         object.__setattr__(self, "remote_task_id", _optional_text(self.remote_task_id))
         object.__setattr__(self, "service_id", _optional_text(self.service_id))
+        object.__setattr__(self, "prompt_id", _optional_text(self.prompt_id))
+        object.__setattr__(self, "prompt_version", _optional_text(self.prompt_version))
+        object.__setattr__(self, "provider", _optional_text(self.provider))
+        object.__setattr__(self, "model", _optional_text(self.model))
+        object.__setattr__(self, "tool_status", _optional_text(self.tool_status))
+        object.__setattr__(self, "reasoning_summary", _optional_text(self.reasoning_summary))
         if self.attempt_count <= 0:
             raise ValueError("attempt_count must be positive")
 
@@ -89,6 +101,12 @@ class AgentExecutionMetadata:
             "remote_task_id": self.remote_task_id,
             "service_id": self.service_id,
             "attempt_count": self.attempt_count,
+            "prompt_id": self.prompt_id,
+            "prompt_version": self.prompt_version,
+            "provider": self.provider,
+            "model": self.model,
+            "tool_status": self.tool_status,
+            "reasoning_summary": self.reasoning_summary,
         }
 
 

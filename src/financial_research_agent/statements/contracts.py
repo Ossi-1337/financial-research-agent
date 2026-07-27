@@ -8,8 +8,6 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol
 
-from financial_research_agent.domain import FinancialStatementType
-
 
 class FinancialStatementProviderName(StrEnum):
     SEC_COMPANY_FACTS = "sec-companyfacts"
@@ -17,6 +15,13 @@ class FinancialStatementProviderName(StrEnum):
 
 class FinancialStatementPeriodType(StrEnum):
     ANNUAL = "annual"
+
+
+class FinancialStatementType(StrEnum):
+    INCOME_STATEMENT = "income_statement"
+    BALANCE_SHEET = "balance_sheet"
+    CASH_FLOW = "cash_flow"
+    KEY_RATIOS = "key_ratios"
 
 
 class FinancialStatementErrorCode(StrEnum):

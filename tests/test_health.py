@@ -21,8 +21,6 @@ def test_health_report_has_no_external_requirements() -> None:
     assert report["storage"]["dataset_count"] >= 1
     assert report["retrieval"]["provider"] == "local-vector"
     assert report["retrieval"]["embedding_provider"] == "disabled"
-    assert report["interoperability"]["enabled"] is False
-    assert report["interoperability"]["api_key_configured"] is False
     assert report["background"]["max_concurrent_research_runs"] == 1
     assert report["security"]["allow_remote_bind"] is False
     assert report["security"]["tool_policy"].startswith("deny_by_default")

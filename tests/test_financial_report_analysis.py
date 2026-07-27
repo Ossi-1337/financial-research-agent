@@ -5,9 +5,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-from fastapi.testclient import TestClient
 
-from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.filings import (
     FilingChunk,
     FilingCompany,
@@ -17,7 +15,6 @@ from financial_research_agent.filings import (
     FilingSource,
     FilingStore,
 )
-from financial_research_agent.llm.registry import create_offline_provider_registry
 from financial_research_agent.report_analysis import (
     ConfidenceLabel,
     FinancialReportAnalysisAgent,
@@ -26,7 +23,6 @@ from financial_research_agent.report_analysis import (
     FinancialReportFinding,
     FinancialReportSection,
 )
-from financial_research_agent.settings import Settings
 from financial_research_agent.statements import (
     FinancialStatementCompany,
     FinancialStatementPeriod,
@@ -34,9 +30,9 @@ from financial_research_agent.statements import (
     FinancialStatementResult,
     FinancialStatementSource,
     FinancialStatementStore,
+    FinancialStatementType,
     NormalizedFinancialStatement,
 )
-from financial_research_agent.web import ChatSessionStore, create_app
 
 NOW = datetime(2026, 7, 5, tzinfo=UTC)
 
@@ -103,7 +99,7 @@ def test_financial_report_analysis_agent_produces_grounded_sections() -> None:
     risks = _finding(result.findings, FinancialReportSection.RISKS)
     assert risks.evidence_ids
     assert risks.citation_ids
-    assert "keyword-selected" in " ".join(risks.limitations)
+    assert "lexical ranking" in " ".join(risks.limitations)
 
 
 def test_financial_report_analysis_agent_reports_no_data_without_inventing_findings() -> None:
@@ -135,40 +131,6 @@ def test_financial_report_analysis_agent_degrades_on_store_failures() -> None:
     assert result.status == FinancialReportAnalysisStatus.NO_DATA
     assert "statement storage offline" in " ".join(result.limitations)
     assert "filing storage offline" in " ".join(result.limitations)
-
-
-def test_financial_report_analysis_endpoint_uses_stored_statements_and_filings() -> None:
-    statement_store = FinancialStatementStore()
-    filing_store = FilingStore()
-    statement_store.save_result(_statement_result())
-    filing_store.save_result(_filing_result())
-    client = TestClient(
-        create_app(
-            settings=Settings.from_env({"FRA_STORAGE_PROVIDER": "local-json"}),
-            registry=create_offline_provider_registry(),
-            session_store=ChatSessionStore(),
-            financial_statement_store=statement_store,
-            filing_store=filing_store,
-        )
-    )
-
-    response = client.post(
-        "/api/financial-report-analysis",
-        json={
-            "cik": "320193",
-            "company_id": "fixture:company:apple",
-            "legal_name": "TEST TOOL OUTPUT APPLE INC.",
-        },
-    )
-    payload = response.json()["analysis"]
-
-    assert response.status_code == 200
-    assert payload["company"]["cik"] == "320193"
-    assert payload["status"] == "partial"
-    assert payload["findings"][0]["section"] == "revenue"
-    assert payload["findings"][0]["evidence_ids"]
-    assert payload["citations"][0]["marker"] == "[C1]"
-    assert payload["no_recommendation_notice"].startswith("This financial report analysis")
 
 
 def _statement_result() -> FinancialStatementResult:

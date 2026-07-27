@@ -54,8 +54,6 @@ class SpecialistAgentExecutor(AgentExecutor):
         task_store: SQLiteA2ATaskStore,
         redaction_policy: RedactionPolicy,
     ) -> None:
-        if role == AgentRole.COMPANY_RESEARCH:
-            raise ValueError("company-research requires CompanyResearchAgentExecutor")
         self.role = role
         self.service = service
         self.task_store = task_store

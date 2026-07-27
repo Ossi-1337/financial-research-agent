@@ -6,8 +6,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Financial Research Agent is a local-first Python multi-agent system for company and stock
-research. A web-based orchestrator delegates work over A2A to four internal specialist services
-for financial reports, stock analysis, context analysis, and deterministic synthesis.
+research. One orchestrator interprets every chat message and delegates research over A2A to four
+internal specialist services for financial reports, stock analysis, context analysis, and
+source-backed synthesis.
 
 The system combines real financial sources, local persistence, filing retrieval, evidence-backed
 reports, and swappable local or hosted LLM providers. It is research software, not an autonomous
@@ -25,7 +26,8 @@ docker compose up --build
 ```
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The default `offline-test` provider is
-deterministic and intended for setup verification.
+deterministic and intended for setup verification. Direct chat works; real research returns
+`agent_provider_unavailable` until a local or hosted LLM is selected.
 
 Start with a local llama.cpp model:
 
@@ -57,7 +59,9 @@ Implemented:
 - Alpha Vantage daily prices and deterministic market calculations.
 - SQLite persistence, local filing retrieval, citations, evidence inspection, and report exports.
 - Provider adapters for local OpenAI-compatible endpoints, OpenAI, Anthropic, Gemini, and LiteLLM.
-- One orchestrator and four A2A specialist services started by default through Docker Compose.
+- One LLM orchestrator and four tool-using A2A specialist services started by default through
+  Docker Compose.
+- Structured specialist outputs with evidence-ID validation and one bounded schema-repair attempt.
 - Offline evaluation, package verification, guarded storage operations, and local CI through Actio.
 
 Current boundaries:
@@ -67,6 +71,7 @@ Current boundaries:
 - No durable cross-host queue, remote database, public A2A deployment, or hosted telemetry claim.
 - Market data may be delayed or provider-limited; SEC coverage is limited to SEC filers.
 - Local LLM quality depends on the selected model, runtime, context budget, and hardware.
+- Context analysis accepts approved source-linked inputs; automatic news ingestion is not present.
 
 Only the web UI is published to the host. Specialist ports stay inside the Compose network.
 Credentials remain environment-only, external documents are treated as untrusted evidence, and

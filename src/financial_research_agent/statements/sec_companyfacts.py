@@ -8,7 +8,6 @@ from typing import Any
 
 import httpx
 
-from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.statements.contracts import (
     FinancialStatementCompany,
     FinancialStatementError,
@@ -18,6 +17,7 @@ from financial_research_agent.statements.contracts import (
     FinancialStatementProviderName,
     FinancialStatementResult,
     FinancialStatementSource,
+    FinancialStatementType,
     NormalizedFinancialStatement,
 )
 

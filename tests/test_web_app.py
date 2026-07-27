@@ -4,13 +4,11 @@ import json
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
 from financial_research_agent.a2a import A2AResearchStepDispatcher
-from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.entities import (
     CompanySearchCandidate,
     CompanySearchError,
@@ -24,63 +22,40 @@ from financial_research_agent.entities import (
     SourceMetadata,
 )
 from financial_research_agent.filings import (
-    FilingChunk,
-    FilingCompany,
-    FilingDocument,
-    FilingDocumentFormat,
-    FilingError,
-    FilingErrorCode,
-    FilingIngestionResult,
-    FilingSource,
     FilingStore,
 )
 from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
-    EmbeddingRequest,
-    EmbeddingResponse,
     MessageRole,
     ModelMetadata,
     OfflineTestProvider,
-    ProviderCapability,
     ProviderError,
     ProviderErrorCode,
     StreamEvent,
     StreamEventType,
-    TokenUsage,
 )
 from financial_research_agent.llm.registry import ProviderRegistry, create_offline_provider_registry
 from financial_research_agent.market_data import (
-    HistoricalPriceBar,
-    HistoricalPriceResult,
-    MarketDataError,
-    MarketDataErrorCode,
-    MarketDataSource,
     MarketDataStore,
-    MarketSecurity,
-    calculate_price_metrics,
 )
-from financial_research_agent.orchestration import OrchestratorRunStore, default_orchestrator_plan
+from financial_research_agent.orchestration import (
+    AgentHandoff,
+    DelegationResult,
+    HandoffConfidence,
+    OrchestratorHandoffStatus,
+    OrchestratorRunStore,
+    OrchestratorStepKind,
+)
 from financial_research_agent.reports import CitedResearchRunStore
 from financial_research_agent.retrieval import (
-    IndexedChunk,
     LocalVectorIndex,
-    RetrievalChunk,
-    RetrievalSourceKind,
 )
 from financial_research_agent.runtime_settings import RuntimeSettingsStore
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements import (
-    FinancialStatementCompany,
-    FinancialStatementError,
-    FinancialStatementErrorCode,
-    FinancialStatementPeriod,
-    FinancialStatementPeriodType,
-    FinancialStatementResult,
-    FinancialStatementSource,
     FinancialStatementStore,
-    NormalizedFinancialStatement,
 )
 from financial_research_agent.web import ChatSessionStore, create_app
 
@@ -131,95 +106,15 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
 
 
-def test_static_script_contains_mention_autocomplete_wiring() -> None:
-    client = _client()
+def test_frontend_has_one_message_entrypoint_without_slash_routing() -> None:
+    script = _client().get("/static/app.js")
 
-    response = client.get("/static/app.js")
-
-    assert response.status_code == 200
-    assert "/api/company-search?query=" in response.text
-    assert "mention-chip" in response.text
-    assert "Stop response" in response.text
-    assert "/messages/stream" in response.text
-    assert "appendOptimisticExchange" in response.text
-    assert "readNdjsonStream" in response.text
-    assert "getReader" in response.text
-    assert "renderLoadingIndicator" in response.text
-    assert "renderMessageCitations" in response.text
-    assert "renderContextPanel" in response.text
-    assert "renderSynthesisReport" in response.text
-    assert "normalizeAlignedChartSeries" in response.text
-    assert "Shared period:" in response.text
-    assert "createReportExport" in response.text
-    assert "renderTraceTimeline" in response.text
-    assert "loadRunTrace" in response.text
-    assert "scenarioCommand" in response.text
-    assert "/api/scenarios/" in response.text
-    assert "routeChatMessage" in response.text
-    assert "/api/chat/route" in response.text
-    assert "if (!allowBusy && (state.busy || sessionId === state.sessionId))" in response.text
-    assert "renderStockChart" in response.text
-    assert "renderRunEvidencePanel" in response.text
-    assert "/evidence" in response.text
-    assert "/synthesis-report" in response.text
-    assert "/trace" in response.text
-    assert "researchCommand" not in response.text
-    assert "/api/settings" in response.text
-    assert "/api/settings/provider-health" in response.text
-    assert "refreshProviderModels" in response.text
-    assert "setModelOptions" in response.text
-    assert "contextSourcesFromMessages" in response.text
-    assert "safeExternalUrl" in response.text
-    assert "citation-list" in response.text
-    assert 'item.className = "loading-row"' in response.text
-    assert "message.provider" not in response.text
-
-
-def test_chat_route_uses_research_for_company_mentions_and_current_financial_questions() -> None:
-    client = _client()
-    mention = {
-        "id": "mention_tsla",
-        "label": "@TSLA",
-        "company_id": "company_sec_1318605",
-        "legal_name": "Tesla, Inc.",
-        "ticker": "TSLA",
-        "cik": "1318605",
-        "source_provider": "sec",
-    }
-
-    mentioned = client.post(
-        "/api/chat/route",
-        json={"content": "Tell me about @TSLA", "mentions": [mention]},
-    )
-    current = client.post(
-        "/api/chat/route",
-        json={"content": "How is Tesla stock performing at this time?", "mentions": []},
-    )
-
-    assert mentioned.status_code == 200
-    assert mentioned.json()["route"] == "research"
-    assert mentioned.json()["reason"] == "resolved_company_reference"
-    assert mentioned.json()["company_query"] == "Tesla, Inc."
-    assert current.status_code == 200
-    assert current.json()["route"] == "research"
-    assert current.json()["reason"] == "current_financial_information"
-    assert current.json()["company_query"] == "Tesla"
-
-
-def test_chat_route_keeps_general_and_conceptual_questions_in_direct_chat() -> None:
-    client = _client()
-
-    general = client.post(
-        "/api/chat/route",
-        json={"content": "Write a Python function.", "mentions": []},
-    )
-    conceptual = client.post(
-        "/api/chat/route",
-        json={"content": "What does a stock represent?", "mentions": []},
-    )
-
-    assert general.json()["route"] == "chat"
-    assert conceptual.json()["route"] == "chat"
+    assert script.status_code == 200
+    assert "/messages/stream" in script.text
+    assert "routeChatMessage" not in script.text
+    assert "/api/chat/route" not in script.text
+    assert 'startsWith("/scenario")' not in script.text
+    assert 'startsWith("/research")' not in script.text
 
 
 def test_runtime_settings_endpoint_returns_redacted_provider_management_payload() -> None:
@@ -385,8 +280,6 @@ def test_status_returns_chat_provider_without_secrets() -> None:
         "medium",
         "strong",
     ]
-    assert payload["interoperability"]["enabled"] is False
-    assert payload["interoperability"]["api_key_configured"] is False
     assert payload["storage"]["provider"] == "sqlite"
     assert "secret-value" not in json.dumps(payload)
 
@@ -397,103 +290,6 @@ def test_default_web_runtime_uses_a2a_specialist_dispatcher(tmp_path) -> None:
     assert isinstance(app.state.research_dispatcher, A2AResearchStepDispatcher)
     status = TestClient(app).get("/api/status").json()
     assert status["a2a"]["enabled"] is True
-
-
-def test_interop_endpoints_are_disabled_by_default() -> None:
-    client = _client()
-
-    card = client.get("/.well-known/agent.json")
-    mcp = client.post("/api/interop/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-
-    assert card.status_code == 404
-    assert mcp.status_code == 404
-    assert mcp.json()["detail"]["error"] == "interoperability_disabled"
-
-
-def test_local_interop_exposes_only_mcp_status_tool() -> None:
-    settings = Settings.from_env({"FRA_INTEROP_ENABLED": "true"})
-    client = _client(settings=settings)
-
-    card_response = client.get("/.well-known/agent-card.json")
-    initialize_response = client.post(
-        "/api/interop/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-    )
-    list_response = client.post(
-        "/api/interop/mcp",
-        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-    )
-    call_response = client.post(
-        "/api/interop/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "financial_research_agent.status", "arguments": {}},
-        },
-    )
-
-    tool_text = call_response.json()["result"]["content"][0]["text"]
-    tool_payload = json.loads(tool_text)
-
-    assert card_response.status_code == 404
-    assert initialize_response.json()["result"]["capabilities"]["tools"]["listChanged"] is False
-    assert list_response.json()["result"]["tools"][0]["name"] == "financial_research_agent.status"
-    assert tool_payload["app"] == "financial-research-agent"
-    assert tool_payload["capabilities"]["recommendations"] == "disabled"
-    assert "secret" not in tool_text.casefold()
-
-
-def test_interop_remote_mode_requires_api_key_and_accepts_bearer_or_header() -> None:
-    settings = Settings.from_env(
-        {
-            "FRA_INTEROP_ENABLED": "true",
-            "FRA_INTEROP_LOCAL_ONLY": "false",
-            "FRA_INTEROP_API_KEY": "secret-key",
-        }
-    )
-    client = _client(settings=settings)
-
-    denied = client.post(
-        "/api/interop/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-    )
-    header_allowed = client.post(
-        "/api/interop/mcp",
-        headers={"X-FRA-Interop-Key": "secret-key"},
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-    )
-    bearer_allowed = client.post(
-        "/api/interop/mcp",
-        headers={"Authorization": "Bearer secret-key"},
-        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-    )
-
-    assert denied.status_code == 401
-    assert denied.json()["detail"]["error"] == "invalid_interop_key"
-    assert header_allowed.status_code == 200
-    assert bearer_allowed.status_code == 200
-    assert "secret-key" not in json.dumps(header_allowed.json())
-
-
-def test_interop_mcp_returns_json_rpc_errors_for_unknown_tool() -> None:
-    settings = Settings.from_env({"FRA_INTEROP_ENABLED": "true"})
-    client = _client(settings=settings)
-
-    response = client.post(
-        "/api/interop/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": "bad-tool",
-            "method": "tools/call",
-            "params": {"name": "shell.exec", "arguments": {}},
-        },
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["id"] == "bad-tool"
-    assert payload["error"]["code"] == -32602
 
 
 def test_storage_status_endpoint_reports_local_datasets(tmp_path) -> None:
@@ -624,9 +420,6 @@ def test_chat_message_uses_offline_provider_and_updates_session() -> None:
     assert payload["model"] == "offline-test"
     assert payload["finish_reason"] == "stop"
     assert payload["usage"]["total_tokens"] > 0
-    assert payload["performance"]["call_kind"] == "chat"
-    assert payload["performance"]["provider"] == "offline-test"
-    assert payload["performance"]["estimated_cost_usd"] == "0.000000"
     assert payload["assistant_message"]["role"] == "assistant"
     assistant_content = payload["assistant_message"]["content"]
     assert "offline-test response: Summarize Novo Nordisk." in assistant_content
@@ -644,51 +437,14 @@ def test_chat_request_includes_financial_research_system_prompt() -> None:
     response = client.post(f"/api/sessions/{session_id}/messages", json={"content": "Hello"})
 
     assert response.status_code == 200
-    request = provider.requests[0]
+    request = provider.requests[-1]
     system_prompt = request.messages[0]
     assert system_prompt.role == MessageRole.SYSTEM
-    assert "does not automatically receive live financial data" in system_prompt.content
-    assert "must fetch and inspect source data first" in system_prompt.content
-    assert "Do not provide buy, sell, or hold recommendations" in system_prompt.content
+    assert "does not automatically receive live financial data" not in system_prompt.content
+    assert "specialist agents" in system_prompt.content
+    assert "Do not provide buy, sell, hold" in system_prompt.content
     assert request.messages[-1].content == "Hello"
     assert request.max_output_tokens is not None
-
-
-def test_chat_request_accepts_mentions_and_adds_provider_context() -> None:
-    provider = CapturingProvider()
-    registry = ProviderRegistry().register_chat_provider("capture", provider)
-    settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
-    client = _client(settings=settings, registry=registry)
-    session_id = client.post("/api/sessions").json()["session"]["id"]
-
-    response = client.post(
-        f"/api/sessions/{session_id}/messages",
-        json={
-            "content": "Summarize @AAPL.",
-            "mentions": [
-                {
-                    "id": "sec:company:320193",
-                    "label": "AAPL",
-                    "company_id": "sec:company:320193",
-                    "legal_name": "TEST TOOL OUTPUT APPLE INC.",
-                    "ticker": "AAPL",
-                    "cik": "320193",
-                    "source_provider": "sec",
-                }
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    user_message = payload["session"]["messages"][0]
-    assert user_message["mentions"][0]["label"] == "AAPL"
-    request = provider.requests[0]
-    assert "Resolved @company mentions" in request.messages[1].content
-    assert "ticker=AAPL" in request.messages[1].content
-    assert "cik=320193" in request.messages[1].content
-    assert "not live financial evidence" in request.messages[1].content
-    assert request.messages[-1].content == "Summarize @AAPL."
 
 
 def test_streaming_chat_message_emits_deltas_and_updates_session() -> None:
@@ -715,7 +471,7 @@ def test_streaming_chat_message_emits_deltas_and_updates_session() -> None:
     assert events[-1]["assistant_message"]["content"] == "captured response"
     assert events[-1]["performance"]["call_kind"] == "streaming_chat"
     assert events[-1]["session"]["messages"] == retrieved["messages"]
-    assert provider.requests[0].messages[-1].content == "Stream this answer."
+    assert provider.requests[-1].messages[-1].content == "Stream this answer."
 
 
 def test_streaming_provider_error_event_does_not_mutate_session() -> None:
@@ -833,7 +589,7 @@ def test_provider_error_maps_to_http_error_and_does_not_mutate_session() -> None
     retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
 
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "provider_unavailable"
+    assert response.json()["detail"]["error"] == "agent_provider_unavailable"
     assert retrieved["messages"] == []
 
 
@@ -889,500 +645,57 @@ def test_company_search_errors_map_to_http_status() -> None:
     assert response.json()["detail"]["code"] == "rate_limited"
 
 
-def test_market_data_fetch_endpoint_persists_history(tmp_path) -> None:
-    store = MarketDataStore(storage_path=tmp_path / "market_data_price_bars.json")
-    client = _client(market_data_provider=FakeMarketDataProvider(), market_data_store=store)
-
-    response = client.post(
-        "/api/market-data/history",
-        json={
-            "symbol": "NVO",
-            "security_id": "fixture:security:nvo",
-            "currency": "USD",
-            "exchange_mic": "XNYS",
-            "refresh": True,
-        },
-    )
-    stored = client.get("/api/market-data/history/NVO")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["stored"] is False
-    assert payload["history"]["metrics"]["latest_close"] == "105"
-    assert stored.status_code == 200
-    assert stored.json()["stored"] is True
-    assert stored.json()["history"]["bars"][-1]["close"] == "105"
-
-
-def test_market_data_endpoint_uses_cached_history_without_refresh(tmp_path) -> None:
-    store = MarketDataStore(storage_path=tmp_path / "market_data_price_bars.json")
-    store.save_history(FakeMarketDataProvider.history())
-    client = _client(
-        market_data_provider=FailingMarketDataProvider(MarketDataErrorCode.AUTHENTICATION_FAILED),
-        market_data_store=store,
-    )
-
-    response = client.post("/api/market-data/history", json={"symbol": "NVO"})
-
-    assert response.status_code == 200
-    assert response.json()["stored"] is True
-
-
-def test_market_data_errors_map_to_http_status() -> None:
-    client = _client(
-        market_data_provider=FailingMarketDataProvider(MarketDataErrorCode.AUTHENTICATION_FAILED),
-        market_data_store=MarketDataStore(),
-    )
-
-    response = client.post("/api/market-data/history", json={"symbol": "NVO", "refresh": True})
-
-    assert response.status_code == 401
-    assert response.json()["detail"]["code"] == "authentication_failed"
-
-
-def test_financial_statement_fetch_endpoint_persists_result(tmp_path) -> None:
-    store = FinancialStatementStore(storage_path=tmp_path / "financial_statements.json")
-    client = _client(
-        financial_statement_provider=FakeFinancialStatementProvider(),
-        financial_statement_store=store,
-    )
-
-    response = client.post(
-        "/api/financial-statements",
-        json={
-            "cik": "0000320193",
-            "company_id": "fixture:company:apple",
-            "legal_name": "TEST TOOL OUTPUT APPLE INC.",
-            "refresh": True,
-        },
-    )
-    stored = client.get("/api/financial-statements/320193")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["stored"] is False
-    assert payload["statements"]["statements"][0]["line_items"]["revenues"] == "1000"
-    assert stored.status_code == 200
-    assert stored.json()["stored"] is True
-    assert stored.json()["statements"]["company"]["cik"] == "320193"
-
-
-def test_financial_statement_endpoint_uses_cached_result_without_refresh(tmp_path) -> None:
-    store = FinancialStatementStore(storage_path=tmp_path / "financial_statements.json")
-    store.save_result(FakeFinancialStatementProvider.result())
-    client = _client(
-        financial_statement_provider=FailingFinancialStatementProvider(
-            FinancialStatementErrorCode.PROVIDER_UNAVAILABLE
-        ),
-        financial_statement_store=store,
-    )
-
-    response = client.post("/api/financial-statements", json={"cik": "320193"})
-
-    assert response.status_code == 200
-    assert response.json()["stored"] is True
-
-
-def test_financial_statement_errors_map_to_http_status() -> None:
-    client = _client(
-        financial_statement_provider=FailingFinancialStatementProvider(
-            FinancialStatementErrorCode.NOT_FOUND
-        ),
-        financial_statement_store=FinancialStatementStore(),
-    )
-
-    response = client.post(
-        "/api/financial-statements",
-        json={"cik": "320193", "refresh": True},
-    )
+@pytest.mark.parametrize(
+    ("method", "path"),
+    (
+        ("post", "/api/orchestrator/research"),
+        ("post", "/api/financial-report-analysis"),
+        ("post", "/api/stock-price-analysis"),
+        ("post", "/api/context-analysis"),
+        ("post", "/api/retrieval/search"),
+        ("post", "/api/sessions/missing/cited-answer"),
+        ("post", "/api/scenarios/novo-nordisk/runs"),
+    ),
+)
+def test_removed_bypass_endpoints_return_404(method: str, path: str) -> None:
+    response = getattr(_client(), method)(path, json={})
 
     assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "not_found"
 
 
-def test_filing_ingestion_endpoint_persists_result(tmp_path) -> None:
-    store = FilingStore(storage_path=tmp_path / "filings_index.json")
-    client = _client(filing_provider=FakeFilingProvider(), filing_store=store)
-
-    response = client.post(
-        "/api/filings/ingest",
-        json={
-            "cik": "0000320193",
-            "company_id": "fixture:company:apple",
-            "legal_name": "TEST TOOL OUTPUT APPLE INC.",
-            "forms": ["10-K"],
-            "limit": 1,
-            "refresh": True,
-        },
-    )
-    stored = client.get("/api/filings/320193")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["stored"] is False
-    assert payload["filings"]["filings"][0]["form_type"] == "10-K"
-    assert payload["filings"]["chunks"][0]["section_heading"] == "Item 1. Business"
-    assert stored.status_code == 200
-    assert stored.json()["stored"] is True
-
-
-def test_filing_ingestion_endpoint_uses_cached_result_without_refresh(tmp_path) -> None:
-    store = FilingStore(storage_path=tmp_path / "filings_index.json")
-    store.save_result(FakeFilingProvider.result())
-    client = _client(
-        filing_provider=FailingFilingProvider(FilingErrorCode.PROVIDER_UNAVAILABLE),
-        filing_store=store,
-    )
-
-    response = client.post("/api/filings/ingest", json={"cik": "320193"})
-
-    assert response.status_code == 200
-    assert response.json()["stored"] is True
-
-
-def test_filing_errors_map_to_http_status() -> None:
-    client = _client(
-        filing_provider=FailingFilingProvider(FilingErrorCode.UNSUPPORTED_FORMAT),
-        filing_store=FilingStore(),
-    )
-
-    response = client.post(
-        "/api/filings/ingest",
-        json={"cik": "320193", "forms": ["10-K"], "refresh": True},
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "unsupported_format"
-
-
-def test_retrieval_index_endpoint_reports_metadata() -> None:
-    client = _client()
-
-    response = client.get("/api/retrieval/index")
-    payload = response.json()["index"]
-
-    assert response.status_code == 200
-    assert payload["provider"] == "local-vector"
-    assert payload["record_count"] == 0
-
-
-def test_retrieval_index_stored_filings_and_searches_chunks(tmp_path) -> None:
-    filing_store = FilingStore(storage_path=tmp_path / "filings_index.json")
-    filing_store.save_result(FakeFilingProvider.result())
-    retrieval_index = LocalVectorIndex(storage_path=tmp_path / "vector_index.json")
-    registry = create_offline_provider_registry().register_embedding_provider(
-        "keyword-fixture", KeywordEmbeddingProvider()
-    )
-    settings = Settings.from_env(
-        {
-            "FRA_HOME": str(tmp_path),
-            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
-            "FRA_EMBEDDING_MODEL": "keyword-model",
-        }
-    )
-    client = _client(
-        settings=settings,
-        registry=registry,
-        filing_store=filing_store,
-        retrieval_index=retrieval_index,
-    )
-
-    indexed = client.post("/api/retrieval/index/filings", json={"cik": "320193"})
-    searched = client.post("/api/retrieval/search", json={"query": "filing", "top_k": 1})
-
-    assert indexed.status_code == 200
-    assert indexed.json()["result"]["indexed_count"] == 1
-    assert indexed.json()["index"]["record_count"] == 1
-    assert searched.status_code == 200
-    match = searched.json()["result"]["matches"][0]
-    assert match["chunk"]["metadata"]["cik"] == "320193"
-    assert match["chunk"]["source_url"] == "https://example.invalid/aapl-20251231.htm"
-    assert match["score"] > 0
-
-
-def test_retrieval_search_empty_index_maps_to_not_found(tmp_path) -> None:
-    registry = create_offline_provider_registry().register_embedding_provider(
-        "keyword-fixture", KeywordEmbeddingProvider()
-    )
-    settings = Settings.from_env(
-        {
-            "FRA_HOME": str(tmp_path),
-            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
-        }
-    )
-    client = _client(settings=settings, registry=registry, retrieval_index=LocalVectorIndex())
-
-    response = client.post("/api/retrieval/search", json={"query": "filing"})
-
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "index_empty"
-
-
-def test_cited_answer_endpoint_stores_run_and_session_citations(tmp_path) -> None:
-    provider = CapturingProvider()
-    registry = (
-        ProviderRegistry()
-        .register_chat_provider("capture", provider)
-        .register_embedding_provider("keyword-fixture", KeywordEmbeddingProvider())
-    )
-    index = LocalVectorIndex(storage_path=tmp_path / "vector_index.json")
-    index.upsert(
-        (
-            IndexedChunk(
-                chunk=RetrievalChunk(
-                    id="retrieval:chunk-1",
-                    text="TEST TOOL OUTPUT filing revenue evidence.",
-                    source_kind=RetrievalSourceKind.FILING_CHUNK,
-                    source_id="filing-chunk-1",
-                    source_url="https://example.invalid/aapl-10k.htm",
-                    document_id="filing-1",
-                    section_heading="Item 7. Management Discussion",
-                    metadata={"cik": "320193", "char_start": "42"},
-                ),
-                embedding=(1.0, 0.0, 0.0),
-                embedding_provider="keyword-fixture",
-                embedding_model="keyword-model",
-                indexed_at=datetime(2026, 7, 5, tzinfo=UTC),
-            ),
-        )
-    )
-    report_store = CitedResearchRunStore(storage_path=tmp_path / "report_runs.json")
-    settings = Settings.from_env(
-        {
-            "FRA_HOME": str(tmp_path),
-            "FRA_LLM_PROVIDER": "capture",
-            "FRA_LLM_MODEL": "capture-model",
-            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
-            "FRA_EMBEDDING_MODEL": "keyword-model",
-        }
-    )
-    client = _client(
-        settings=settings,
-        registry=registry,
-        retrieval_index=index,
-        report_run_store=report_store,
-    )
-    session_id = client.post("/api/sessions").json()["session"]["id"]
-
-    response = client.post(
-        f"/api/sessions/{session_id}/cited-answer",
-        json={"content": "What does the filing say about revenue?", "top_k": 1},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assistant = payload["assistant_message"]
-    assert assistant["research_run_id"].startswith("research_run_")
-    assert assistant["content"].endswith("Sources: [C1]")
-    assert assistant["citations"][0]["marker"] == "[C1]"
-    assert assistant["citations"][0]["quote_start"] == 42
-    assert assistant["evidence_snippets"][0]["text"].startswith("TEST TOOL OUTPUT filing")
-    assert payload["research_run"]["citations"][0]["source_url"].endswith("aapl-10k.htm")
-    assert "[C1]" in provider.requests[0].messages[-1].content
-    stored = client.get(f"/api/research-runs/{assistant['research_run_id']}")
-    assert stored.status_code == 200
-    assert stored.json()["research_run"]["citations"][0]["id"] == "C1"
-
-
-def test_cited_answer_missing_evidence_adds_limitation_without_llm_call(tmp_path) -> None:
-    provider = CapturingProvider()
-    registry = (
-        ProviderRegistry()
-        .register_chat_provider("capture", provider)
-        .register_embedding_provider("keyword-fixture", KeywordEmbeddingProvider())
-    )
-    settings = Settings.from_env(
-        {
-            "FRA_HOME": str(tmp_path),
-            "FRA_LLM_PROVIDER": "capture",
-            "FRA_LLM_MODEL": "capture-model",
-            "FRA_EMBEDDING_PROVIDER": "keyword-fixture",
-        }
-    )
-    client = _client(
-        settings=settings,
-        registry=registry,
-        retrieval_index=LocalVectorIndex(),
-        report_run_store=CitedResearchRunStore(storage_path=tmp_path / "report_runs.json"),
-    )
-    session_id = client.post("/api/sessions").json()["session"]["id"]
-
-    response = client.post(
-        f"/api/sessions/{session_id}/cited-answer",
-        json={"content": "Find unsupported facts."},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["research_run"]["status"] == "limited"
-    assert payload["research_run"]["citations"] == []
-    assert "could not find stored evidence" in payload["assistant_message"]["content"]
-    assert provider.requests == []
-
-
-def test_session_synthesis_report_endpoint_runs_orchestrator_and_stores_report() -> None:
-    client = _client()
-    session_id = client.post("/api/sessions").json()["session"]["id"]
-
-    response = client.post(
-        f"/api/sessions/{session_id}/synthesis-report",
-        json={"query": "Novo Nordisk financial situation", "refresh": True},
-    )
-    payload = response.json()
-    assistant = payload["assistant_message"]
-    retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
-    stored_run = client.get(f"/api/orchestrator/runs/{assistant['research_run_id']}").json()
-    trace = client.get(f"/api/orchestrator/runs/{assistant['research_run_id']}/trace").json()
-    replay = client.post(f"/api/orchestrator/runs/{assistant['research_run_id']}/replay").json()
-    debug_bundle = client.get(
-        f"/api/orchestrator/runs/{assistant['research_run_id']}/debug-bundle"
-    ).json()
-
-    assert response.status_code == 200
-    assert payload["provider"] == "orchestrator"
-    assert assistant["role"] == "assistant"
-    assert assistant["research_run_id"].startswith("orchestrator_run_")
-    assert assistant["synthesis_report"]["sections"]["current_situation"]
-    assert assistant["synthesis_report"]["scenarios"]["upside"]["direction"] == "upside"
-    assert "does not provide buy, sell, hold" in assistant["content"]
-    assert retrieved["messages"][-1]["synthesis_report"] == assistant["synthesis_report"]
-    assert stored_run["synthesis_report"]["id"] == assistant["synthesis_report"]["id"]
-    assert trace["trace"]["run_id"] == assistant["research_run_id"]
-    assert trace["trace"]["events"][0]["kind"] == "provider_call"
-    assert any(event["kind"] == "agent_output" for event in trace["trace"]["events"])
-    assert replay["replay"]["replayable"] is True
-    assert replay["replay"]["steps"][0]["mode"] == "stored_result"
-    assert debug_bundle["debug_bundle"]["trace"]["run_id"] == assistant["research_run_id"]
-    assert "raw provider credentials" in debug_bundle["debug_bundle"]["excluded_items"]
-
-
-def test_novo_scenario_endpoint_uses_background_progress_evidence_and_exports(
-    tmp_path,
-) -> None:
-    secret = "TEST_ALPHA_VANTAGE_SECRET"
-    settings = Settings.from_env(
-        {
-            "FRA_HOME": str(tmp_path),
-            "FRA_ALPHA_VANTAGE_API_KEY": secret,
-            "FRA_SEC_USER_AGENT": "financial-research-agent-tests test@example.com",
-        }
-    )
-    client = _client(settings=settings)
-    session_id = client.post("/api/sessions").json()["session"]["id"]
-
-    response = client.post(
-        "/api/scenarios/novo-nordisk/runs",
-        json={"session_id": session_id, "refresh": True, "with_local_qa": False},
-    )
-    job = _poll_background_job(client, response.json()["job"]["id"])
-    run_id = job["orchestrator_run_id"]
-    run_response = client.get(f"/api/orchestrator/runs/{run_id}")
-    evidence_response = client.get(f"/api/orchestrator/runs/{run_id}/evidence")
-    session = client.get(f"/api/sessions/{session_id}").json()["session"]
-    exports = client.get("/api/report-exports").json()["exports"]
-
-    assert response.status_code == 202
-    assert response.json()["scenario"]["preferred_ticker"] == "NVO"
-    assert job["status"] == "succeeded"
-    assert job["progress"]["total_steps"] == len(default_orchestrator_plan())
-    assert run_response.json()["run"]["scenario_id"] == "novo-nordisk"
-    assert evidence_response.status_code == 200
-    assert "sources" in evidence_response.json()["evidence"]
-    assert session["messages"][-1]["research_run_id"] == run_id
-    assert any(item["export"]["run_id"] == run_id for item in exports)
-    assert secret not in json.dumps(evidence_response.json())
-
-
-def test_novo_scenario_local_qa_is_labeled_in_chat_without_changing_report(
-    tmp_path,
-) -> None:
-    provider = SourceBoundedProvider()
+def test_plain_company_question_starts_canonical_agent_research() -> None:
+    provider = ResearchDecisionProvider()
+    dispatcher = ResearchDispatcher()
     registry = ProviderRegistry().register_chat_provider("capture", provider)
-    settings = Settings.from_env(
-        {
-            "FRA_HOME": str(tmp_path),
-            "FRA_ALPHA_VANTAGE_API_KEY": "TEST_ALPHA_VANTAGE_SECRET",
-            "FRA_SEC_USER_AGENT": "financial-research-agent-tests test@example.com",
-            "FRA_LLM_PROVIDER": "capture",
-            "FRA_LLM_MODEL": "capture-model",
-        }
-    )
-    client = _client(settings=settings, registry=registry)
-    session_id = client.post("/api/sessions").json()["session"]["id"]
-
-    response = client.post(
-        "/api/scenarios/novo-nordisk/runs",
-        json={"session_id": session_id, "refresh": True, "with_local_qa": True},
-    )
-    job = _poll_background_job(client, response.json()["job"]["id"])
-    session = client.get(f"/api/sessions/{session_id}").json()["session"]
-    assistant = session["messages"][-1]
-
-    assert job["status"] == "succeeded"
-    assert "## LLM-generated source-bounded Q&A" in assistant["content"]
-    assert "Source-bounded TEST answer [S1]." in assistant["content"]
-    assert "does not modify the deterministic report" in assistant["content"]
-    assert "local_qa" not in assistant["synthesis_report"]
-    assert provider.requests
-
-
-def test_novo_scenario_endpoint_maps_preflight_and_unknown_scenario_errors(tmp_path) -> None:
-    client = _client(settings=Settings.from_env({"FRA_HOME": str(tmp_path)}))
-    session_id = client.post("/api/sessions").json()["session"]["id"]
-
-    missing_key = client.post(
-        "/api/scenarios/novo-nordisk/runs",
-        json={"session_id": session_id},
-    )
-    unknown = client.post(
-        "/api/scenarios/missing/runs",
-        json={"session_id": session_id, "refresh": False},
-    )
-
-    assert missing_key.status_code == 409
-    assert missing_key.json()["detail"]["code"] == "missing_market_data_credentials"
-    assert unknown.status_code == 404
-    assert unknown.json()["detail"]["code"] == "unknown_scenario"
-
-
-def test_orchestrator_trace_debug_bundle_redacts_failed_run(tmp_path) -> None:
-    settings = Settings.from_env(
-        {
-            "FRA_HOME": str(tmp_path / "home"),
-            "FRA_OPENAI_API_KEY": "sk-test-secret",
-        }
-    )
+    settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
     client = _client(
         settings=settings,
-        company_search_provider=FailingCompanySearchProvider(
-            CompanySearchErrorCode.PROVIDER_UNAVAILABLE,
-        ),
-        orchestrator_run_store=OrchestratorRunStore(
-            storage_path=tmp_path / "orchestrator_runs.json",
-        ),
+        registry=registry,
+        research_dispatcher=dispatcher,
     )
+    session_id = client.post("/api/sessions").json()["session"]["id"]
 
-    response = client.post(
-        "/api/orchestrator/research",
-        json={"query": "sk-test-secret company", "refresh": True},
-    )
-    run = response.json()["run"]
-    trace_response = client.get(f"/api/orchestrator/runs/{run['id']}/trace")
-    debug_response = client.get(f"/api/orchestrator/runs/{run['id']}/debug-bundle")
+    with client.stream(
+        "POST",
+        f"/api/sessions/{session_id}/messages/stream",
+        json={"content": "How is Tesla performing financially?"},
+    ) as response:
+        event = json.loads(next(line for line in response.iter_lines() if line))
+    job_id = event["job"]["id"]
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/background/research-runs/{job_id}").json()["job"]
+        if job["status"] != "running":
+            break
+        time.sleep(0.01)
+    session = client.get(f"/api/sessions/{session_id}").json()["session"]
 
     assert response.status_code == 200
-    assert run["status"] == "failed"
-    assert trace_response.status_code == 200
-    trace = trace_response.json()["trace"]
-    event = trace["events"][0]
-    assert event["kind"] == "provider_call"
-    assert event["status"] == "failed"
-    assert event["error_code"] == "provider_unavailable"
-    dumped_trace = json.dumps(trace)
-    dumped_bundle = json.dumps(debug_response.json())
-    assert "sk-test-secret" not in dumped_trace
-    assert "sk-test-secret" not in dumped_bundle
-    assert str(tmp_path / "home") not in dumped_bundle
+    assert event["type"] == "research"
+    assert job["status"] == "succeeded"
+    assert dispatcher.requests[-1].step_id == "synthesis"
+    assert session["messages"][-1]["research_run_id"] == job["orchestrator_run_id"]
+    assert session["messages"][-1]["synthesis_report"]["status"] == "complete"
 
 
 def _client(
@@ -1391,16 +704,14 @@ def _client(
     registry: ProviderRegistry | None = None,
     use_default_store: bool = False,
     company_search_provider=None,
-    market_data_provider=None,
     market_data_store=None,
-    financial_statement_provider=None,
     financial_statement_store=None,
-    filing_provider=None,
     filing_store=None,
     retrieval_index=None,
     report_run_store=None,
     orchestrator_run_store=None,
     runtime_settings_store=None,
+    research_dispatcher=None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -1408,35 +719,16 @@ def _client(
             registry=registry or create_offline_provider_registry(),
             session_store=None if use_default_store else ChatSessionStore(),
             company_search_provider=company_search_provider or FakeCompanySearchProvider(),
-            market_data_provider=market_data_provider or FakeMarketDataProvider(),
             market_data_store=market_data_store or MarketDataStore(),
-            financial_statement_provider=(
-                financial_statement_provider or FakeFinancialStatementProvider()
-            ),
             financial_statement_store=financial_statement_store or FinancialStatementStore(),
-            filing_provider=filing_provider or FakeFilingProvider(),
             filing_store=filing_store or FilingStore(),
             retrieval_index=retrieval_index or LocalVectorIndex(),
             report_run_store=report_run_store or CitedResearchRunStore(),
             orchestrator_run_store=orchestrator_run_store or OrchestratorRunStore(),
             runtime_settings_store=runtime_settings_store or RuntimeSettingsStore(),
+            research_dispatcher=research_dispatcher,
         )
     )
-
-
-def _poll_background_job(
-    client: TestClient,
-    job_id: str,
-    *,
-    timeout: float = 5.0,
-) -> dict[str, object]:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        job = client.get(f"/api/background/research-runs/{job_id}").json()["job"]
-        if job["status"] in {"succeeded", "failed", "cancelled"}:
-            return job
-        time.sleep(0.02)
-    raise AssertionError("background scenario did not finish before timeout")
 
 
 class CapturingProvider:
@@ -1449,6 +741,19 @@ class CapturingProvider:
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
+        if request.response_format and request.response_format.name == "orchestrator_decision":
+            return ChatResponse(
+                message=ChatMessage(role=MessageRole.ASSISTANT, content=""),
+                provider="capture",
+                model=request.model or "capture-model",
+                structured_output={
+                    "mode": "direct_answer",
+                    "answer": "",
+                    "company_query": None,
+                    "specialist_roles": [],
+                    "reasoning_summary": "General conversation.",
+                },
+            )
         return ChatResponse(
             message=ChatMessage(role=MessageRole.ASSISTANT, content="captured response"),
             provider="capture",
@@ -1462,16 +767,70 @@ class CapturingProvider:
         yield StreamEvent(event_type=StreamEventType.COMPLETED, response=response)
 
 
-class SourceBoundedProvider(CapturingProvider):
+class ResearchDecisionProvider(CapturingProvider):
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
-        return ChatResponse(
-            message=ChatMessage(
-                role=MessageRole.ASSISTANT,
-                content="Source-bounded TEST answer [S1].",
-            ),
-            provider="capture",
-            model=request.model or "capture-model",
+        if request.response_format and request.response_format.name == "orchestrator_decision":
+            return ChatResponse(
+                message=ChatMessage(role=MessageRole.ASSISTANT, content=""),
+                provider="capture",
+                model=request.model or "capture-model",
+                structured_output={
+                    "mode": "research",
+                    "answer": "",
+                    "company_query": "Tesla",
+                    "specialist_roles": [
+                        "financial-report",
+                        "stock",
+                        "context",
+                        "synthesis",
+                    ],
+                    "reasoning_summary": "Current company research requires specialists.",
+                },
+            )
+        return await super().chat(request)
+
+
+class ResearchDispatcher:
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def dispatch(self, request, *, run=None) -> DelegationResult:
+        del run
+        self.requests.append(request)
+        output: dict[str, object] = {"analysis": {"fixture": "TEST TOOL OUTPUT"}}
+        if request.expected_kind == OrchestratorStepKind.SYNTHESIS:
+            output = {
+                "summary": "Source-backed TEST TOOL OUTPUT report.",
+                "report": {
+                    "status": "complete",
+                    "current_situation": "Source-backed TEST TOOL OUTPUT report.",
+                    "strengths": [],
+                    "weaknesses": [],
+                    "opportunities": [],
+                    "risks": [],
+                    "scenarios": {},
+                    "unknowns": [],
+                    "confidence": "medium",
+                    "evidence_coverage": "partial",
+                    "warnings": [],
+                    "limitations": [],
+                    "recommendation_notice": "No investment recommendation.",
+                },
+            }
+        now = datetime(2026, 7, 27, tzinfo=UTC)
+        return DelegationResult(
+            handoff=AgentHandoff(
+                id=f"handoff:{request.step_id}",
+                step_id=request.step_id,
+                kind=request.expected_kind,
+                status=OrchestratorHandoffStatus.SUCCEEDED,
+                started_at=now,
+                completed_at=now,
+                output=output,
+                evidence_ids=("evidence:test:1",),
+                confidence=HandoffConfidence.HIGH,
+            )
         )
 
 
@@ -1528,268 +887,3 @@ class FailingCompanySearchProvider:
             provider="fake-company-search",
             retryable=True,
         )
-
-
-class FakeMarketDataProvider:
-    async def fetch_daily_prices(
-        self,
-        security: MarketSecurity,
-        *,
-        outputsize: str = "compact",
-    ) -> HistoricalPriceResult:
-        return self.history(security=security, warning=f"outputsize={outputsize}")
-
-    async def fetch_quote(self, security: MarketSecurity):
-        raise NotImplementedError
-
-    @staticmethod
-    def history(
-        *,
-        security: MarketSecurity | None = None,
-        warning: str = "test fixture",
-    ) -> HistoricalPriceResult:
-        selected_security = security or MarketSecurity(symbol="NVO")
-        bars = (
-            HistoricalPriceBar(
-                security=selected_security,
-                priced_at=datetime(2026, 7, 2, tzinfo=UTC).date(),
-                open=Decimal("100"),
-                high=Decimal("101"),
-                low=Decimal("99"),
-                close=Decimal("100"),
-                volume=1000,
-            ),
-            HistoricalPriceBar(
-                security=selected_security,
-                priced_at=datetime(2026, 7, 3, tzinfo=UTC).date(),
-                open=Decimal("102"),
-                high=Decimal("106"),
-                low=Decimal("101"),
-                close=Decimal("105"),
-                volume=1200,
-            ),
-        )
-        source = MarketDataSource(
-            provider="alpha-vantage",
-            provider_status="test fixture",
-            source_url="https://example.invalid/market-data-fixture",
-            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
-            data_as_of=datetime(2026, 7, 3, tzinfo=UTC).date(),
-            attribution="test fixture",
-        )
-        return HistoricalPriceResult(
-            security=selected_security,
-            bars=bars,
-            source=source,
-            metrics=calculate_price_metrics(bars),
-            warnings=(warning,),
-        )
-
-
-class FailingMarketDataProvider:
-    def __init__(self, code: MarketDataErrorCode) -> None:
-        self.code = code
-
-    async def fetch_daily_prices(
-        self,
-        _security: MarketSecurity,
-        *,
-        outputsize: str = "compact",
-    ) -> HistoricalPriceResult:
-        raise MarketDataError(
-            code=self.code,
-            message=f"market data failed with outputsize {outputsize}",
-            provider="alpha-vantage",
-            retryable=True,
-        )
-
-    async def fetch_quote(self, security: MarketSecurity):
-        raise NotImplementedError
-
-
-class FakeFinancialStatementProvider:
-    async def fetch_statements(
-        self,
-        company: FinancialStatementCompany,
-        *,
-        fiscal_years: int = 3,
-    ) -> FinancialStatementResult:
-        return self.result(company=company, warning=f"fiscal_years={fiscal_years}")
-
-    @staticmethod
-    def result(
-        *,
-        company: FinancialStatementCompany | None = None,
-        warning: str = "test fixture",
-    ) -> FinancialStatementResult:
-        selected_company = company or FinancialStatementCompany(
-            cik="320193",
-            company_id="fixture:company:apple",
-            legal_name="TEST TOOL OUTPUT APPLE INC.",
-        )
-        source = FinancialStatementSource(
-            provider="sec-companyfacts",
-            provider_status="test fixture",
-            source_url="https://example.invalid/sec-companyfacts-fixture",
-            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
-            data_as_of=datetime(2026, 6, 30, tzinfo=UTC).date(),
-            attribution="test fixture",
-        )
-        period = FinancialStatementPeriod(
-            fiscal_year=2025,
-            fiscal_period="FY",
-            period_type=FinancialStatementPeriodType.ANNUAL,
-            period_start=datetime(2024, 7, 1, tzinfo=UTC).date(),
-            period_end=datetime(2025, 6, 30, tzinfo=UTC).date(),
-            form="10-K",
-            accession_number="fixture-accession",
-            filed_at=datetime(2026, 6, 30, tzinfo=UTC).date(),
-        )
-        return FinancialStatementResult(
-            company=selected_company,
-            statements=(
-                NormalizedFinancialStatement(
-                    id="fixture:statement:income:2025",
-                    company=selected_company,
-                    statement_type=FinancialStatementType.INCOME_STATEMENT,
-                    period=period,
-                    currency="USD",
-                    line_items={"revenues": Decimal("1000"), "net_income_loss": Decimal("250")},
-                    source=source,
-                ),
-            ),
-            source=source,
-            warnings=(warning,),
-        )
-
-
-class FailingFinancialStatementProvider:
-    def __init__(self, code: FinancialStatementErrorCode) -> None:
-        self.code = code
-
-    async def fetch_statements(
-        self,
-        _company: FinancialStatementCompany,
-        *,
-        fiscal_years: int = 3,
-    ) -> FinancialStatementResult:
-        raise FinancialStatementError(
-            code=self.code,
-            message=f"financial statement fetch failed with fiscal_years {fiscal_years}",
-            provider="sec-companyfacts",
-            retryable=True,
-        )
-
-
-class FakeFilingProvider:
-    async def ingest_latest(
-        self,
-        company: FilingCompany,
-        *,
-        forms: tuple[str, ...] = ("10-K", "10-Q"),
-        limit: int = 1,
-    ) -> FilingIngestionResult:
-        return self.result(company=company, warning=f"forms={','.join(forms)};limit={limit}")
-
-    @staticmethod
-    def result(
-        *,
-        company: FilingCompany | None = None,
-        warning: str = "test fixture",
-    ) -> FilingIngestionResult:
-        selected_company = company or FilingCompany(
-            cik="320193",
-            company_id="fixture:company:apple",
-            legal_name="TEST TOOL OUTPUT APPLE INC.",
-        )
-        source = FilingSource(
-            provider="sec-edgar",
-            provider_status="test fixture",
-            source_url="https://example.invalid/submissions/CIK0000320193.json",
-            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
-            data_as_of=datetime(2026, 1, 31, tzinfo=UTC).date(),
-            attribution="test fixture",
-        )
-        filing = FilingDocument(
-            id="fixture:filing:10-k",
-            company=selected_company,
-            form_type="10-K",
-            accession_number="0000320193-25-000001",
-            filing_date=datetime(2026, 1, 31, tzinfo=UTC).date(),
-            report_date=datetime(2025, 12, 31, tzinfo=UTC).date(),
-            publication_date=datetime(2026, 1, 31, tzinfo=UTC).date(),
-            document_url="https://example.invalid/aapl-20251231.htm",
-            source_url="https://example.invalid/submissions/CIK0000320193.json",
-            document_format=FilingDocumentFormat.HTML,
-            retrieved_at=datetime(2026, 7, 4, tzinfo=UTC),
-            local_raw_path="fixture/raw/aapl-20251231.htm",
-            local_text_path="fixture/text/aapl-20251231.txt",
-            source=source,
-            chunk_ids=("fixture:filing:10-k:chunk:0",),
-        )
-        chunk = FilingChunk(
-            id="fixture:filing:10-k:chunk:0",
-            filing_id=filing.id,
-            chunk_index=0,
-            text="TEST TOOL OUTPUT filing chunk",
-            char_start=0,
-            char_end=29,
-            section_heading="Item 1. Business",
-            source_url=filing.document_url,
-            accession_number=filing.accession_number,
-            form_type=filing.form_type,
-            metadata={"fixture": "true"},
-        )
-        return FilingIngestionResult(
-            company=selected_company,
-            filings=(filing,),
-            chunks=(chunk,),
-            source=source,
-            warnings=(warning,),
-        )
-
-
-class FailingFilingProvider:
-    def __init__(self, code: FilingErrorCode) -> None:
-        self.code = code
-
-    async def ingest_latest(
-        self,
-        _company: FilingCompany,
-        *,
-        forms: tuple[str, ...] = ("10-K", "10-Q"),
-        limit: int = 1,
-    ) -> FilingIngestionResult:
-        raise FilingError(
-            code=self.code,
-            message=f"filing ingestion failed with forms {','.join(forms)} and limit {limit}",
-            provider="sec-edgar",
-            retryable=True,
-        )
-
-
-class KeywordEmbeddingProvider:
-    @property
-    def metadata(self) -> ModelMetadata:
-        return ModelMetadata(
-            provider="keyword-fixture",
-            model="keyword-model",
-            capabilities=(ProviderCapability.EMBEDDINGS,),
-        )
-
-    async def embed(self, request: EmbeddingRequest) -> EmbeddingResponse:
-        return EmbeddingResponse(
-            embeddings=tuple(_keyword_vector(text) for text in request.input_texts),
-            provider="keyword-fixture",
-            model=request.model or "keyword-model",
-            usage=TokenUsage(input_tokens=sum(len(text.split()) for text in request.input_texts)),
-        )
-
-
-def _keyword_vector(text: str) -> tuple[float, ...]:
-    lowered = text.lower()
-    return (
-        float(lowered.count("filing")),
-        float(lowered.count("risk")),
-        float(lowered.count("cash")),
-    )

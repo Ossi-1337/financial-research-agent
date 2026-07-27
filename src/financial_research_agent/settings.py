@@ -36,8 +36,6 @@ DEFAULT_STORAGE_PROVIDER = "sqlite"
 DEFAULT_RETRIEVAL_PROVIDER = "local-vector"
 DEFAULT_RETRIEVAL_TOP_K = 5
 DEFAULT_RETRIEVAL_MIN_SCORE = 0.0
-DEFAULT_INTEROP_ENABLED = False
-DEFAULT_INTEROP_LOCAL_ONLY = True
 DEFAULT_A2A_ENABLED = False
 DEFAULT_A2A_LOCAL_ONLY = True
 DEFAULT_A2A_MAX_CONCURRENT_TASKS = 1
@@ -364,29 +362,6 @@ class RetrievalSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class InteroperabilitySettings:
-    enabled: bool = DEFAULT_INTEROP_ENABLED
-    local_only: bool = DEFAULT_INTEROP_LOCAL_ONLY
-    api_key: str | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "api_key", _optional_text(self.api_key))
-        if self.enabled and not self.local_only and self.api_key is None:
-            raise ValueError(
-                "FRA_INTEROP_API_KEY is required when FRA_INTEROP_ENABLED=true and "
-                "FRA_INTEROP_LOCAL_ONLY=false"
-            )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "enabled": self.enabled,
-            "local_only": self.local_only,
-            "api_key_configured": self.api_key is not None,
-            "protocols": ["mcp_read_only"],
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class A2ASettings:
     enabled: bool = DEFAULT_A2A_ENABLED
     local_only: bool = DEFAULT_A2A_LOCAL_ONLY
@@ -508,7 +483,6 @@ class Settings:
     data_sources: DataSourceSettings
     storage: StorageSettings
     retrieval: RetrievalSettings
-    interoperability: InteroperabilitySettings
     a2a: A2ASettings
     background: BackgroundSettings
     performance: PerformanceSettings
@@ -668,19 +642,6 @@ class Settings:
                     minimum=-1.0,
                     maximum=1.0,
                 ),
-            ),
-            interoperability=InteroperabilitySettings(
-                enabled=_env_bool_value(
-                    env,
-                    "FRA_INTEROP_ENABLED",
-                    DEFAULT_INTEROP_ENABLED,
-                ),
-                local_only=_env_bool_value(
-                    env,
-                    "FRA_INTEROP_LOCAL_ONLY",
-                    DEFAULT_INTEROP_LOCAL_ONLY,
-                ),
-                api_key=_env_optional(env, "FRA_INTEROP_API_KEY"),
             ),
             a2a=A2ASettings(
                 enabled=_env_bool_value(env, "FRA_A2A_ENABLED", DEFAULT_A2A_ENABLED),

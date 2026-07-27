@@ -20,8 +20,8 @@ from financial_research_agent.orchestration.dispatch import (
     AgentRole,
     DelegationRequest,
     DelegationResult,
-    LocalResearchStepDispatcher,
     ResearchStepDispatcher,
+    UnavailableResearchStepDispatcher,
     delegation_request_from_dict,
 )
 from financial_research_agent.orchestration.store import OrchestratorRunStore, handoff_from_dict
@@ -37,7 +37,6 @@ __all__ = [
     "DelegationRequest",
     "DelegationResult",
     "HandoffConfidence",
-    "LocalResearchStepDispatcher",
     "OrchestratedResearchRun",
     "OrchestratorExecutionPolicy",
     "OrchestratorHandoffStatus",
@@ -48,6 +47,7 @@ __all__ = [
     "OrchestratorStepKind",
     "ResearchOrchestrator",
     "ResearchStepDispatcher",
+    "UnavailableResearchStepDispatcher",
     "default_orchestrator_plan",
     "delegation_request_from_dict",
     "handoff_from_dict",

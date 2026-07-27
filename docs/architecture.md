@@ -21,17 +21,21 @@ flowchart LR
     SYNTH --> EVIDENCE["Validated handoffs, evidence, and report exports"]
 ```
 
-The orchestrator owns request interpretation, company resolution, planning, delegation, progress,
-cancellation, and the canonical research run. It does not perform specialist analysis.
+The orchestrator is the only message entrypoint. Its configured LLM returns a validated decision:
+direct answer, research, clarification, or refusal. For research, deterministic code resolves the
+company, builds the fixed specialist plan, owns progress/cancellation, and persists the canonical
+run. Client messages cannot select tools, providers, URLs, paths, or agent addresses.
 
 Specialist ownership:
 
-- Financial-report agent fetches SEC statements and filings, then analyzes stored statements and
-  filing evidence.
-- Stock agent fetches company and benchmark prices, then computes deterministic market metrics.
-- Context agent analyzes explicit source-linked company, macro, and sector context. Automatic news
+- Financial-report agent uses allowlisted tools for SEC statements, filings, and filing retrieval,
+  then returns a structured LLM analysis.
+- Stock agent uses allowlisted company/benchmark price tools and deterministic market metrics,
+  then returns a structured LLM analysis.
+- Context agent uses only approved source-linked company, macro, and sector inputs. Automatic news
   ingestion is not implemented.
-- Synthesis agent consumes persisted specialist handoffs and creates the deterministic report.
+- Synthesis agent reads validated persisted handoffs through one allowlisted tool and creates a
+  structured LLM report.
 
 Specialist handoffs always contain status, timestamps, warnings, limitations, confidence, and
 evidence IDs. Failed A2A work remains visible and produces partial or failed research. No hidden
@@ -75,9 +79,10 @@ Deterministic code owns:
   evidence resolution, and exports.
 - Completion status, limitations, no-advice framing, and scenario acceptance checks.
 
-LLMs may answer direct chat, create explicitly source-bounded answers, and use guarded declared
-tools. LLMs do not invent source availability, rewrite the deterministic report, control completion
-status, or grant themselves data/tool permissions.
+LLMs classify messages, answer direct chat, analyze bounded tool results, and synthesize validated
+handoffs. Deterministic validation owns schemas, known evidence IDs, completion status,
+limitations, no-advice framing, persistence, and exports. One schema-repair retry is allowed;
+unknown evidence IDs or a second invalid output fail the handoff. Chain-of-thought is never stored.
 
 ## Persistence
 
@@ -93,13 +98,13 @@ filesystem tool.
 
 | Package | Responsibility |
 | --- | --- |
-| `web` | FastAPI API, chat sessions, progress, and static UI |
+| `web` | FastAPI API, canonical conversation service, sessions, progress, and static UI |
 | `orchestration` | Orchestrator contracts, plan, delegation, and canonical run |
 | `a2a` | Agent Cards, task execution, dispatcher, retry/cancellation, and specialist services |
 | `entities` | Company and security resolution |
 | `statements`, `filings`, `retrieval`, `report_analysis` | Financial-report agent data and analysis |
 | `market_data`, `stock_analysis` | Stock agent data and analysis |
 | `context_analysis` | Context agent analysis |
-| `synthesis`, `report_exports` | Deterministic synthesis and immutable exports |
+| `synthesis`, `report_exports` | Validated LLM synthesis, deterministic report mapping, and immutable exports |
 | `llm`, `tools`, `agents` | Provider abstraction, guarded tools, and prompt contracts |
 | `persistence`, `storage` | SQLite, migrations, files, backup, restore, and cleanup |

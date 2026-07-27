@@ -22,6 +22,10 @@ class ToolPermission(StrEnum):
     CALCULATION = "calculation"
     ENTITY_LOOKUP = "entity_lookup"
     LOCAL_READ = "local_read"
+    FINANCIAL_DATA = "financial_data"
+    MARKET_DATA = "market_data"
+    CONTEXT_DATA = "context_data"
+    HANDOFF_READ = "handoff_read"
 
 
 class ToolResultStatus(StrEnum):

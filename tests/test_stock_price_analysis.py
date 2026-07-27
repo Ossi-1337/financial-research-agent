@@ -5,9 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from fastapi.testclient import TestClient
 
-from financial_research_agent.llm.registry import create_offline_provider_registry
 from financial_research_agent.market_data import (
     HistoricalPriceBar,
     HistoricalPriceResult,
@@ -16,7 +14,6 @@ from financial_research_agent.market_data import (
     MarketSecurity,
     calculate_price_metrics,
 )
-from financial_research_agent.settings import Settings
 from financial_research_agent.stock_analysis import (
     ConfidenceLabel,
     StockChartPoint,
@@ -26,7 +23,6 @@ from financial_research_agent.stock_analysis import (
     StockPriceFinding,
     StockTrendDirection,
 )
-from financial_research_agent.web import ChatSessionStore, create_app
 
 NOW = datetime(2026, 7, 5, tzinfo=UTC)
 
@@ -140,38 +136,6 @@ def test_stock_price_analysis_agent_degrades_on_store_failure() -> None:
 
     assert result.status == StockPriceAnalysisStatus.NO_DATA
     assert "market data file is unreadable" in " ".join(result.limitations)
-
-
-def test_stock_price_analysis_endpoint_uses_stored_market_data() -> None:
-    store = MarketDataStore()
-    store.save_history(_history("NVO", (100, 101, 103, 102, 104, 108)))
-    client = TestClient(
-        create_app(
-            settings=Settings.from_env({"FRA_STORAGE_PROVIDER": "local-json"}),
-            registry=create_offline_provider_registry(),
-            session_store=ChatSessionStore(),
-            market_data_store=store,
-        )
-    )
-
-    response = client.post(
-        "/api/stock-price-analysis",
-        json={
-            "symbol": "NVO",
-            "security_id": "fixture:security:nvo",
-            "exchange_mic": "XNYS",
-            "currency": "USD",
-        },
-    )
-    payload = response.json()["analysis"]
-
-    assert response.status_code == 200
-    assert payload["security"]["symbol"] == "NVO"
-    assert payload["status"] == "complete"
-    assert payload["metrics"][0]["name"] == "observation_count"
-    assert payload["chart_series"][0]["points"][-1]["close"] == "108"
-    assert payload["primary_source"]["provider"] == "alpha-vantage"
-    assert payload["no_trading_signal_notice"].startswith("This stock price analysis")
 
 
 def _history(

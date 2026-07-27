@@ -7,7 +7,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Protocol
 from uuid import uuid4
 
-from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.filings import FilingChunk, FilingIngestionResult
 from financial_research_agent.report_analysis.contracts import (
     NO_RECOMMENDATION_NOTICE,
@@ -19,9 +18,14 @@ from financial_research_agent.report_analysis.contracts import (
     FinancialReportQuestion,
     FinancialReportSection,
 )
+from financial_research_agent.report_analysis.retrieval import (
+    FilingVectorReranker,
+    retrieve_filing_chunks,
+)
 from financial_research_agent.reports import Citation, EvidenceSnippet
 from financial_research_agent.statements import (
     FinancialStatementResult,
+    FinancialStatementType,
     NormalizedFinancialStatement,
 )
 
@@ -117,12 +121,14 @@ class FinancialReportAnalysisAgent:
         filing_store: FilingResultStore,
         statement_provider: str | None = None,
         filing_provider: str | None = None,
+        filing_vector_reranker: FilingVectorReranker | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._statement_store = statement_store
         self._filing_store = filing_store
         self._statement_provider = statement_provider
         self._filing_provider = filing_provider
+        self._filing_vector_reranker = filing_vector_reranker
         self._now = now or (lambda: datetime.now(UTC))
 
     def analyze(
@@ -522,8 +528,13 @@ class FinancialReportAnalysisAgent:
         keywords: tuple[str, ...],
         evidence_builder: _EvidenceBuilder,
     ) -> FinancialReportFinding:
-        chunks = _matching_chunks(filing_result, keywords, limit=2)
-        if not chunks:
+        matches = retrieve_filing_chunks(
+            filing_result,
+            keywords,
+            limit=2,
+            vector_reranker=self._filing_vector_reranker,
+        )
+        if not matches:
             limitation = (
                 f"Stored filing chunks did not contain supported {title.lower()} keywords. "
                 "This is a retrieval limitation, not evidence that the topic is absent."
@@ -532,16 +543,19 @@ class FinancialReportAnalysisAgent:
 
         evidence_points = tuple(
             evidence_builder.add_chunk(
-                chunk,
+                match.chunk,
                 section,
                 retrieved_at=filing_result.source.retrieved_at,
+                retrieval_method=match.method.value,
+                retrieval_score=match.score,
             )
-            for chunk in chunks
+            for match in matches
         )
         headings = tuple(
             dict.fromkeys(
-                chunk.section_heading or f"{chunk.form_type} chunk {chunk.chunk_index}"
-                for chunk in chunks
+                match.chunk.section_heading
+                or f"{match.chunk.form_type} chunk {match.chunk.chunk_index}"
+                for match in matches
             )
         )
         summary = (
@@ -557,8 +571,8 @@ class FinancialReportAnalysisAgent:
             evidence_ids=tuple(point.evidence_id for point in evidence_points),
             citation_ids=tuple(point.citation_id for point in evidence_points),
             limitations=(
-                "Filing language is keyword-selected and has not been interpreted by an LLM "
-                "or analyst workflow.",
+                f"Filing evidence retrieval used {matches[0].method.value} ranking before "
+                "LLM specialist interpretation.",
             ),
         )
 
@@ -634,6 +648,8 @@ class _EvidenceBuilder:
         section: FinancialReportSection,
         *,
         retrieved_at: datetime,
+        retrieval_method: str,
+        retrieval_score: float,
     ) -> _EvidencePoint:
         citation_id = self._next_citation_id()
         evidence_id = f"filing:{chunk.id}:{section.value}"
@@ -643,6 +659,8 @@ class _EvidenceBuilder:
             "accession_number": chunk.accession_number,
             "form_type": chunk.form_type,
             "chunk_index": str(chunk.chunk_index),
+            "retrieval_method": retrieval_method,
+            "retrieval_score": str(retrieval_score),
         }
         if chunk.section_heading is not None:
             metadata["section_heading"] = chunk.section_heading

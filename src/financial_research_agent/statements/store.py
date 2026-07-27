@@ -8,7 +8,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Self
 
-from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements.contracts import (
     FinancialStatementCompany,
@@ -16,6 +15,7 @@ from financial_research_agent.statements.contracts import (
     FinancialStatementPeriodType,
     FinancialStatementResult,
     FinancialStatementSource,
+    FinancialStatementType,
     NormalizedFinancialStatement,
 )
 

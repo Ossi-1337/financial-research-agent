@@ -9,6 +9,7 @@ from financial_research_agent.llm import (
     ChatRequest,
     ChatResponse,
     MessageRole,
+    ResponseFormat,
 )
 from financial_research_agent.tools.contracts import (
     ToolContext,
@@ -44,6 +45,8 @@ class ToolCallingRunner:
         *,
         model: str | None = None,
         context: ToolContext | None = None,
+        response_format: ResponseFormat | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> ToolLoopResult:
         tool_context = context or ToolContext()
         history = tuple(messages)
@@ -55,7 +58,13 @@ class ToolCallingRunner:
 
         for round_number in range(1, self.max_tool_rounds + 1):
             response = await self.provider.chat(
-                ChatRequest(messages=history, model=model, tools=tools)
+                ChatRequest(
+                    messages=history,
+                    model=model,
+                    tools=tools,
+                    response_format=response_format or ResponseFormat(),
+                    metadata=metadata or {},
+                )
             )
             final_response = response
             if not response.tool_calls:

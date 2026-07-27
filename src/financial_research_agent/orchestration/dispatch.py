@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol
@@ -14,7 +15,6 @@ from financial_research_agent.orchestration.contracts import (
 
 
 class AgentRole(StrEnum):
-    COMPANY_RESEARCH = "company-research"
     FINANCIAL_REPORT = "financial-report"
     STOCK = "stock"
     CONTEXT = "context"
@@ -99,23 +99,28 @@ class ResearchStepDispatcher(Protocol):
     ) -> DelegationResult: ...
 
 
-LocalDispatchHandler = Callable[
-    [DelegationRequest, OrchestratedResearchRun | None],
-    Awaitable[AgentHandoff],
-]
-
-
-class LocalResearchStepDispatcher:
-    def __init__(self, handler: LocalDispatchHandler) -> None:
-        self._handler = handler
-
+class UnavailableResearchStepDispatcher:
     async def dispatch(
         self,
         request: DelegationRequest,
         *,
         run: OrchestratedResearchRun | None = None,
     ) -> DelegationResult:
-        return DelegationResult(handoff=await self._handler(request, run))
+        del run
+        now = datetime.now(UTC)
+        return DelegationResult(
+            handoff=AgentHandoff(
+                id=f"handoff_{request.expected_kind.value}_{request.step_id}",
+                step_id=request.step_id,
+                kind=request.expected_kind,
+                status="failed",
+                started_at=now,
+                completed_at=now,
+                limitations=("A2A specialist topology is unavailable.",),
+                error_code="a2a_agent_unconfigured",
+                error_message="Research requires the configured A2A specialist services.",
+            )
+        )
 
 
 def delegation_request_from_dict(payload: Mapping[str, object]) -> DelegationRequest:

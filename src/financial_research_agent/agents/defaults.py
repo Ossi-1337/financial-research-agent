@@ -37,9 +37,7 @@ def create_default_prompt_catalog() -> PromptCatalog:
                 ),
                 allowed_tools=(
                     "current_utc_datetime",
-                    "resolve_company_stub",
-                    "read_local_evidence",
-                    "calculate_ratio",
+                    "resolve_company",
                 ),
                 role_instructions="""
 You are the orchestrator for local-first company research.
@@ -53,7 +51,7 @@ Return only the agreed JSON object.
                 prompt_id="agent.financial_report_analyst.v1",
                 role=AgentRole.FINANCIAL_REPORT_ANALYST,
                 description="Analyzes sourced financial report evidence and ratio calculations.",
-                allowed_tools=("read_local_evidence", "calculate_ratio", "current_utc_datetime"),
+                allowed_tools=("load_financial_report_evidence", "calculate_ratio"),
                 role_instructions="""
 You are the financial report analyst.
 Use only supplied filings, statements, evidence, and deterministic calculation results.
@@ -68,7 +66,7 @@ Return only the agreed JSON object.
                 description=(
                     "Analyzes sourced price-development evidence without giving recommendations."
                 ),
-                allowed_tools=("read_local_evidence", "calculate_ratio", "current_utc_datetime"),
+                allowed_tools=("load_stock_market_evidence", "calculate_ratio"),
                 role_instructions="""
 You are the stock price development analyst.
 Analyze sourced price movement, volatility, valuation context, and uncertainty.
@@ -81,7 +79,7 @@ Return only the agreed JSON object.
                 prompt_id="agent.news_macro_analyst.v1",
                 role=AgentRole.NEWS_MACRO_ANALYST,
                 description="Analyzes sourced news, macro, policy, sector, and event context.",
-                allowed_tools=("read_local_evidence", "current_utc_datetime"),
+                allowed_tools=("load_context_evidence",),
                 role_instructions="""
 You are the news, macro, and sector context analyst.
 Separate confirmed events from assumptions and possible implications.
@@ -96,7 +94,7 @@ Return only the agreed JSON object.
                 description=(
                     "Synthesizes specialist outputs into evidence-grounded research summaries."
                 ),
-                allowed_tools=("read_local_evidence", "current_utc_datetime"),
+                allowed_tools=("load_specialist_handoffs",),
                 role_instructions="""
 You are the synthesis agent.
 Combine specialist outputs into a concise, evidence-grounded research answer.

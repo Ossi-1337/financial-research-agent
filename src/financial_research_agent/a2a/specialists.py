@@ -4,6 +4,17 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from financial_research_agent.agents import (
+    AgentRole as PromptAgentRole,
+)
+from financial_research_agent.agents import (
+    AgentRuntimeError,
+    PromptCatalog,
+    PromptContract,
+    StructuredAgentResult,
+    StructuredAgentRunner,
+    create_default_prompt_catalog,
+)
 from financial_research_agent.context_analysis import (
     ContextAnalysisStatus,
     ContextScope,
@@ -19,6 +30,7 @@ from financial_research_agent.filings import (
     FilingProvider,
     FilingStore,
 )
+from financial_research_agent.llm import ChatProvider, ProviderError
 from financial_research_agent.market_data import (
     MarketDataError,
     MarketDataProvider,
@@ -26,6 +38,8 @@ from financial_research_agent.market_data import (
     MarketSecurity,
 )
 from financial_research_agent.orchestration import (
+    AgentExecutionMetadata,
+    AgentExecutionMode,
     AgentHandoff,
     AgentRole,
     DelegationRequest,
@@ -51,6 +65,13 @@ from financial_research_agent.stock_analysis import (
     StockPriceAnalysisStatus,
 )
 from financial_research_agent.synthesis import SynthesisAgent, SynthesisReportStatus
+from financial_research_agent.tools import (
+    ToolContext,
+    ToolPermission,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+)
 
 
 class SpecialistExecutionService:
@@ -68,6 +89,9 @@ class SpecialistExecutionService:
         filing_store: FilingStore | None = None,
         synthesis_agent: SynthesisAgent | None = None,
         run_store: object | None = None,
+        chat_provider: ChatProvider,
+        chat_model: str | None = None,
+        prompt_catalog: PromptCatalog | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.financial_report_agent = financial_report_agent
@@ -81,6 +105,8 @@ class SpecialistExecutionService:
         self.filing_store = filing_store
         self.synthesis_agent = synthesis_agent or SynthesisAgent()
         self.run_store = run_store
+        self.agent_runner = StructuredAgentRunner(chat_provider, model=chat_model)
+        self.prompt_catalog = prompt_catalog or create_default_prompt_catalog()
         self._now = now or (lambda: datetime.now(UTC))
 
     async def execute(self, request: DelegationRequest) -> AgentHandoff:
@@ -91,13 +117,13 @@ class SpecialistExecutionService:
         if request.expected_kind == OrchestratorStepKind.FILING_REFRESH:
             return await self._refresh_filings(request)
         if request.role == AgentRole.FINANCIAL_REPORT:
-            return self._financial_report(request)
+            return await self._financial_report(request)
         if request.role == AgentRole.STOCK:
-            return self._stock(request)
+            return await self._stock(request)
         if request.role == AgentRole.CONTEXT:
-            return self._context(request)
+            return await self._context(request)
         if request.role == AgentRole.SYNTHESIS:
-            return self._synthesis(request)
+            return await self._synthesis(request)
         raise ValueError(f"unsupported specialist role: {request.role.value}")
 
     async def _refresh_market_data(self, request: DelegationRequest) -> AgentHandoff:
@@ -260,9 +286,14 @@ class SpecialistExecutionService:
             confidence=HandoffConfidence.HIGH,
         )
 
-    def _financial_report(self, request: DelegationRequest) -> AgentHandoff:
+    async def _financial_report(self, request: DelegationRequest) -> AgentHandoff:
         started_at = _aware_now(self._now())
-        try:
+        result_holder: dict[str, object] = {}
+
+        async def load_evidence(
+            _context: ToolContext,
+            _arguments: Mapping[str, object],
+        ) -> ToolResult:
             result = self.financial_report_agent.analyze(
                 FinancialReportAnalysisCompany(
                     cik=_text(request.payload, "cik"),
@@ -270,25 +301,75 @@ class SpecialistExecutionService:
                     legal_name=_optional_text(request.payload.get("legal_name")),
                 )
             )
+            result_holder["analysis"] = result
+            evidence_ids = _stock_evidence_ids(result.to_dict())
+            return ToolResult.succeeded(
+                tool_call_id="load_financial_report_evidence",
+                tool_name="load_financial_report_evidence",
+                data={"analysis": result.to_dict(), "evidence_ids": list(evidence_ids)},
+                source="local_financial_evidence",
+                warnings=result.warnings,
+            )
+
+        try:
+            registry = ToolRegistry(
+                (
+                    _source_tool(
+                        name="load_financial_report_evidence",
+                        description="Load stored SEC statements and filing evidence.",
+                        permission=ToolPermission.FINANCIAL_DATA,
+                        handler=load_evidence,
+                    ),
+                )
+            )
+            agent = await self.agent_runner.run(
+                contract=self.prompt_catalog.by_role(PromptAgentRole.FINANCIAL_REPORT_ANALYST),
+                user_payload={
+                    "task": "Analyze financial statements and filing evidence.",
+                    "company": dict(request.payload),
+                    "required_tool": "load_financial_report_evidence",
+                },
+                registry=registry,
+                context=_tool_context(
+                    "load_financial_report_evidence",
+                    ToolPermission.FINANCIAL_DATA,
+                ),
+                known_evidence_ids=lambda: tuple(
+                    snippet.id for snippet in getattr(result_holder.get("analysis"), "evidence", ())
+                ),
+            )
+            result = result_holder.get("analysis")
+            if result is None:
+                raise AgentRuntimeError(
+                    code="agent_tool_result_missing",
+                    message="Financial evidence tool returned no analysis.",
+                )
         except Exception as exc:
             return _failed_handoff(request, started_at, self._now(), exc)
+        contract = self.prompt_catalog.by_role(PromptAgentRole.FINANCIAL_REPORT_ANALYST)
         return _handoff(
             request=request,
             status=_analysis_status(result.status),
             started_at=started_at,
             completed_at=_aware_now(self._now()),
             input_summary={"cik": _text(request.payload, "cik")},
-            output={"analysis": result.to_dict()},
+            output={"analysis": result.to_dict(), "agent_output": dict(agent.output)},
             evidence_ids=tuple(snippet.id for snippet in result.evidence),
             warnings=result.warnings,
             limitations=result.limitations,
             confidence=_confidence(result.status),
+            execution=_agent_execution(request, contract, agent),
         )
 
-    def _stock(self, request: DelegationRequest) -> AgentHandoff:
+    async def _stock(self, request: DelegationRequest) -> AgentHandoff:
         started_at = _aware_now(self._now())
         symbol = _text(request.payload, "ticker")
-        try:
+        result_holder: dict[str, object] = {}
+
+        async def load_evidence(
+            _context: ToolContext,
+            _arguments: Mapping[str, object],
+        ) -> ToolResult:
             result = self.stock_price_agent.analyze(
                 StockPriceAnalysisSecurity(
                     symbol=symbol,
@@ -299,63 +380,143 @@ class SpecialistExecutionService:
                 ),
                 benchmark_symbol=_optional_text(request.payload.get("benchmark_symbol")),
             )
+            result_holder["analysis"] = result
+            return ToolResult.succeeded(
+                tool_call_id="load_stock_market_evidence",
+                tool_name="load_stock_market_evidence",
+                data={"analysis": result.to_dict()},
+                source="local_market_evidence",
+                warnings=result.warnings,
+            )
+
+        try:
+            registry = ToolRegistry(
+                (
+                    _source_tool(
+                        name="load_stock_market_evidence",
+                        description="Load stored company and benchmark prices with metrics.",
+                        permission=ToolPermission.MARKET_DATA,
+                        handler=load_evidence,
+                    ),
+                )
+            )
+            agent = await self.agent_runner.run(
+                contract=self.prompt_catalog.by_role(PromptAgentRole.STOCK_ANALYST),
+                user_payload={
+                    "task": "Analyze company and benchmark market evidence.",
+                    "security": dict(request.payload),
+                    "required_tool": "load_stock_market_evidence",
+                },
+                registry=registry,
+                context=_tool_context("load_stock_market_evidence", ToolPermission.MARKET_DATA),
+                known_evidence_ids=lambda: (
+                    _stock_evidence_ids(result_holder["analysis"].to_dict())
+                    if result_holder.get("analysis") is not None
+                    else ()
+                ),
+            )
+            result = result_holder.get("analysis")
+            if result is None:
+                raise AgentRuntimeError(
+                    code="agent_tool_result_missing",
+                    message="Market evidence tool returned no analysis.",
+                )
         except Exception as exc:
             return _failed_handoff(request, started_at, self._now(), exc)
+        known_evidence = _stock_evidence_ids(result.to_dict())
+        contract = self.prompt_catalog.by_role(PromptAgentRole.STOCK_ANALYST)
         return _handoff(
             request=request,
             status=_analysis_status(result.status),
             started_at=started_at,
             completed_at=_aware_now(self._now()),
             input_summary={"symbol": symbol},
-            output={"analysis": result.to_dict()},
+            output={"analysis": result.to_dict(), "agent_output": dict(agent.output)},
+            evidence_ids=known_evidence,
             warnings=result.warnings,
             limitations=result.limitations,
             confidence=_confidence(result.status),
+            execution=_agent_execution(request, contract, agent),
         )
 
-    def _context(self, request: DelegationRequest) -> AgentHandoff:
+    async def _context(self, request: DelegationRequest) -> AgentHandoff:
         started_at = _aware_now(self._now())
         source_items = tuple(
             _context_source_from_dict(item)
             for item in _mapping_list(request.payload.get("source_items", ()))
         )
         symbols = tuple(str(item) for item in _list(request.payload.get("company_symbols", ())))
-        try:
+        result_holder: dict[str, object] = {}
+
+        async def load_evidence(
+            _context: ToolContext,
+            _arguments: Mapping[str, object],
+        ) -> ToolResult:
             result = self.context_agent.analyze(
                 query=_text(request.payload, "query"),
                 source_items=source_items,
                 company_symbols=symbols,
             )
+            result_holder["analysis"] = result
+            return ToolResult.succeeded(
+                tool_call_id="load_context_evidence",
+                tool_name="load_context_evidence",
+                data={"analysis": result.to_dict()},
+                source="bounded_context_sources",
+                warnings=result.warnings,
+            )
+
+        try:
+            known_evidence = tuple(item.id for item in source_items)
+            registry = ToolRegistry(
+                (
+                    _source_tool(
+                        name="load_context_evidence",
+                        description="Load approved source-linked company and macro context.",
+                        permission=ToolPermission.CONTEXT_DATA,
+                        handler=load_evidence,
+                    ),
+                )
+            )
+            agent = await self.agent_runner.run(
+                contract=self.prompt_catalog.by_role(PromptAgentRole.NEWS_MACRO_ANALYST),
+                user_payload={
+                    "task": "Analyze only approved source-linked context.",
+                    "query": _text(request.payload, "query"),
+                    "company_symbols": list(symbols),
+                    "required_tool": "load_context_evidence",
+                },
+                registry=registry,
+                context=_tool_context("load_context_evidence", ToolPermission.CONTEXT_DATA),
+                known_evidence_ids=known_evidence,
+            )
+            result = result_holder.get("analysis")
+            if result is None:
+                raise AgentRuntimeError(
+                    code="agent_tool_result_missing",
+                    message="Context evidence tool returned no analysis.",
+                )
         except Exception as exc:
             return _failed_handoff(request, started_at, self._now(), exc)
-        evidence_ids = tuple(
-            source_item_id
-            for finding in result.findings
-            for source_item_id in finding.source_item_ids
-        )
+        evidence_ids = known_evidence
+        contract = self.prompt_catalog.by_role(PromptAgentRole.NEWS_MACRO_ANALYST)
         return _handoff(
             request=request,
             status=_analysis_status(result.status),
             started_at=started_at,
             completed_at=_aware_now(self._now()),
             input_summary={"source_item_count": str(len(source_items))},
-            output={"analysis": result.to_dict()},
+            output={"analysis": result.to_dict(), "agent_output": dict(agent.output)},
             evidence_ids=tuple(dict.fromkeys(evidence_ids)),
             warnings=result.warnings,
             limitations=result.limitations,
             confidence=_confidence(result.status),
+            execution=_agent_execution(request, contract, agent),
         )
 
-    def _synthesis(self, request: DelegationRequest) -> AgentHandoff:
+    async def _synthesis(self, request: DelegationRequest) -> AgentHandoff:
         started_at = _aware_now(self._now())
         run = self._load_run(request.run_id)
-        report = self.synthesis_agent.synthesize(
-            query=run.query,
-            handoffs=run.handoffs,
-            selected_company=run.selected_company,
-            selected_security=run.selected_security,
-            created_at=started_at,
-        )
         specialist_handoffs = tuple(
             handoff
             for handoff in run.handoffs
@@ -366,9 +527,65 @@ class SpecialistExecutionService:
                 OrchestratorStepKind.CONTEXT_ANALYSIS,
             }
         )
+        result_holder: dict[str, object] = {}
+
+        async def load_handoffs(
+            _context: ToolContext,
+            _arguments: Mapping[str, object],
+        ) -> ToolResult:
+            payload = [handoff.to_dict() for handoff in specialist_handoffs]
+            result_holder["handoffs"] = payload
+            return ToolResult.succeeded(
+                tool_call_id="load_specialist_handoffs",
+                tool_name="load_specialist_handoffs",
+                data={"handoffs": payload},
+                source="persisted_specialist_handoffs",
+            )
+
+        known_evidence = tuple(
+            dict.fromkeys(
+                evidence_id
+                for handoff in specialist_handoffs
+                for evidence_id in handoff.evidence_ids
+            )
+        )
+        try:
+            registry = ToolRegistry(
+                (
+                    _source_tool(
+                        name="load_specialist_handoffs",
+                        description="Load validated persisted specialist handoffs.",
+                        permission=ToolPermission.HANDOFF_READ,
+                        handler=load_handoffs,
+                    ),
+                )
+            )
+            agent = await self.agent_runner.run(
+                contract=self.prompt_catalog.by_role(PromptAgentRole.SYNTHESIS_AGENT),
+                user_payload={
+                    "task": "Synthesize validated specialist handoffs.",
+                    "query": run.query,
+                    "handoff_ids": [handoff.id for handoff in specialist_handoffs],
+                    "required_tool": "load_specialist_handoffs",
+                },
+                registry=registry,
+                context=_tool_context("load_specialist_handoffs", ToolPermission.HANDOFF_READ),
+                known_evidence_ids=known_evidence,
+            )
+            report = self.synthesis_agent.synthesize_agent_output(
+                query=run.query,
+                handoffs=specialist_handoffs,
+                agent_output=agent.output,
+                selected_company=run.selected_company,
+                selected_security=run.selected_security,
+                created_at=started_at,
+            )
+        except Exception as exc:
+            return _failed_handoff(request, started_at, self._now(), exc)
         unknown_limitations = tuple(
             limitation for point in report.unknowns for limitation in point.limitations
         )
+        contract = self.prompt_catalog.by_role(PromptAgentRole.SYNTHESIS_AGENT)
         return _handoff(
             request=request,
             status=(
@@ -382,6 +599,7 @@ class SpecialistExecutionService:
             output={
                 "summary": report.summary,
                 "report": report.to_dict(),
+                "agent_output": dict(agent.output),
                 "specialist_statuses": {
                     handoff.kind.value: handoff.status.value for handoff in specialist_handoffs
                 },
@@ -403,6 +621,7 @@ class SpecialistExecutionService:
             confidence=(
                 HandoffConfidence.MEDIUM if specialist_handoffs else HandoffConfidence.UNKNOWN
             ),
+            execution=_agent_execution(request, contract, agent),
         )
 
     def _load_run(self, run_id: str) -> OrchestratedResearchRun:
@@ -427,6 +646,7 @@ def _handoff(
     confidence: HandoffConfidence = HandoffConfidence.UNKNOWN,
     error_code: str | None = None,
     error_message: str | None = None,
+    execution: AgentExecutionMetadata | None = None,
 ) -> AgentHandoff:
     return AgentHandoff(
         id=f"handoff_{request.expected_kind.value}_{uuid4().hex}",
@@ -443,7 +663,68 @@ def _handoff(
         confidence=confidence,
         error_code=error_code,
         error_message=error_message,
+        execution=execution,
     )
+
+
+def _source_tool(
+    *,
+    name: str,
+    description: str,
+    permission: ToolPermission,
+    handler,
+) -> ToolSpec:
+    return ToolSpec(
+        name=name,
+        description=description,
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        permissions=(permission,),
+        timeout_seconds=30.0,
+        handler=handler,
+    )
+
+
+def _tool_context(name: str, permission: ToolPermission) -> ToolContext:
+    return ToolContext(
+        allowed_tools=(name,),
+        allowed_permissions=(permission,),
+    )
+
+
+def _agent_execution(
+    request: DelegationRequest,
+    contract: PromptContract,
+    result: StructuredAgentResult,
+) -> AgentExecutionMetadata:
+    tool_status = ",".join(tool.status.value for tool in result.tool_results)
+    return AgentExecutionMetadata(
+        mode=AgentExecutionMode.A2A,
+        agent_role=request.role.value,
+        correlation_id=request.correlation_id,
+        prompt_id=contract.id,
+        prompt_version=contract.version.value,
+        provider=result.provider,
+        model=result.model,
+        tool_status=tool_status,
+        reasoning_summary=str(result.output.get("reasoning_summary", "")),
+    )
+
+
+def _stock_evidence_ids(payload: Mapping[str, object]) -> tuple[str, ...]:
+    security = _mapping(payload.get("security", {}))
+    symbol = str(security.get("symbol") or "unknown").upper()
+    evidence_ids: list[str] = []
+    if payload.get("primary_source") is not None:
+        evidence_ids.append(f"stock:{symbol}:primary")
+    benchmark = _mapping(payload.get("benchmark_security", {}))
+    benchmark_symbol = str(benchmark.get("symbol") or "").upper()
+    if payload.get("benchmark_source") is not None and benchmark_symbol:
+        evidence_ids.append(f"stock:{benchmark_symbol}:benchmark")
+    return tuple(evidence_ids)
 
 
 def _failed_handoff(
@@ -452,15 +733,23 @@ def _failed_handoff(
     now: datetime,
     error: Exception,
 ) -> AgentHandoff:
-    del error
+    if isinstance(error, AgentRuntimeError):
+        error_code = error.code
+        error_message = error.message
+    elif isinstance(error, ProviderError):
+        error_code = error.code.value
+        error_message = "Configured agent provider failed."
+    else:
+        error_code = f"{request.role.value.replace('-', '_')}_failed"
+        error_message = "Specialist analysis failed safely."
     return _handoff(
         request=request,
         status=OrchestratorHandoffStatus.FAILED,
         started_at=started_at,
         completed_at=_aware_now(now),
-        error_code=f"{request.role.value.replace('-', '_')}_failed",
-        error_message="Specialist analysis failed safely.",
-        limitations=(f"{request.role.value} specialist failed safely.",),
+        error_code=error_code,
+        error_message=error_message,
+        limitations=(error_message,),
     )
 
 

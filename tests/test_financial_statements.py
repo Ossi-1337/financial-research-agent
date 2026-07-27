@@ -8,12 +8,12 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from financial_research_agent.domain import FinancialStatementType
 from financial_research_agent.statements import (
     FinancialStatementCompany,
     FinancialStatementError,
     FinancialStatementErrorCode,
     FinancialStatementStore,
+    FinancialStatementType,
     SECCompanyFactsProvider,
 )
 

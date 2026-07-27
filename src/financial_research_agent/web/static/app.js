@@ -1321,30 +1321,19 @@ async function sendMessage(content, mentions, assistantId) {
       state.messages = event.session.messages;
       await loadSessions();
       renderMessages();
+      return;
+    }
+    if (event.type === "research") {
+      completed = true;
+      const job = event.job;
+      updateAssistantContent(assistantId, backgroundJobText(job));
+      await pollBackgroundResearchJob(job.id, assistantId);
     }
   });
   if (!completed) {
     throw new Error("Chat stream ended before the response completed.");
   }
   state.abortController = null;
-}
-
-async function sendSynthesisReport(query, companyQuery) {
-  const response = await fetch(`/api/sessions/${state.sessionId}/synthesis-report/background`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query,
-      company_query: companyQuery,
-      refresh: true,
-      context_source_items: [],
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(await errorMessageFromResponse(response));
-  }
-  const payload = await response.json();
-  return payload.job;
 }
 
 async function pollBackgroundResearchJob(jobId, assistantId) {
@@ -1460,36 +1449,6 @@ async function loadRunArtifacts(runId) {
       sources: [],
     };
   }
-}
-
-async function routeChatMessage(content, mentions) {
-  const payload = await requestJson("/api/chat/route", {
-    method: "POST",
-    body: JSON.stringify({ content, mentions }),
-  });
-  return payload.route === "research"
-    ? { query: payload.query, companyQuery: payload.company_query }
-    : null;
-}
-
-function scenarioCommand(content) {
-  const match = content.match(/^\/scenario\s+([a-z0-9-]+)(?:\s+(--with-local-qa))?$/i);
-  if (!match) {
-    return null;
-  }
-  return { id: match[1].toLowerCase(), withLocalQa: Boolean(match[2]) };
-}
-
-async function sendScenario(scenario) {
-  const payload = await requestJson(`/api/scenarios/${encodeURIComponent(scenario.id)}/runs`, {
-    method: "POST",
-    body: JSON.stringify({
-      session_id: state.sessionId,
-      refresh: true,
-      with_local_qa: scenario.withLocalQa,
-    }),
-  });
-  return payload.job;
 }
 
 input.addEventListener("input", () => {
@@ -1659,21 +1618,7 @@ form.addEventListener("submit", async (event) => {
   const pending = appendOptimisticExchange(content, mentions);
   setBusy(true);
   try {
-    const scenario = scenarioCommand(content);
-    if (scenario) {
-      const job = await sendScenario(scenario);
-      updateAssistantContent(pending.assistantId, backgroundJobText(job));
-      await pollBackgroundResearchJob(job.id, pending.assistantId);
-    } else {
-      const research = await routeChatMessage(content, mentions);
-      if (research) {
-        const job = await sendSynthesisReport(research.query, research.companyQuery);
-        updateAssistantContent(pending.assistantId, backgroundJobText(job));
-        await pollBackgroundResearchJob(job.id, pending.assistantId);
-      } else {
-        await sendMessage(content, mentions, pending.assistantId);
-      }
-    }
+    await sendMessage(content, mentions, pending.assistantId);
   } catch (error) {
     removeOptimisticExchange(pending);
     if (error instanceof DOMException && error.name === "AbortError") {

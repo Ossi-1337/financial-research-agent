@@ -6,12 +6,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from financial_research_agent.context_analysis import (
-    ContextAnalysisResult,
-    ContextAnalysisStatus,
-    ContextScope,
-    NewsMacroSectorAgent,
-)
 from financial_research_agent.entities import (
     CompanySearchCandidate,
     CompanySearchError,
@@ -20,19 +14,6 @@ from financial_research_agent.entities import (
     CompanySearchStatus,
     EntityIdentifierType,
     ResolvedSecurity,
-)
-from financial_research_agent.filings import (
-    FilingCompany,
-    FilingError,
-    FilingIngestionResult,
-    FilingProvider,
-    FilingStore,
-)
-from financial_research_agent.market_data import (
-    MarketDataError,
-    MarketDataProvider,
-    MarketDataStore,
-    MarketSecurity,
 )
 from financial_research_agent.orchestration.contracts import (
     AgentHandoff,
@@ -51,59 +32,24 @@ from financial_research_agent.orchestration.dispatch import (
     ResearchStepDispatcher,
 )
 from financial_research_agent.orchestration.store import OrchestratorRunStore
-from financial_research_agent.report_analysis import (
-    FinancialReportAnalysisAgent,
-    FinancialReportAnalysisCompany,
-    FinancialReportAnalysisStatus,
-)
-from financial_research_agent.statements import (
-    FinancialStatementCompany,
-    FinancialStatementError,
-    FinancialStatementProvider,
-    FinancialStatementStore,
-)
-from financial_research_agent.stock_analysis import (
-    StockPriceAnalysisAgent,
-    StockPriceAnalysisSecurity,
-    StockPriceAnalysisStatus,
-)
-from financial_research_agent.synthesis import SynthesisAgent, SynthesisReportStatus
 
 
 class ResearchOrchestrator:
-    """Coordinates bounded specialist workflows through declared provider/store boundaries."""
+    """Owns research planning, A2A delegation, validation, and run persistence."""
 
     def __init__(
         self,
         *,
         company_search_provider: CompanySearchProvider,
-        market_data_provider: MarketDataProvider,
-        market_data_store: MarketDataStore,
-        financial_statement_provider: FinancialStatementProvider,
-        financial_statement_store: FinancialStatementStore,
-        filing_provider: FilingProvider,
-        filing_store: FilingStore,
-        financial_report_agent: FinancialReportAnalysisAgent,
-        stock_price_agent: StockPriceAnalysisAgent,
-        context_agent: NewsMacroSectorAgent,
-        synthesis_agent: SynthesisAgent | None = None,
+        step_dispatcher: ResearchStepDispatcher,
         run_store: OrchestratorRunStore | None = None,
-        step_dispatcher: ResearchStepDispatcher | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
+        if step_dispatcher is None:
+            raise ValueError("step_dispatcher is required")
         self._company_search_provider = company_search_provider
-        self._market_data_provider = market_data_provider
-        self._market_data_store = market_data_store
-        self._financial_statement_provider = financial_statement_provider
-        self._financial_statement_store = financial_statement_store
-        self._filing_provider = filing_provider
-        self._filing_store = filing_store
-        self._financial_report_agent = financial_report_agent
-        self._stock_price_agent = stock_price_agent
-        self._context_agent = context_agent
-        self._synthesis_agent = synthesis_agent or SynthesisAgent()
-        self._run_store = run_store
         self._step_dispatcher = step_dispatcher
+        self._run_store = run_store
         self._now = now or (lambda: datetime.now(UTC))
 
     async def run(
@@ -119,31 +65,36 @@ class ResearchOrchestrator:
             status=OrchestratorRunStatus.RUNNING,
             created_at=created_at,
             updated_at=created_at,
-            execution_policy=(
-                OrchestratorExecutionPolicy.DISTRIBUTED_A2A
-                if self._step_dispatcher is not None
-                else OrchestratorExecutionPolicy.SEQUENTIAL_LOCAL_SAFE
-            ),
+            execution_policy=OrchestratorExecutionPolicy.DISTRIBUTED_A2A,
             plan=default_orchestrator_plan(),
-            warnings=(_execution_warning(self._step_dispatcher is not None),),
+            warnings=("Research uses the canonical A2A specialist topology.",),
             scenario_id=request.scenario_id,
             scenario_version=request.scenario_version,
         )
         run = self._save(run, progress_observer)
 
-        resolution_handoff, search_result, candidate = await self._resolve_company(request)
-        run = self._append_handoff(run, resolution_handoff, progress_observer)
+        resolution, _result, candidate = await self._resolve_company(request)
+        run = self._append_handoff(run, resolution, progress_observer)
         if candidate is None:
-            run = self._finish_without_candidate(run, search_result)
-            return self._save(run, progress_observer)
+            return self._save(
+                replace(
+                    run,
+                    status=OrchestratorRunStatus.FAILED,
+                    limitations=(
+                        *run.limitations,
+                        "Research stopped because no reviewable company was resolved.",
+                    ),
+                    updated_at=_aware_now(self._now()),
+                ),
+                progress_observer,
+            )
 
-        company = candidate.company
         security = candidate.securities[0]
         cik = _candidate_identifier(candidate, EntityIdentifierType.CIK)
         run = self._save(
             replace(
                 run,
-                selected_company=company.to_dict(),
+                selected_company=candidate.company.to_dict(),
                 selected_security=security.to_dict(),
                 updated_at=_aware_now(self._now()),
             ),
@@ -152,7 +103,6 @@ class ResearchOrchestrator:
 
         for handoff in await self._refresh_data(request, run, candidate, security, cik):
             run = self._append_handoff(run, handoff, progress_observer)
-
         for handoff in await self._dispatch_specialists(
             request,
             run,
@@ -164,26 +114,163 @@ class ResearchOrchestrator:
 
         synthesis = await self._dispatch_synthesis(run)
         run = self._append_handoff(run, synthesis, progress_observer)
-        handoffs = run.handoffs
-        run = self._save(
+        final_status = _final_status(run.handoffs)
+        return self._save(
             replace(
                 run,
-                status=_final_status(handoffs),
-                synthesis_summary=(
-                    str(synthesis.output["summary"])
-                    if synthesis.output.get("summary") is not None
-                    else _synthesis_summary(handoffs)
-                ),
+                status=final_status,
+                synthesis_summary=_synthesis_summary(synthesis),
                 limitations=tuple(
                     dict.fromkeys(
-                        limitation for handoff in handoffs for limitation in handoff.limitations
+                        limitation for handoff in run.handoffs for limitation in handoff.limitations
                     )
                 ),
                 updated_at=_aware_now(self._now()),
             ),
             progress_observer,
         )
-        return run
+
+    async def _resolve_company(
+        self,
+        request: OrchestratorResearchInput,
+    ) -> tuple[AgentHandoff, CompanySearchResult | None, CompanySearchCandidate | None]:
+        started_at = _aware_now(self._now())
+        company_query = request.company_query or request.query
+        try:
+            result = await self._company_search_provider.search(
+                company_query,
+                limit=request.company_search_limit,
+            )
+        except CompanySearchError as exc:
+            return (
+                _handoff(
+                    kind=OrchestratorStepKind.COMPANY_RESOLUTION,
+                    step_id="resolve_company",
+                    status=OrchestratorHandoffStatus.FAILED,
+                    started_at=started_at,
+                    completed_at=_aware_now(self._now()),
+                    input_summary={"query": company_query},
+                    limitations=(exc.message,),
+                    error_code=exc.code.value,
+                    error_message=exc.message,
+                ),
+                None,
+                None,
+            )
+        if result.status == CompanySearchStatus.NO_MATCHES or not result.candidates:
+            limitation = "Company resolution returned no reviewable candidates."
+            return (
+                _handoff(
+                    kind=OrchestratorStepKind.COMPANY_RESOLUTION,
+                    step_id="resolve_company",
+                    status=OrchestratorHandoffStatus.FAILED,
+                    started_at=started_at,
+                    completed_at=_aware_now(self._now()),
+                    input_summary={"query": company_query},
+                    output=result.to_dict(),
+                    limitations=(limitation,),
+                    error_code="no_company_match",
+                    error_message=limitation,
+                ),
+                result,
+                None,
+            )
+        candidate = result.candidates[0]
+        return (
+            _handoff(
+                kind=OrchestratorStepKind.COMPANY_RESOLUTION,
+                step_id="resolve_company",
+                status=OrchestratorHandoffStatus.SUCCEEDED,
+                started_at=started_at,
+                completed_at=_aware_now(self._now()),
+                input_summary={"query": company_query},
+                output={"result": result.to_dict(), "selected_candidate": candidate.to_dict()},
+                warnings=tuple(
+                    dict.fromkeys(
+                        (
+                            *result.warnings,
+                            *candidate.warnings,
+                            "Top reviewable company candidate selected for bounded research.",
+                        )
+                    )
+                ),
+                confidence=HandoffConfidence.MEDIUM,
+            ),
+            result,
+            candidate,
+        )
+
+    async def _refresh_data(
+        self,
+        request: OrchestratorResearchInput,
+        run: OrchestratedResearchRun,
+        candidate: CompanySearchCandidate,
+        security: ResolvedSecurity,
+        cik: str | None,
+    ) -> tuple[AgentHandoff, ...]:
+        if not request.refresh:
+            now = _aware_now(self._now())
+            return tuple(
+                _skipped_handoff(kind, step_id, now, "Refresh disabled by request.")
+                for kind, step_id in (
+                    (OrchestratorStepKind.MARKET_DATA_REFRESH, "refresh_market_data"),
+                    (
+                        OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
+                        "refresh_financial_statements",
+                    ),
+                    (OrchestratorStepKind.FILING_REFRESH, "refresh_filings"),
+                )
+            )
+        delegations = (
+            DelegationRequest(
+                role=AgentRole.STOCK,
+                run_id=run.id,
+                step_id="refresh_market_data",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
+                payload={
+                    "security_id": security.id,
+                    "ticker": security.ticker,
+                    "exchange_mic": security.exchange_mic,
+                    "exchange_name": security.exchange_name,
+                    "currency": security.currency,
+                    "outputsize": request.market_outputsize,
+                    "benchmark_symbol": request.benchmark_symbol,
+                },
+            ),
+            DelegationRequest(
+                role=AgentRole.FINANCIAL_REPORT,
+                run_id=run.id,
+                step_id="refresh_financial_statements",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
+                payload={
+                    "company_id": candidate.company.id,
+                    "legal_name": candidate.company.legal_name,
+                    "cik": cik or "",
+                    "fiscal_years": request.fiscal_years,
+                },
+            ),
+            DelegationRequest(
+                role=AgentRole.FINANCIAL_REPORT,
+                run_id=run.id,
+                step_id="refresh_filings",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.FILING_REFRESH,
+                payload={
+                    "company_id": candidate.company.id,
+                    "legal_name": candidate.company.legal_name,
+                    "cik": cik or "",
+                    "forms": list(request.filing_forms),
+                    "limit": request.filing_limit,
+                    "form_limits": dict(request.filing_form_limits),
+                },
+            ),
+        )
+        results = await asyncio.gather(
+            *(self._step_dispatcher.dispatch(item, run=run) for item in delegations)
+        )
+        return tuple(result.handoff for result in results)
 
     async def _dispatch_specialists(
         self,
@@ -193,9 +280,7 @@ class ResearchOrchestrator:
         security: ResolvedSecurity,
         cik: str | None,
     ) -> tuple[AgentHandoff, ...]:
-        if self._step_dispatcher is None:
-            return self._run_specialists(request, candidate, security, cik)
-        requests = (
+        delegations = (
             DelegationRequest(
                 role=AgentRole.FINANCIAL_REPORT,
                 run_id=run.id,
@@ -237,13 +322,11 @@ class ResearchOrchestrator:
             ),
         )
         results = await asyncio.gather(
-            *(self._step_dispatcher.dispatch(delegation, run=run) for delegation in requests)
+            *(self._step_dispatcher.dispatch(item, run=run) for item in delegations)
         )
         return tuple(result.handoff for result in results)
 
     async def _dispatch_synthesis(self, run: OrchestratedResearchRun) -> AgentHandoff:
-        if self._step_dispatcher is None:
-            return self._synthesize(run)
         result = await self._step_dispatcher.dispatch(
             DelegationRequest(
                 role=AgentRole.SYNTHESIS,
@@ -251,626 +334,17 @@ class ResearchOrchestrator:
                 step_id="synthesis",
                 correlation_id=run.id,
                 expected_kind=OrchestratorStepKind.SYNTHESIS,
-                payload={
-                    "handoff_ids": [handoff.id for handoff in run.handoffs],
-                },
+                payload={"handoff_ids": [handoff.id for handoff in run.handoffs]},
             ),
             run=run,
         )
         return result.handoff
 
-    async def _resolve_company(
-        self,
-        request: OrchestratorResearchInput,
-    ) -> tuple[AgentHandoff, CompanySearchResult | None, CompanySearchCandidate | None]:
-        started_at = _aware_now(self._now())
-        try:
-            company_query = request.company_query or request.query
-            result = await self._company_search_provider.search(
-                company_query,
-                limit=request.company_search_limit,
-            )
-        except CompanySearchError as exc:
-            return (
-                _failed_handoff(
-                    kind=OrchestratorStepKind.COMPANY_RESOLUTION,
-                    step_id="resolve_company",
-                    started_at=started_at,
-                    completed_at=_aware_now(self._now()),
-                    input_summary={"query": company_query},
-                    error_code=exc.code.value,
-                    error_message=exc.message,
-                ),
-                None,
-                None,
-            )
-
-        if result.status == CompanySearchStatus.NO_MATCHES or not result.candidates:
-            limitation = "Company resolution returned no reviewable candidates."
-            return (
-                _handoff(
-                    kind=OrchestratorStepKind.COMPANY_RESOLUTION,
-                    step_id="resolve_company",
-                    status=OrchestratorHandoffStatus.FAILED,
-                    started_at=started_at,
-                    completed_at=_aware_now(self._now()),
-                    input_summary={"query": company_query},
-                    output=result.to_dict(),
-                    limitations=(limitation,),
-                    confidence=HandoffConfidence.UNKNOWN,
-                    error_code="no_company_match",
-                    error_message=limitation,
-                ),
-                result,
-                None,
-            )
-
-        candidate = result.candidates[0]
-        warnings = tuple(
-            dict.fromkeys(
-                (
-                    *result.warnings,
-                    *candidate.warnings,
-                    (
-                        "Top reviewable company candidate selected automatically for this "
-                        "bounded workflow."
-                    ),
-                )
-            )
-        )
-        return (
-            _handoff(
-                kind=OrchestratorStepKind.COMPANY_RESOLUTION,
-                step_id="resolve_company",
-                status=OrchestratorHandoffStatus.SUCCEEDED,
-                started_at=started_at,
-                completed_at=_aware_now(self._now()),
-                input_summary={"query": company_query},
-                output={"result": result.to_dict(), "selected_candidate": candidate.to_dict()},
-                warnings=warnings,
-                confidence=HandoffConfidence.MEDIUM,
-            ),
-            result,
-            candidate,
-        )
-
-    async def _refresh_data(
-        self,
-        request: OrchestratorResearchInput,
-        run: OrchestratedResearchRun,
-        candidate: CompanySearchCandidate,
-        security: ResolvedSecurity,
-        cik: str | None,
-    ) -> tuple[AgentHandoff, ...]:
-        if not request.refresh:
-            skipped_at = _aware_now(self._now())
-            return (
-                _skipped_handoff(
-                    kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
-                    step_id="refresh_market_data",
-                    reason="Refresh disabled by request.",
-                    occurred_at=skipped_at,
-                ),
-                _skipped_handoff(
-                    kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
-                    step_id="refresh_financial_statements",
-                    reason="Refresh disabled by request.",
-                    occurred_at=skipped_at,
-                ),
-                _skipped_handoff(
-                    kind=OrchestratorStepKind.FILING_REFRESH,
-                    step_id="refresh_filings",
-                    reason="Refresh disabled by request.",
-                    occurred_at=skipped_at,
-                ),
-            )
-
-        if self._step_dispatcher is not None:
-            requests = (
-                DelegationRequest(
-                    role=AgentRole.STOCK,
-                    run_id=run.id,
-                    step_id="refresh_market_data",
-                    correlation_id=run.id,
-                    expected_kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
-                    payload={
-                        "security_id": security.id,
-                        "ticker": security.ticker,
-                        "exchange_mic": security.exchange_mic,
-                        "exchange_name": security.exchange_name,
-                        "currency": security.currency,
-                        "outputsize": request.market_outputsize,
-                        "benchmark_symbol": request.benchmark_symbol,
-                    },
-                ),
-                DelegationRequest(
-                    role=AgentRole.FINANCIAL_REPORT,
-                    run_id=run.id,
-                    step_id="refresh_financial_statements",
-                    correlation_id=run.id,
-                    expected_kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
-                    payload={
-                        "company_id": candidate.company.id,
-                        "legal_name": candidate.company.legal_name,
-                        "cik": cik or "",
-                        "fiscal_years": request.fiscal_years,
-                    },
-                ),
-                DelegationRequest(
-                    role=AgentRole.FINANCIAL_REPORT,
-                    run_id=run.id,
-                    step_id="refresh_filings",
-                    correlation_id=run.id,
-                    expected_kind=OrchestratorStepKind.FILING_REFRESH,
-                    payload={
-                        "company_id": candidate.company.id,
-                        "legal_name": candidate.company.legal_name,
-                        "cik": cik or "",
-                        "forms": list(request.filing_forms),
-                        "limit": request.filing_limit,
-                        "form_limits": dict(request.filing_form_limits),
-                    },
-                ),
-            )
-            results = await asyncio.gather(
-                *(self._step_dispatcher.dispatch(delegation, run=run) for delegation in requests)
-            )
-            return tuple(result.handoff for result in results)
-
-        return (
-            await self._refresh_market_data(
-                security,
-                request.market_outputsize,
-                request.benchmark_symbol,
-            ),
-            await self._refresh_financial_statements(candidate, cik, request.fiscal_years),
-            await self._refresh_filings(
-                candidate,
-                cik,
-                request.filing_forms,
-                request.filing_limit,
-                request.filing_form_limits,
-            ),
-        )
-
-    async def _refresh_market_data(
-        self,
-        security: ResolvedSecurity,
-        outputsize: str,
-        benchmark_symbol: str | None,
-    ) -> AgentHandoff:
-        started_at = _aware_now(self._now())
-        market_security = MarketSecurity(
-            symbol=security.ticker,
-            security_id=security.id,
-            exchange_mic=security.exchange_mic,
-            exchange_name=security.exchange_name,
-            currency=security.currency,
-        )
-        try:
-            history = await self._market_data_provider.fetch_daily_prices(
-                market_security,
-                outputsize=outputsize,
-            )
-            stored = self._market_data_store.save_history(history)
-        except MarketDataError as exc:
-            return _failed_handoff(
-                kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
-                step_id="refresh_market_data",
-                started_at=started_at,
-                completed_at=_aware_now(self._now()),
-                input_summary={"symbol": market_security.symbol, "outputsize": outputsize},
-                error_code=exc.code.value,
-                error_message=exc.message,
-            )
-        output: dict[str, object] = {"history": stored.to_dict()}
-        warnings = list(stored.warnings)
-        limitations: list[str] = []
-        status = OrchestratorHandoffStatus.SUCCEEDED
-        error_code = None
-        error_message = None
-        if benchmark_symbol is not None and benchmark_symbol != market_security.symbol:
-            benchmark_security = MarketSecurity(
-                symbol=benchmark_symbol,
-                security_id=f"benchmark:{benchmark_symbol}",
-            )
-            try:
-                benchmark = await self._market_data_provider.fetch_daily_prices(
-                    benchmark_security,
-                    outputsize=outputsize,
-                )
-                stored_benchmark = self._market_data_store.save_history(benchmark)
-                output["benchmark_history"] = stored_benchmark.to_dict()
-                warnings.extend(stored_benchmark.warnings)
-            except MarketDataError as exc:
-                status = OrchestratorHandoffStatus.PARTIAL
-                error_code = exc.code.value
-                error_message = exc.message
-                limitations.append(
-                    f"Benchmark {benchmark_symbol} could not be refreshed: {exc.message}"
-                )
-        return _handoff(
-            kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
-            step_id="refresh_market_data",
-            status=status,
-            started_at=started_at,
-            completed_at=_aware_now(self._now()),
-            input_summary={
-                "symbol": market_security.symbol,
-                "outputsize": outputsize,
-                **({"benchmark_symbol": benchmark_symbol} if benchmark_symbol else {}),
-            },
-            output=output,
-            warnings=tuple(dict.fromkeys(warnings)),
-            limitations=tuple(limitations),
-            confidence=HandoffConfidence.HIGH,
-            error_code=error_code,
-            error_message=error_message,
-        )
-
-    async def _refresh_financial_statements(
-        self,
-        candidate: CompanySearchCandidate,
-        cik: str | None,
-        fiscal_years: int,
-    ) -> AgentHandoff:
-        if cik is None:
-            return _skipped_handoff(
-                kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
-                step_id="refresh_financial_statements",
-                reason="No CIK was available from company resolution.",
-                occurred_at=_aware_now(self._now()),
-            )
-        started_at = _aware_now(self._now())
-        company = FinancialStatementCompany(
-            cik=cik,
-            company_id=candidate.company.id,
-            legal_name=candidate.company.legal_name,
-        )
-        try:
-            result = await self._financial_statement_provider.fetch_statements(
-                company,
-                fiscal_years=fiscal_years,
-            )
-            stored = self._financial_statement_store.save_result(result)
-        except FinancialStatementError as exc:
-            return _failed_handoff(
-                kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
-                step_id="refresh_financial_statements",
-                started_at=started_at,
-                completed_at=_aware_now(self._now()),
-                input_summary={"cik": cik, "fiscal_years": str(fiscal_years)},
-                error_code=exc.code.value,
-                error_message=exc.message,
-            )
-        return _handoff(
-            kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
-            step_id="refresh_financial_statements",
-            status=OrchestratorHandoffStatus.SUCCEEDED,
-            started_at=started_at,
-            completed_at=_aware_now(self._now()),
-            input_summary={"cik": cik, "fiscal_years": str(fiscal_years)},
-            output={"statements": stored.to_dict()},
-            warnings=stored.warnings,
-            confidence=HandoffConfidence.HIGH,
-        )
-
-    async def _refresh_filings(
-        self,
-        candidate: CompanySearchCandidate,
-        cik: str | None,
-        forms: tuple[str, ...],
-        limit: int,
-        form_limits: Mapping[str, int],
-    ) -> AgentHandoff:
-        if cik is None:
-            return _skipped_handoff(
-                kind=OrchestratorStepKind.FILING_REFRESH,
-                step_id="refresh_filings",
-                reason="No CIK was available from company resolution.",
-                occurred_at=_aware_now(self._now()),
-            )
-        started_at = _aware_now(self._now())
-        company = FilingCompany(
-            cik=cik,
-            company_id=candidate.company.id,
-            legal_name=candidate.company.legal_name,
-        )
-        try:
-            result, partial_errors = await self._ingest_filings(
-                company,
-                forms=forms,
-                limit=limit,
-                form_limits=form_limits,
-            )
-            stored = self._filing_store.save_result(result)
-        except FilingError as exc:
-            return _failed_handoff(
-                kind=OrchestratorStepKind.FILING_REFRESH,
-                step_id="refresh_filings",
-                started_at=started_at,
-                completed_at=_aware_now(self._now()),
-                input_summary={
-                    "cik": cik,
-                    "forms": ",".join(forms),
-                    "limit": str(limit),
-                    **({"form_limits": _format_form_limits(form_limits)} if form_limits else {}),
-                },
-                error_code=exc.code.value,
-                error_message=exc.message,
-            )
-        return _handoff(
-            kind=OrchestratorStepKind.FILING_REFRESH,
-            step_id="refresh_filings",
-            status=(
-                OrchestratorHandoffStatus.PARTIAL
-                if partial_errors
-                else OrchestratorHandoffStatus.SUCCEEDED
-            ),
-            started_at=started_at,
-            completed_at=_aware_now(self._now()),
-            input_summary={
-                "cik": cik,
-                "forms": ",".join(forms),
-                "limit": str(limit),
-                **({"form_limits": _format_form_limits(form_limits)} if form_limits else {}),
-            },
-            output={"filings": stored.to_dict()},
-            warnings=stored.warnings,
-            limitations=partial_errors,
-            confidence=HandoffConfidence.HIGH,
-        )
-
-    async def _ingest_filings(
-        self,
-        company: FilingCompany,
-        *,
-        forms: tuple[str, ...],
-        limit: int,
-        form_limits: Mapping[str, int],
-    ) -> tuple[FilingIngestionResult, tuple[str, ...]]:
-        if not form_limits:
-            return (
-                await self._filing_provider.ingest_latest(company, forms=forms, limit=limit),
-                (),
-            )
-        results: list[FilingIngestionResult] = []
-        errors: list[str] = []
-        last_error: FilingError | None = None
-        for form, form_limit in form_limits.items():
-            try:
-                results.append(
-                    await self._filing_provider.ingest_latest(
-                        company,
-                        forms=(form,),
-                        limit=form_limit,
-                    )
-                )
-            except FilingError as exc:
-                last_error = exc
-                errors.append(f"{form} ingestion failed: {exc.message}")
-        if not results:
-            assert last_error is not None
-            raise last_error
-        return (
-            FilingIngestionResult(
-                company=company,
-                filings=tuple(filing for result in results for filing in result.filings),
-                chunks=tuple(chunk for result in results for chunk in result.chunks),
-                source=results[0].source,
-                warnings=tuple(
-                    dict.fromkeys(warning for result in results for warning in result.warnings)
-                ),
-            ),
-            tuple(errors),
-        )
-
-    def _run_specialists(
-        self,
-        request: OrchestratorResearchInput,
-        candidate: CompanySearchCandidate,
-        security: ResolvedSecurity,
-        cik: str | None,
-    ) -> tuple[AgentHandoff, ...]:
-        return (
-            self._run_financial_report_analysis(candidate, cik),
-            self._run_stock_price_analysis(security, request.benchmark_symbol),
-            self._run_context_analysis(request, security),
-        )
-
-    def _run_financial_report_analysis(
-        self,
-        candidate: CompanySearchCandidate,
-        cik: str | None,
-    ) -> AgentHandoff:
-        if cik is None:
-            return _skipped_handoff(
-                kind=OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
-                step_id="financial_report_analysis",
-                reason="No CIK was available for financial report analysis.",
-                occurred_at=_aware_now(self._now()),
-            )
-        started_at = _aware_now(self._now())
-        try:
-            result = self._financial_report_agent.analyze(
-                FinancialReportAnalysisCompany(
-                    cik=cik,
-                    company_id=candidate.company.id,
-                    legal_name=candidate.company.legal_name,
-                )
-            )
-        except Exception as exc:
-            return _failed_handoff(
-                kind=OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
-                step_id="financial_report_analysis",
-                started_at=started_at,
-                completed_at=_aware_now(self._now()),
-                input_summary={"cik": cik},
-                error_code="financial_report_analysis_failed",
-                error_message=str(exc),
-            )
-        return _handoff(
-            kind=OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
-            step_id="financial_report_analysis",
-            status=_report_handoff_status(result.status),
-            started_at=started_at,
-            completed_at=_aware_now(self._now()),
-            input_summary={"cik": cik},
-            output={"analysis": result.to_dict()},
-            evidence_ids=tuple(snippet.id for snippet in result.evidence),
-            warnings=result.warnings,
-            limitations=result.limitations,
-            confidence=_report_confidence(result.status),
-        )
-
-    def _run_stock_price_analysis(
-        self,
-        security: ResolvedSecurity,
-        benchmark_symbol: str | None,
-    ) -> AgentHandoff:
-        started_at = _aware_now(self._now())
-        try:
-            result = self._stock_price_agent.analyze(
-                StockPriceAnalysisSecurity(
-                    symbol=security.ticker,
-                    security_id=security.id,
-                    exchange_mic=security.exchange_mic,
-                    exchange_name=security.exchange_name,
-                    currency=security.currency,
-                ),
-                benchmark_symbol=benchmark_symbol,
-            )
-        except Exception as exc:
-            return _failed_handoff(
-                kind=OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
-                step_id="stock_price_analysis",
-                started_at=started_at,
-                completed_at=_aware_now(self._now()),
-                input_summary={"symbol": security.ticker},
-                error_code="stock_price_analysis_failed",
-                error_message=str(exc),
-            )
-        return _handoff(
-            kind=OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
-            step_id="stock_price_analysis",
-            status=_stock_handoff_status(result.status),
-            started_at=started_at,
-            completed_at=_aware_now(self._now()),
-            input_summary={"symbol": security.ticker},
-            output={"analysis": result.to_dict()},
-            warnings=result.warnings,
-            limitations=result.limitations,
-            confidence=_stock_confidence(result.status),
-        )
-
-    def _run_context_analysis(
-        self,
-        request: OrchestratorResearchInput,
-        security: ResolvedSecurity,
-    ) -> AgentHandoff:
-        started_at = _aware_now(self._now())
-        try:
-            result = self._context_agent.analyze(
-                query=request.query,
-                source_items=request.context_source_items,
-                company_symbols=(security.ticker,),
-            )
-        except Exception as exc:
-            return _failed_handoff(
-                kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
-                step_id="context_analysis",
-                started_at=started_at,
-                completed_at=_aware_now(self._now()),
-                input_summary={"source_item_count": str(len(request.context_source_items))},
-                error_code="context_analysis_failed",
-                error_message=str(exc),
-            )
-        return _handoff(
-            kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
-            step_id="context_analysis",
-            status=_context_handoff_status(result.status),
-            started_at=started_at,
-            completed_at=_aware_now(self._now()),
-            input_summary={"source_item_count": str(len(request.context_source_items))},
-            output={"analysis": result.to_dict()},
-            evidence_ids=_context_evidence_ids(result),
-            warnings=result.warnings,
-            limitations=result.limitations,
-            confidence=_context_confidence(result.status),
-        )
-
-    def _synthesize(self, run: OrchestratedResearchRun) -> AgentHandoff:
-        started_at = _aware_now(self._now())
-        specialist_handoffs = tuple(
-            handoff
-            for handoff in run.handoffs
-            if handoff.kind
-            in {
-                OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
-                OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
-                OrchestratorStepKind.CONTEXT_ANALYSIS,
-            }
-        )
-        report = self._synthesis_agent.synthesize(
-            query=run.query,
-            handoffs=run.handoffs,
-            selected_company=run.selected_company,
-            selected_security=run.selected_security,
-            created_at=started_at,
-        )
-        report_unknown_limitations = tuple(
-            limitation for point in report.unknowns for limitation in point.limitations
-        )
-        limitations = tuple(
-            dict.fromkeys(
-                (
-                    *report.limitations,
-                    *report_unknown_limitations,
-                )
-            )
-        )
-        specialist_warnings = tuple(
-            warning for handoff in specialist_handoffs for warning in handoff.warnings
-        )
-        warnings = tuple(
-            dict.fromkeys(
-                (
-                    *report.warnings,
-                    *specialist_warnings,
-                )
-            )
-        )
-        return _handoff(
-            kind=OrchestratorStepKind.SYNTHESIS,
-            step_id="synthesis",
-            status=(
-                OrchestratorHandoffStatus.SUCCEEDED
-                if report.status == SynthesisReportStatus.COMPLETE
-                else OrchestratorHandoffStatus.PARTIAL
-            ),
-            started_at=started_at,
-            completed_at=_aware_now(self._now()),
-            input_summary={"specialist_handoff_count": str(len(specialist_handoffs))},
-            output={
-                "summary": report.summary,
-                "report": report.to_dict(),
-                "specialist_statuses": {
-                    handoff.kind.value: handoff.status.value for handoff in specialist_handoffs
-                },
-            },
-            evidence_ids=report.evidence_ids,
-            warnings=warnings,
-            limitations=limitations,
-            confidence=(
-                HandoffConfidence.MEDIUM if specialist_handoffs else HandoffConfidence.UNKNOWN
-            ),
-        )
-
     def _append_handoff(
         self,
         run: OrchestratedResearchRun,
         handoff: AgentHandoff,
-        progress_observer: Callable[[OrchestratedResearchRun], None] | None = None,
+        observer: Callable[[OrchestratedResearchRun], None] | None,
     ) -> OrchestratedResearchRun:
         return self._save(
             replace(
@@ -878,37 +352,65 @@ class ResearchOrchestrator:
                 handoffs=(*run.handoffs, handoff),
                 updated_at=_aware_now(self._now()),
             ),
-            progress_observer,
-        )
-
-    def _finish_without_candidate(
-        self,
-        run: OrchestratedResearchRun,
-        search_result: CompanySearchResult | None,
-    ) -> OrchestratedResearchRun:
-        limitation = "Workflow stopped because no company candidate could be selected."
-        return replace(
-            run,
-            status=OrchestratorRunStatus.FAILED,
-            synthesis_summary=limitation,
-            limitations=tuple(dict.fromkeys((*run.limitations, limitation))),
-            warnings=(
-                tuple(dict.fromkeys((*run.warnings, *search_result.warnings)))
-                if search_result is not None
-                else run.warnings
-            ),
-            updated_at=_aware_now(self._now()),
+            observer,
         )
 
     def _save(
         self,
         run: OrchestratedResearchRun,
-        progress_observer: Callable[[OrchestratedResearchRun], None] | None = None,
+        observer: Callable[[OrchestratedResearchRun], None] | None,
     ) -> OrchestratedResearchRun:
-        stored = run if self._run_store is None else self._run_store.save(run)
-        if progress_observer is not None:
-            progress_observer(stored)
+        stored = self._run_store.save(run) if self._run_store is not None else run
+        if observer is not None:
+            observer(stored)
         return stored
+
+
+def _final_status(handoffs: tuple[AgentHandoff, ...]) -> OrchestratorRunStatus:
+    synthesis = next(
+        (
+            handoff
+            for handoff in reversed(handoffs)
+            if handoff.kind == OrchestratorStepKind.SYNTHESIS
+        ),
+        None,
+    )
+    if synthesis is None or synthesis.status == OrchestratorHandoffStatus.FAILED:
+        return OrchestratorRunStatus.FAILED
+    required = tuple(
+        handoff
+        for handoff in handoffs
+        if handoff.kind
+        in {
+            OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
+            OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
+            OrchestratorStepKind.CONTEXT_ANALYSIS,
+        }
+    )
+    if synthesis.status != OrchestratorHandoffStatus.SUCCEEDED or any(
+        handoff.status != OrchestratorHandoffStatus.SUCCEEDED for handoff in required
+    ):
+        return OrchestratorRunStatus.PARTIAL
+    return OrchestratorRunStatus.COMPLETE
+
+
+def _synthesis_summary(handoff: AgentHandoff) -> str | None:
+    value = handoff.output.get("summary")
+    return str(value).strip() if value is not None and str(value).strip() else None
+
+
+def _candidate_identifier(
+    candidate: CompanySearchCandidate,
+    identifier_type: EntityIdentifierType,
+) -> str | None:
+    return next(
+        (
+            identifier.value
+            for identifier in candidate.company.identifiers
+            if identifier.identifier_type == identifier_type
+        ),
+        None,
+    )
 
 
 def _handoff(
@@ -918,9 +420,8 @@ def _handoff(
     status: OrchestratorHandoffStatus,
     started_at: datetime,
     completed_at: datetime,
-    input_summary: dict[str, str] | None = None,
-    output: dict[str, object] | None = None,
-    evidence_ids: tuple[str, ...] = (),
+    input_summary: Mapping[str, str] | None = None,
+    output: Mapping[str, object] | None = None,
     warnings: tuple[str, ...] = (),
     limitations: tuple[str, ...] = (),
     confidence: HandoffConfidence = HandoffConfidence.UNKNOWN,
@@ -934,9 +435,8 @@ def _handoff(
         status=status,
         started_at=started_at,
         completed_at=completed_at,
-        input_summary=input_summary or {},
-        output=output or {},
-        evidence_ids=evidence_ids,
+        input_summary=dict(input_summary or {}),
+        output=dict(output or {}),
         warnings=warnings,
         limitations=limitations,
         confidence=confidence,
@@ -945,166 +445,21 @@ def _handoff(
     )
 
 
-def _failed_handoff(
-    *,
-    kind: OrchestratorStepKind,
-    step_id: str,
-    started_at: datetime,
-    completed_at: datetime,
-    input_summary: dict[str, str],
-    error_code: str,
-    error_message: str,
-) -> AgentHandoff:
-    return _handoff(
-        kind=kind,
-        step_id=step_id,
-        status=OrchestratorHandoffStatus.FAILED,
-        started_at=started_at,
-        completed_at=completed_at,
-        input_summary=input_summary,
-        limitations=(error_message,),
-        confidence=HandoffConfidence.UNKNOWN,
-        error_code=error_code,
-        error_message=error_message,
-    )
-
-
 def _skipped_handoff(
-    *,
     kind: OrchestratorStepKind,
     step_id: str,
+    occurred_at: datetime,
     reason: str,
-    occurred_at: datetime | None = None,
 ) -> AgentHandoff:
-    now = _aware_now(occurred_at or datetime.now(UTC))
     return _handoff(
         kind=kind,
         step_id=step_id,
         status=OrchestratorHandoffStatus.SKIPPED,
-        started_at=now,
-        completed_at=now,
+        started_at=occurred_at,
+        completed_at=occurred_at,
         limitations=(reason,),
-        confidence=HandoffConfidence.UNKNOWN,
     )
-
-
-def _candidate_identifier(
-    candidate: CompanySearchCandidate,
-    identifier_type: EntityIdentifierType,
-) -> str | None:
-    for identifier in candidate.company.identifiers:
-        if identifier.identifier_type == identifier_type:
-            return identifier.value
-    for security in candidate.securities:
-        for identifier in security.identifiers:
-            if identifier.identifier_type == identifier_type:
-                return identifier.value
-    return None
-
-
-def _format_form_limits(values: Mapping[str, int]) -> str:
-    return ",".join(f"{form}:{limit}" for form, limit in values.items())
-
-
-def _report_handoff_status(
-    status: FinancialReportAnalysisStatus,
-) -> OrchestratorHandoffStatus:
-    if status == FinancialReportAnalysisStatus.COMPLETE:
-        return OrchestratorHandoffStatus.SUCCEEDED
-    return OrchestratorHandoffStatus.PARTIAL
-
-
-def _stock_handoff_status(status: StockPriceAnalysisStatus) -> OrchestratorHandoffStatus:
-    if status == StockPriceAnalysisStatus.COMPLETE:
-        return OrchestratorHandoffStatus.SUCCEEDED
-    return OrchestratorHandoffStatus.PARTIAL
-
-
-def _context_handoff_status(status: ContextAnalysisStatus) -> OrchestratorHandoffStatus:
-    if status == ContextAnalysisStatus.COMPLETE:
-        return OrchestratorHandoffStatus.SUCCEEDED
-    return OrchestratorHandoffStatus.PARTIAL
-
-
-def _report_confidence(status: FinancialReportAnalysisStatus) -> HandoffConfidence:
-    if status == FinancialReportAnalysisStatus.COMPLETE:
-        return HandoffConfidence.HIGH
-    if status == FinancialReportAnalysisStatus.PARTIAL:
-        return HandoffConfidence.MEDIUM
-    return HandoffConfidence.UNKNOWN
-
-
-def _stock_confidence(status: StockPriceAnalysisStatus) -> HandoffConfidence:
-    if status == StockPriceAnalysisStatus.COMPLETE:
-        return HandoffConfidence.HIGH
-    if status == StockPriceAnalysisStatus.PARTIAL:
-        return HandoffConfidence.MEDIUM
-    return HandoffConfidence.UNKNOWN
-
-
-def _context_confidence(status: ContextAnalysisStatus) -> HandoffConfidence:
-    if status == ContextAnalysisStatus.COMPLETE:
-        return HandoffConfidence.MEDIUM
-    if status == ContextAnalysisStatus.PARTIAL:
-        return HandoffConfidence.LOW
-    return HandoffConfidence.UNKNOWN
-
-
-def _context_evidence_ids(result: ContextAnalysisResult) -> tuple[str, ...]:
-    return tuple(
-        dict.fromkeys(
-            source_item_id
-            for finding in result.findings
-            for source_item_id in finding.source_item_ids
-            if finding.scope in {ContextScope.COMPANY, ContextScope.MACRO, ContextScope.SECTOR}
-        )
-    )
-
-
-def _synthesis_summary(handoffs: tuple[AgentHandoff, ...]) -> str:
-    if not handoffs:
-        return "No specialist outputs were available for synthesis."
-    status_text = ", ".join(f"{handoff.kind.value}={handoff.status.value}" for handoff in handoffs)
-    return (
-        "Bounded research workflow completed from stored specialist outputs. "
-        f"Specialist statuses: {status_text}. Review each handoff, evidence, warnings, "
-        "and limitations before using the result."
-    )
-
-
-def _execution_warning(distributed: bool) -> str:
-    if distributed:
-        return (
-            "Execution policy is distributed_a2a; specialist outages become inspectable "
-            "partial handoffs without hidden local fallback."
-        )
-    return (
-        "Execution policy is sequential_local_safe to avoid overloading local model "
-        "and provider resources."
-    )
-
-
-def _final_status(handoffs: tuple[AgentHandoff, ...]) -> OrchestratorRunStatus:
-    if any(
-        handoff.kind == OrchestratorStepKind.COMPANY_RESOLUTION
-        and handoff.status == OrchestratorHandoffStatus.FAILED
-        for handoff in handoffs
-    ):
-        return OrchestratorRunStatus.FAILED
-    if any(
-        handoff.status
-        in {
-            OrchestratorHandoffStatus.PARTIAL,
-            OrchestratorHandoffStatus.SKIPPED,
-            OrchestratorHandoffStatus.FAILED,
-        }
-        for handoff in handoffs
-    ):
-        return OrchestratorRunStatus.PARTIAL
-    return OrchestratorRunStatus.COMPLETE
 
 
 def _aware_now(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
