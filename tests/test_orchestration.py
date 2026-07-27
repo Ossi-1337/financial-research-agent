@@ -50,7 +50,11 @@ from financial_research_agent.market_data import (
 )
 from financial_research_agent.orchestration import (
     AgentHandoff,
+    AgentRole,
+    DelegationResult,
+    HandoffConfidence,
     OrchestratedResearchRun,
+    OrchestratorExecutionPolicy,
     OrchestratorHandoffStatus,
     OrchestratorResearchInput,
     OrchestratorRunStatus,
@@ -183,6 +187,74 @@ def test_orchestrator_recovers_when_one_refresh_fails(tmp_path: Path) -> None:
     }
     assert stock.status == OrchestratorHandoffStatus.PARTIAL
     assert "No stored market data" in " ".join(stock.limitations)
+
+
+def test_distributed_dispatch_runs_specialists_concurrently_in_stable_order(
+    tmp_path: Path,
+) -> None:
+    dispatcher = RecordingDistributedDispatcher()
+    orchestrator = _orchestrator(
+        run_store=OrchestratorRunStore(storage_path=tmp_path / "orchestrator_runs.json"),
+        step_dispatcher=dispatcher,
+    )
+
+    run = asyncio.run(
+        orchestrator.run(
+            OrchestratorResearchInput(
+                query="Apple distributed research",
+                context_source_items=_context_sources(),
+            )
+        )
+    )
+    specialist_kinds = [
+        handoff.kind
+        for handoff in run.handoffs
+        if handoff.kind
+        in {
+            OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
+            OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
+            OrchestratorStepKind.CONTEXT_ANALYSIS,
+        }
+    ]
+
+    assert run.execution_policy == OrchestratorExecutionPolicy.DISTRIBUTED_A2A
+    assert dispatcher.max_active == 3
+    assert specialist_kinds == [
+        OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
+        OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
+        OrchestratorStepKind.CONTEXT_ANALYSIS,
+    ]
+    assert run.handoffs[-1].kind == OrchestratorStepKind.SYNTHESIS
+    assert run.synthesis_summary == "Distributed deterministic synthesis."
+
+
+def test_distributed_specialist_outage_stays_partial_without_local_fallback(
+    tmp_path: Path,
+) -> None:
+    dispatcher = RecordingDistributedDispatcher(failing_role=AgentRole.STOCK)
+    orchestrator = _orchestrator(
+        run_store=OrchestratorRunStore(storage_path=tmp_path / "orchestrator_runs.json"),
+        step_dispatcher=dispatcher,
+    )
+
+    run = asyncio.run(
+        orchestrator.run(
+            OrchestratorResearchInput(
+                query="Apple distributed outage",
+                context_source_items=_context_sources(),
+            )
+        )
+    )
+    stock = next(
+        handoff
+        for handoff in run.handoffs
+        if handoff.kind == OrchestratorStepKind.STOCK_PRICE_ANALYSIS
+    )
+
+    assert run.status == OrchestratorRunStatus.PARTIAL
+    assert stock.status == OrchestratorHandoffStatus.FAILED
+    assert stock.error_code == "a2a_agent_unavailable"
+    assert dispatcher.calls.count(AgentRole.STOCK) == 1
 
 
 def test_orchestrator_marks_refresh_disabled_steps_as_skipped(tmp_path: Path) -> None:
@@ -642,6 +714,7 @@ def _orchestrator(
     market_data_provider=None,
     filing_provider=None,
     run_store: OrchestratorRunStore | None = None,
+    step_dispatcher=None,
 ) -> ResearchOrchestrator:
     market_store = MarketDataStore()
     statement_store = FinancialStatementStore()
@@ -666,8 +739,55 @@ def _orchestrator(
         ),
         context_agent=NewsMacroSectorAgent(now=lambda: NOW),
         run_store=run_store,
+        step_dispatcher=step_dispatcher,
         now=lambda: NOW,
     )
+
+
+class RecordingDistributedDispatcher:
+    def __init__(self, *, failing_role: AgentRole | None = None) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.failing_role = failing_role
+        self.calls: list[AgentRole] = []
+
+    async def dispatch(self, request, *, run=None) -> DelegationResult:
+        self.calls.append(request.role)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        if request.expected_kind != OrchestratorStepKind.SYNTHESIS:
+            await asyncio.sleep(0.01)
+        self.active -= 1
+        output = (
+            {"summary": "Distributed deterministic synthesis.", "report": {"status": "partial"}}
+            if request.expected_kind == OrchestratorStepKind.SYNTHESIS
+            else {"analysis": {"status": "test fixture"}}
+        )
+        status = (
+            OrchestratorHandoffStatus.FAILED
+            if request.role == self.failing_role
+            else OrchestratorHandoffStatus.SUCCEEDED
+        )
+        return DelegationResult(
+            handoff=AgentHandoff(
+                id=f"handoff:{request.step_id}",
+                step_id=request.step_id,
+                kind=request.expected_kind,
+                status=status,
+                started_at=NOW,
+                completed_at=NOW,
+                output=output,
+                confidence=HandoffConfidence.MEDIUM,
+                error_code=(
+                    "a2a_agent_unavailable" if status == OrchestratorHandoffStatus.FAILED else None
+                ),
+                error_message=(
+                    "Specialist delegation failed safely."
+                    if status == OrchestratorHandoffStatus.FAILED
+                    else None
+                ),
+            )
+        )
 
 
 def _statement(

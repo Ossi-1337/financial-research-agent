@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from a2a.types import AgentCard, TaskState
+from a2a.types import AgentCard, Task, TaskState
 from fastapi.testclient import TestClient
 from google.protobuf.json_format import ParseDict
 
@@ -180,6 +181,14 @@ def test_active_task_can_be_cancelled(tmp_path: Path) -> None:
         assert sent.status_code == 200
         assert cancelled.status_code == 200
         assert cancelled.json()["status"]["state"] == "TASK_STATE_CANCELED"
+        time.sleep(0.25)
+        persisted = client.get(f"/tasks/{task_id}", headers=A2A_HEADERS)
+        assert persisted.json()["status"]["state"] == "TASK_STATE_CANCELED"
+        background_job_id, _run_id = asyncio.run(runtime.task_store.execution_ids(task_id))
+        assert background_job_id is not None
+        job = asyncio.run(runtime.background_runner.get(background_job_id))
+        assert job is not None
+        assert job.status.value == "cancelled"
 
 
 @pytest.mark.parametrize(
@@ -248,19 +257,23 @@ def test_remote_mode_requires_bearer_and_card_contains_no_key(tmp_path: Path) ->
 
 
 def test_unfinished_task_recovery_marks_task_failed(tmp_path: Path) -> None:
-    settings, runtime = _runtime(tmp_path)
-
-    with TestClient(create_a2a_app(settings=settings, runtime=runtime)) as client:
-        response = client.post(
-            "/message:send",
-            headers=A2A_HEADERS,
-            json=_message_request("recovery-1", "Research a company"),
-        )
-        task_id = response.json()["task"]["id"]
-
-    task = asyncio.run(runtime.task_store.find_by_message_id("recovery-1"))
-    assert task is not None
-    task.status.state = TaskState.TASK_STATE_WORKING
+    _settings, runtime = _runtime(tmp_path)
+    task_id = "a2a_task_recovery"
+    task = ParseDict(
+        {
+            "id": task_id,
+            "contextId": "a2a_context_recovery",
+            "status": {"state": "TASK_STATE_WORKING"},
+            "history": [
+                {
+                    "messageId": "recovery-1",
+                    "role": "ROLE_USER",
+                    "parts": [{"text": "Research a company"}],
+                }
+            ],
+        },
+        Task(),
+    )
     asyncio.run(runtime.task_store.save(task, _local_call_context()))
 
     assert asyncio.run(runtime.task_store.reconcile_restarted_tasks()) == 1

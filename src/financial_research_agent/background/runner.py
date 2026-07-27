@@ -23,6 +23,10 @@ class BackgroundResearchStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class BackgroundQueueFullError(RuntimeError):
+    """Raised when an atomic background queue admission check fails."""
+
+
 @dataclass(frozen=True, slots=True)
 class BackgroundResearchJob:
     id: str
@@ -128,7 +132,10 @@ class BackgroundResearchRunner:
         *,
         run: ResearchCallable,
         metadata: dict[str, str] | None = None,
+        max_queued_runs: int | None = None,
     ) -> BackgroundResearchJob:
+        if max_queued_runs is not None and max_queued_runs <= 0:
+            raise ValueError("max_queued_runs must be positive")
         created_at = _aware_now(self._now())
         orchestrator_run_id = f"orchestrator_run_{uuid4().hex}"
         job = BackgroundResearchJob(
@@ -142,6 +149,14 @@ class BackgroundResearchRunner:
         )
         request_with_run_id = replace(request, run_id=orchestrator_run_id)
         async with self._lock:
+            if max_queued_runs is not None:
+                queued_count = sum(
+                    1
+                    for existing in self._jobs.values()
+                    if existing.status == BackgroundResearchStatus.QUEUED
+                )
+                if queued_count >= max_queued_runs:
+                    raise BackgroundQueueFullError("background research queue is full")
             self._jobs[job.id] = job
             self._persist(job)
             self._tasks[job.id] = asyncio.create_task(

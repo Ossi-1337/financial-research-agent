@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from financial_research_agent.background import (
+    BackgroundQueueFullError,
     BackgroundResearchJob,
     BackgroundResearchRunner,
     BackgroundResearchStatus,
@@ -102,6 +103,41 @@ def test_background_runner_cancels_queued_or_running_job() -> None:
     asyncio.run(scenario())
 
 
+def test_background_runner_admits_queued_jobs_atomically() -> None:
+    async def scenario() -> None:
+        release = asyncio.Event()
+        runner = BackgroundResearchRunner(max_concurrent_runs=1, now=lambda: NOW)
+
+        async def run(request: OrchestratorResearchInput) -> OrchestratedResearchRun:
+            await release.wait()
+            return _run(request)
+
+        running = await runner.submit(OrchestratorResearchInput(query="running"), run=run)
+        await _wait_for_running_job(runner)
+        results = await asyncio.gather(
+            *(
+                runner.submit(
+                    OrchestratorResearchInput(query=f"queued-{index}"),
+                    run=run,
+                    max_queued_runs=1,
+                )
+                for index in range(20)
+            ),
+            return_exceptions=True,
+        )
+
+        assert sum(isinstance(result, BackgroundResearchJob) for result in results) == 1
+        assert sum(isinstance(result, BackgroundQueueFullError) for result in results) == 19
+        stats = await runner.stats()
+        assert stats["running_count"] == 1
+        assert stats["queued_count"] == 1
+        await runner.cancel(running.id)
+        for job in await runner.list():
+            await runner.cancel(job.id)
+
+    asyncio.run(scenario())
+
+
 def test_background_research_web_endpoint_queues_and_exposes_partial_run(
     tmp_path: Path,
 ) -> None:
@@ -173,6 +209,19 @@ async def _wait_for_job_statuses(
             return
         await asyncio.sleep(0.01)
     raise AssertionError("jobs did not reach expected status before timeout")
+
+
+async def _wait_for_running_job(
+    runner: BackgroundResearchRunner,
+    *,
+    timeout: float = 2.0,
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if (await runner.stats())["running_count"] == 1:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("job did not start before timeout")
 
 
 def _poll_job(client: TestClient, job_id: str, *, timeout: float = 2.0) -> dict[str, object]:

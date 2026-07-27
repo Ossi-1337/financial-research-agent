@@ -10,8 +10,9 @@ flowchart TB
     Browser["Browser UI"] --> API["FastAPI web/API layer"]
     CLI["Python CLI"] --> Services["Application services"]
     API --> Services
-    A2AClient["A2A 1.0 client"] --> A2AServer["Separate A2A task server"]
+    A2AClient["A2A 1.0 client"] --> A2AServer["A2A orchestrator service"]
     A2AServer --> Services
+    A2AServer -. "optional distributed topology" .-> A2ASpecialists["4 local A2A specialist services"]
 
     Services --> Orchestrator["Bounded research orchestrator"]
     Services --> Chat["Chat and cited-answer flows"]
@@ -89,7 +90,7 @@ instead of being silently converted into certainty.
 | `persistence` | SQLite schema, migrations, repositories, backup, restore, and import |
 | `observability` | Redacted traces, stored-result replay plans, and debug bundles |
 | `evaluation` | Offline deterministic evaluation contracts and fixtures |
-| `a2a` | Optional A2A 1.0 Agent Card, task execution, SSE, redaction, and SQLite task store |
+| `a2a` | Optional A2A 1.0 cards, task execution, delegation, SSE, redaction, and SQLite task/event/delegation stores |
 
 ## Deterministic And LLM Boundaries
 
@@ -144,3 +145,34 @@ proxy. Push notifications, gRPC, JSON-RPC, and public deployment are unsupported
 
 The main web process no longer owns A2A discovery. Its interoperability endpoint remains a
 bounded read-only MCP-style status spike.
+
+## Optional Distributed Topology
+
+The default remains one process. The `a2a-distributed` Compose profile starts five instances of
+the same A2A-capable image:
+
+```mermaid
+flowchart LR
+    Client["A2A client"] --> O["Orchestrator :8001"]
+    O --> F["Financial report :8002"]
+    O --> S["Stock :8003"]
+    O --> C["Context :8004"]
+    F --> Y["Synthesis :8005"]
+    S --> Y
+    C --> Y
+    O --> DB["Shared local SQLite + files"]
+    F --> DB
+    S --> DB
+    C --> DB
+    Y --> DB
+```
+
+The orchestrator resolves entities and refreshes declared sources, then delegates the three
+specialist analyses concurrently. Results are persisted in stable financial, stock, context
+order before synthesis. Failed or malformed remote handoffs remain visible and produce partial
+research; there is no hidden local fallback.
+
+Only port `8001` is published to the host. Ports `8002` through `8005` are Compose-network
+services. Shared SQLite and filesystem storage are suitable for this bounded local topology,
+not broad horizontal scale. Durable queues, a remote database, object storage, service
+authentication, TLS, and telemetry are required before remote production deployment.

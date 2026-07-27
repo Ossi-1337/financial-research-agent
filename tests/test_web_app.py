@@ -101,6 +101,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert '<option value="anthropic">anthropic</option>' in root_response.text
     assert '<option value="gemini">gemini</option>' in root_response.text
     assert '<option value="litellm">litellm</option>' in root_response.text
+    assert 'id="settings-llm-model" name="llm_model"' in root_response.text
+    assert 'name="llm_model" type="text"' not in root_response.text
     assert 'class="composer-action"' in root_response.text
     assert 'id="company-search-form"' not in root_response.text
     assert 'id="selected-company"' not in root_response.text
@@ -160,6 +162,8 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "researchCommand" in response.text
     assert "/api/settings" in response.text
     assert "/api/settings/provider-health" in response.text
+    assert "refreshProviderModels" in response.text
+    assert "setModelOptions" in response.text
     assert "contextSourcesFromMessages" in response.text
     assert "safeExternalUrl" in response.text
     assert "citation-list" in response.text
@@ -175,6 +179,7 @@ def test_runtime_settings_endpoint_returns_redacted_provider_management_payload(
             "FRA_GEMINI_API_KEY": "gemini-secret",
             "FRA_LITELLM_API_KEY": "litellm-secret",
             "FRA_ALPHA_VANTAGE_API_KEY": "alpha-secret",
+            "FRA_SEC_USER_AGENT": "financial-research-agent private@example.com",
         }
     )
     client = _client(settings=settings)
@@ -201,6 +206,8 @@ def test_runtime_settings_endpoint_returns_redacted_provider_management_payload(
     assert "anthropic-secret" not in dumped
     assert "gemini-secret" not in dumped
     assert "litellm-secret" not in dumped
+    assert "private@example.com" not in dumped
+    assert payload["settings"]["data_sources"]["sec_user_agent_configured"] is True
 
 
 def test_runtime_settings_update_changes_chat_model_without_restart() -> None:
@@ -258,7 +265,20 @@ def test_runtime_provider_health_reports_offline_capabilities() -> None:
     assert health["provider"] == "offline-test"
     assert health["reachable"] is True
     assert health["status"] == "ok"
+    assert health["available_models"] == ["offline-test"]
     assert "chat" in health["capabilities"]
+
+
+def test_runtime_settings_reject_provider_model_mismatch() -> None:
+    client = _client()
+
+    response = client.put(
+        "/api/settings",
+        json={"llm_provider": "local-openai", "llm_model": "offline-test"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_runtime_settings"
 
 
 def test_status_returns_chat_provider_without_secrets() -> None:
@@ -449,7 +469,7 @@ def test_storage_integrity_endpoint_is_read_only(tmp_path) -> None:
 
     assert response.status_code == 200
     assert payload["healthy"] is True
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["counts"]["chat_sessions"] == 0
 
 

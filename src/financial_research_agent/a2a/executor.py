@@ -13,8 +13,10 @@ from a2a.types import Message, Part, Task, TaskState, TaskStatus
 from google.protobuf.json_format import ParseDict
 from google.protobuf.timestamp_pb2 import Timestamp
 
+from financial_research_agent.a2a.coordination import A2ATaskExecutionCoordinator
 from financial_research_agent.a2a.store import SQLiteA2ATaskStore
 from financial_research_agent.background import (
+    BackgroundQueueFullError,
     BackgroundResearchRunner,
     BackgroundResearchStatus,
 )
@@ -29,6 +31,12 @@ from financial_research_agent.orchestration import (
 from financial_research_agent.settings import A2ASettings
 
 POLL_SECONDS = 0.05
+_TERMINAL_TASK_STATES = {
+    TaskState.TASK_STATE_COMPLETED,
+    TaskState.TASK_STATE_CANCELED,
+    TaskState.TASK_STATE_FAILED,
+    TaskState.TASK_STATE_REJECTED,
+}
 
 
 class CompanyResearchAgentExecutor(AgentExecutor):
@@ -41,6 +49,7 @@ class CompanyResearchAgentExecutor(AgentExecutor):
         task_store: SQLiteA2ATaskStore,
         orchestrator_run_store: object,
         redaction_policy: RedactionPolicy,
+        execution_coordinator: A2ATaskExecutionCoordinator,
     ) -> None:
         self.settings = settings
         self.orchestrator = orchestrator
@@ -48,6 +57,7 @@ class CompanyResearchAgentExecutor(AgentExecutor):
         self.task_store = task_store
         self.orchestrator_run_store = orchestrator_run_store
         self.redaction_policy = redaction_policy
+        self.execution_coordinator = execution_coordinator
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = _required(context.task_id, "task_id")
@@ -55,52 +65,60 @@ class CompanyResearchAgentExecutor(AgentExecutor):
         updater = TaskUpdater(event_queue, task_id, context_id)
         await event_queue.enqueue_event(_initial_task(context, updater))
         await self._wait_until_persisted(task_id)
-        try:
-            query = _validate_request(context, self.settings.max_input_chars)
-        except ValueError as exc:
-            await updater.reject(_agent_message(updater, str(exc)))
-            return
-
-        stats = await self.background_runner.stats()
-        if int(stats["queued_count"]) >= self.settings.max_queued_tasks:
-            await updater.reject(
-                _agent_message(updater, "Local A2A research queue is full. Retry later.")
-            )
-            return
-
-        await self.task_store.append_event(
-            task_id,
-            "submitted",
-            {"query_chars": len(query), "skill": "company_research"},
-        )
-
         progress_queue: asyncio.Queue[OrchestratedResearchRun] = asyncio.Queue()
+        try:
+            async with self.execution_coordinator.hold(task_id):
+                persisted = await self.task_store.get(task_id, context.call_context)
+                if persisted is None or persisted.status.state in _TERMINAL_TASK_STATES:
+                    return
+                try:
+                    query = _validate_request(context, self.settings.max_input_chars)
+                except ValueError as exc:
+                    await updater.reject(_agent_message(updater, str(exc)))
+                    return
 
-        async def run_research(request: OrchestratorResearchInput) -> OrchestratedResearchRun:
-            return await self.orchestrator.run(
-                request,
-                progress_observer=progress_queue.put_nowait,
-            )
+                await self.task_store.append_event(
+                    task_id,
+                    "submitted",
+                    {"query_chars": len(query), "skill": "company_research"},
+                )
 
-        job = await self.background_runner.submit(
-            OrchestratorResearchInput(query=query),
-            run=run_research,
-            metadata={"a2a_task_id": task_id, "a2a_context_id": context_id},
-        )
-        await self.task_store.bind_execution(
-            task_id,
-            background_job_id=job.id,
-            orchestrator_run_id=job.orchestrator_run_id,
-        )
-        await updater.start_work(_agent_message(updater, "Source-backed research started."))
-        await self.task_store.append_event(
-            task_id,
-            "working",
-            {
-                "background_job_id": job.id,
-                "orchestrator_run_id": job.orchestrator_run_id,
-            },
-        )
+                async def run_research(
+                    request: OrchestratorResearchInput,
+                ) -> OrchestratedResearchRun:
+                    return await self.orchestrator.run(
+                        request,
+                        progress_observer=progress_queue.put_nowait,
+                    )
+
+                try:
+                    job = await self.background_runner.submit(
+                        OrchestratorResearchInput(query=query),
+                        run=run_research,
+                        metadata={"a2a_task_id": task_id, "a2a_context_id": context_id},
+                        max_queued_runs=self.settings.max_queued_tasks,
+                    )
+                except BackgroundQueueFullError:
+                    await updater.reject(
+                        _agent_message(updater, "Local A2A research queue is full. Retry later.")
+                    )
+                    return
+                await self.task_store.bind_execution(
+                    task_id,
+                    background_job_id=job.id,
+                    orchestrator_run_id=job.orchestrator_run_id,
+                )
+                await updater.start_work(_agent_message(updater, "Source-backed research started."))
+                await self.task_store.append_event(
+                    task_id,
+                    "working",
+                    {
+                        "background_job_id": job.id,
+                        "orchestrator_run_id": job.orchestrator_run_id,
+                    },
+                )
+        finally:
+            await self.execution_coordinator.mark_initialized(task_id)
 
         emitted_handoffs: set[str] = set()
         while True:
@@ -150,20 +168,26 @@ class CompanyResearchAgentExecutor(AgentExecutor):
         task_id = _required(context.task_id, "task_id")
         context_id = _required(context.context_id, "context_id")
         updater = TaskUpdater(event_queue, task_id, context_id)
-        background_job_id, _run_id = await self.task_store.execution_ids(task_id)
-        if background_job_id is not None:
-            await self.background_runner.cancel(background_job_id)
-        message = _agent_message(updater, "Research task cancelled.")
-        await updater.cancel(message)
-        task = await self.task_store.get(task_id, context.call_context)
-        if task is not None:
-            timestamp = Timestamp()
-            timestamp.FromDatetime(datetime.now(UTC))
-            task.status.state = TaskState.TASK_STATE_CANCELED
-            task.status.timestamp.CopyFrom(timestamp)
-            task.status.message.CopyFrom(message)
-            await self.task_store.save(task, context.call_context)
-        await self.task_store.append_event(task_id, "cancelled", {"error_code": "cancelled"})
+        await self.execution_coordinator.wait_initialized(task_id)
+        async with self.execution_coordinator.hold(task_id):
+            background_job_id, _run_id = await self.task_store.execution_ids(task_id)
+            if background_job_id is not None:
+                await self.background_runner.cancel(background_job_id)
+            message = _agent_message(updater, "Research task cancelled.")
+            await updater.cancel(message)
+            task = await self.task_store.get(task_id, context.call_context)
+            if task is not None:
+                timestamp = Timestamp()
+                timestamp.FromDatetime(datetime.now(UTC))
+                task.status.state = TaskState.TASK_STATE_CANCELED
+                task.status.timestamp.CopyFrom(timestamp)
+                task.status.message.CopyFrom(message)
+                await self.task_store.save(task, context.call_context)
+            await self.task_store.append_event(
+                task_id,
+                "cancelled",
+                {"error_code": "cancelled"},
+            )
 
     async def _wait_until_persisted(self, task_id: str) -> None:
         for _attempt in range(100):

@@ -44,7 +44,9 @@ def test_runtime_docker_stage_contains_only_installed_package() -> None:
 def test_compose_default_is_offline_and_model_services_use_profiles() -> None:
     root = Path(__file__).resolve().parents[1]
     compose = root.joinpath("docker-compose.yml").read_text(encoding="utf-8")
+    app_image = compose.split("services:", maxsplit=1)[0]
 
+    assert "target: runtime" in app_image
     assert "FRA_LLM_PROVIDER: ${FRA_LLM_PROVIDER:-offline-test}" in compose
     assert 'command: ["chown -R 10001:10001 /data"]' in compose
     assert "condition: service_completed_successfully" in compose

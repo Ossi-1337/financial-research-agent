@@ -184,7 +184,7 @@ def _replace_provider_settings(
     settings: ProviderSettings,
     overrides: RuntimeSettingsOverrides,
 ) -> ProviderSettings:
-    return ProviderSettings(
+    provider = ProviderSettings(
         llm_provider=overrides.llm_provider or settings.llm_provider,
         llm_model=overrides.llm_model or settings.llm_model,
         llm_base_url=(
@@ -248,6 +248,9 @@ def _replace_provider_settings(
             else settings.streaming_model
         ),
     )
+    if provider.llm_provider != "offline-test" and provider.llm_model == "offline-test":
+        raise ValueError(f"Select a model provided by {provider.llm_provider}.")
+    return provider
 
 
 def _replace_chat_settings(

@@ -60,6 +60,6 @@ USER fra
 EXPOSE 8001
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=12 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/.well-known/agent-card.json', timeout=5).read()"
+    CMD python -c "import os, urllib.request; port=os.getenv('FRA_A2A_PORT', '8001'); urllib.request.urlopen(f'http://127.0.0.1:{port}/.well-known/agent-card.json', timeout=5).read()"
 
 CMD ["financial-research-agent", "a2a-serve", "--host", "0.0.0.0", "--port", "8001"]

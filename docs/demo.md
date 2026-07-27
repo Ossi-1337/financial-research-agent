@@ -84,8 +84,8 @@ material claim.
 ## 5. Optional Local Q&A
 
 Start a local OpenAI-compatible endpoint such as llama.cpp, then configure the app for
-`local-openai` before starting the direct Python UI. See the
-[local development guide](local-development.md#local-llm-profiles) for the endpoint settings.
+`local-openai` before starting the direct Python UI. The required provider, model, and endpoint
+settings are documented in the repository `.env.example`.
 
 Alternatively, stop the direct Python server and start the complete app plus llama.cpp stack
 with `python scripts/dev.py docker-up --runtime cuda --detach`. Use the CPU profile when CUDA is

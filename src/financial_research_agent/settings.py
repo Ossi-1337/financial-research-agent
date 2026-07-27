@@ -44,6 +44,13 @@ DEFAULT_A2A_MAX_CONCURRENT_TASKS = 1
 DEFAULT_A2A_MAX_QUEUED_TASKS = 8
 DEFAULT_A2A_MAX_INPUT_CHARS = 4_000
 DEFAULT_A2A_PUBLIC_BASE_URL = "http://127.0.0.1:8001"
+DEFAULT_A2A_TOPOLOGY = "single"
+DEFAULT_A2A_FINANCIAL_REPORT_URL = "http://127.0.0.1:8002"
+DEFAULT_A2A_STOCK_URL = "http://127.0.0.1:8003"
+DEFAULT_A2A_CONTEXT_URL = "http://127.0.0.1:8004"
+DEFAULT_A2A_SYNTHESIS_URL = "http://127.0.0.1:8005"
+DEFAULT_A2A_DELEGATION_TIMEOUT_SECONDS = 60.0
+DEFAULT_A2A_DELEGATION_MAX_ATTEMPTS = 2
 DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS = 1
 DEFAULT_PROMPT_BUDGET_INPUT_TOKENS = 16_000
 DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS = 1_024
@@ -389,6 +396,13 @@ class A2ASettings:
     max_queued_tasks: int = DEFAULT_A2A_MAX_QUEUED_TASKS
     max_input_chars: int = DEFAULT_A2A_MAX_INPUT_CHARS
     public_base_url: str = DEFAULT_A2A_PUBLIC_BASE_URL
+    topology: str = DEFAULT_A2A_TOPOLOGY
+    financial_report_url: str = DEFAULT_A2A_FINANCIAL_REPORT_URL
+    stock_url: str = DEFAULT_A2A_STOCK_URL
+    context_url: str = DEFAULT_A2A_CONTEXT_URL
+    synthesis_url: str = DEFAULT_A2A_SYNTHESIS_URL
+    delegation_timeout_seconds: float = DEFAULT_A2A_DELEGATION_TIMEOUT_SECONDS
+    delegation_max_attempts: int = DEFAULT_A2A_DELEGATION_MAX_ATTEMPTS
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "api_key", _optional_text(self.api_key))
@@ -396,6 +410,20 @@ class A2ASettings:
         if not base_url.startswith(("http://", "https://")):
             raise ValueError("FRA_A2A_PUBLIC_BASE_URL must use http or https")
         object.__setattr__(self, "public_base_url", base_url)
+        topology = _require_text(self.topology)
+        if topology not in {"single", "distributed"}:
+            raise ValueError("FRA_A2A_TOPOLOGY must be single or distributed")
+        object.__setattr__(self, "topology", topology)
+        for name in (
+            "financial_report_url",
+            "stock_url",
+            "context_url",
+            "synthesis_url",
+        ):
+            value = _require_text(getattr(self, name)).rstrip("/")
+            if not value.startswith(("http://", "https://")):
+                raise ValueError(f"{name} must use http or https")
+            object.__setattr__(self, name, value)
         if self.enabled and not self.local_only and self.api_key is None:
             raise ValueError(
                 "FRA_A2A_API_KEY is required when FRA_A2A_ENABLED=true and FRA_A2A_LOCAL_ONLY=false"
@@ -406,6 +434,10 @@ class A2ASettings:
             raise ValueError("FRA_A2A_MAX_QUEUED_TASKS must be positive")
         if self.max_input_chars < 100:
             raise ValueError("FRA_A2A_MAX_INPUT_CHARS must be at least 100")
+        if self.delegation_timeout_seconds <= 0:
+            raise ValueError("FRA_A2A_DELEGATION_TIMEOUT_SECONDS must be positive")
+        if self.delegation_max_attempts <= 0:
+            raise ValueError("FRA_A2A_DELEGATION_MAX_ATTEMPTS must be positive")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -416,6 +448,13 @@ class A2ASettings:
             "max_queued_tasks": self.max_queued_tasks,
             "max_input_chars": self.max_input_chars,
             "public_base_url": self.public_base_url,
+            "topology": self.topology,
+            "financial_report_url": self.financial_report_url,
+            "stock_url": self.stock_url,
+            "context_url": self.context_url,
+            "synthesis_url": self.synthesis_url,
+            "delegation_timeout_seconds": self.delegation_timeout_seconds,
+            "delegation_max_attempts": self.delegation_max_attempts,
             "protocol_version": "1.0",
             "protocol_binding": "HTTP+JSON",
         }
@@ -677,6 +716,37 @@ class Settings:
                     env,
                     "FRA_A2A_PUBLIC_BASE_URL",
                     DEFAULT_A2A_PUBLIC_BASE_URL,
+                ),
+                topology=_env_value(env, "FRA_A2A_TOPOLOGY", DEFAULT_A2A_TOPOLOGY),
+                financial_report_url=_env_value(
+                    env,
+                    "FRA_A2A_FINANCIAL_REPORT_URL",
+                    DEFAULT_A2A_FINANCIAL_REPORT_URL,
+                ),
+                stock_url=_env_value(
+                    env,
+                    "FRA_A2A_STOCK_URL",
+                    DEFAULT_A2A_STOCK_URL,
+                ),
+                context_url=_env_value(
+                    env,
+                    "FRA_A2A_CONTEXT_URL",
+                    DEFAULT_A2A_CONTEXT_URL,
+                ),
+                synthesis_url=_env_value(
+                    env,
+                    "FRA_A2A_SYNTHESIS_URL",
+                    DEFAULT_A2A_SYNTHESIS_URL,
+                ),
+                delegation_timeout_seconds=_env_float_value(
+                    env,
+                    "FRA_A2A_DELEGATION_TIMEOUT_SECONDS",
+                    DEFAULT_A2A_DELEGATION_TIMEOUT_SECONDS,
+                ),
+                delegation_max_attempts=_env_int_value(
+                    env,
+                    "FRA_A2A_DELEGATION_MAX_ATTEMPTS",
+                    DEFAULT_A2A_DELEGATION_MAX_ATTEMPTS,
                 ),
             ),
             background=BackgroundSettings(

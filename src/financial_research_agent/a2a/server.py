@@ -42,7 +42,9 @@ from financial_research_agent.a2a.runtime import (
     A2AResearchRuntime,
     create_default_a2a_runtime,
 )
+from financial_research_agent.a2a.specialist_executor import SpecialistAgentExecutor
 from financial_research_agent.observability import RedactionPolicy
+from financial_research_agent.orchestration import AgentRole
 from financial_research_agent.settings import Settings
 
 _ID_NAMESPACE = UUID("911036e9-e57d-496c-b428-e5c29f5e219f")
@@ -87,13 +89,14 @@ class DeterministicRequestContextBuilder(RequestContextBuilder):
         )
 
 
-def create_agent_card(settings: Settings) -> AgentCard:
+def create_agent_card(
+    settings: Settings,
+    role: AgentRole = AgentRole.COMPANY_RESEARCH,
+) -> AgentCard:
+    profile = _agent_card_profile(role)
     payload: dict[str, Any] = {
-        "name": "financial-research-agent",
-        "description": (
-            "Local-first source-backed company research. The deterministic synthesis "
-            "remains the source of truth and never provides buy, sell, or hold advice."
-        ),
+        "name": profile["name"],
+        "description": profile["description"],
         "version": __version__,
         "supportedInterfaces": [
             {
@@ -107,25 +110,9 @@ def create_agent_card(settings: Settings) -> AgentCard:
             "pushNotifications": False,
             "extendedAgentCard": False,
         },
-        "defaultInputModes": ["text/plain"],
+        "defaultInputModes": [profile["input_mode"]],
         "defaultOutputModes": ["text/plain", "application/json"],
-        "skills": [
-            {
-                "id": "company_research",
-                "name": "Source-backed company research",
-                "description": (
-                    "Resolve a company and run bounded market, financial statement, filing, "
-                    "specialist, and deterministic synthesis steps."
-                ),
-                "tags": ["finance", "company-research", "source-backed", "local-first"],
-                "examples": [
-                    "Research Novo Nordisk's current financial situation.",
-                    "Research Tesla and explain material limitations in available evidence.",
-                ],
-                "inputModes": ["text/plain"],
-                "outputModes": ["text/plain", "application/json"],
-            }
-        ],
+        "skills": [profile["skill"]],
     }
     if not settings.a2a.local_only:
         payload["securitySchemes"] = {
@@ -145,20 +132,34 @@ def create_a2a_app(
     *,
     settings: Settings | None = None,
     runtime: A2AResearchRuntime | None = None,
+    role: AgentRole | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     if not app_settings.a2a.enabled:
         raise ValueError("A2A server is disabled. Set FRA_A2A_ENABLED=true.")
-    research_runtime = runtime or create_default_a2a_runtime(app_settings)
-    card = create_agent_card(app_settings)
-    executor = CompanyResearchAgentExecutor(
-        settings=app_settings.a2a,
-        orchestrator=research_runtime.orchestrator,
-        background_runner=research_runtime.background_runner,
-        task_store=research_runtime.task_store,
-        orchestrator_run_store=research_runtime.orchestrator_run_store,
-        redaction_policy=RedactionPolicy.from_settings(app_settings),
-    )
+    server_role = role or (runtime.role if runtime is not None else AgentRole.COMPANY_RESEARCH)
+    research_runtime = runtime or create_default_a2a_runtime(app_settings, role=server_role)
+    card = create_agent_card(app_settings, server_role)
+    redaction_policy = RedactionPolicy.from_settings(app_settings)
+    if server_role == AgentRole.COMPANY_RESEARCH:
+        executor = CompanyResearchAgentExecutor(
+            settings=app_settings.a2a,
+            orchestrator=research_runtime.orchestrator,
+            background_runner=research_runtime.background_runner,
+            task_store=research_runtime.task_store,
+            orchestrator_run_store=research_runtime.orchestrator_run_store,
+            redaction_policy=redaction_policy,
+            execution_coordinator=research_runtime.execution_coordinator,
+        )
+    else:
+        if research_runtime.specialist_service is None:
+            raise ValueError("specialist runtime is unavailable")
+        executor = SpecialistAgentExecutor(
+            role=server_role,
+            service=research_runtime.specialist_service,
+            task_store=research_runtime.task_store,
+            redaction_policy=redaction_policy,
+        )
     handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=research_runtime.task_store,
@@ -197,6 +198,66 @@ def create_a2a_app(
     )
     _install_security_middleware(app, app_settings, research_runtime, card)
     return app
+
+
+def _agent_card_profile(role: AgentRole) -> dict[str, Any]:
+    if role == AgentRole.COMPANY_RESEARCH:
+        return {
+            "name": "financial-research-agent",
+            "description": (
+                "Local-first source-backed company research. Deterministic synthesis "
+                "remains source of truth and never provides investment recommendations."
+            ),
+            "input_mode": "text/plain",
+            "skill": {
+                "id": "company_research",
+                "name": "Source-backed company research",
+                "description": (
+                    "Resolve a company and run bounded data, specialist, and synthesis steps."
+                ),
+                "tags": ["finance", "company-research", "source-backed", "local-first"],
+                "examples": ["Research Novo Nordisk's current financial situation."],
+                "inputModes": ["text/plain"],
+                "outputModes": ["text/plain", "application/json"],
+            },
+        }
+    profiles = {
+        AgentRole.FINANCIAL_REPORT: (
+            "financial-report-agent",
+            "financial_report_analysis",
+            "Analyze stored financial statements and filing evidence.",
+        ),
+        AgentRole.STOCK: (
+            "stock-analysis-agent",
+            "stock_price_analysis",
+            "Analyze stored market and benchmark data deterministically.",
+        ),
+        AgentRole.CONTEXT: (
+            "context-analysis-agent",
+            "context_analysis",
+            "Analyze bounded source-linked company, macro, and sector context.",
+        ),
+        AgentRole.SYNTHESIS: (
+            "synthesis-agent",
+            "research_synthesis",
+            "Build deterministic synthesis from persisted specialist handoffs.",
+        ),
+    }
+    name, skill_id, description = profiles[role]
+    return {
+        "name": name,
+        "description": description,
+        "input_mode": "application/json",
+        "skill": {
+            "id": skill_id,
+            "name": skill_id.replace("_", " ").title(),
+            "description": description,
+            "tags": ["finance", "specialist", "source-backed", "local-first"],
+            "examples": [],
+            "inputModes": ["application/json"],
+            "outputModes": ["application/json"],
+        },
+    }
 
 
 def _install_security_middleware(
@@ -314,44 +375,47 @@ async def _cancel_persisted_task(
     task_id: str,
     runtime: A2AResearchRuntime,
 ) -> Response:
-    context = ServerCallContext(state={})
-    task = await runtime.task_store.get(task_id, context)
-    if task is None:
+    if runtime.role == AgentRole.COMPANY_RESEARCH:
+        await runtime.execution_coordinator.wait_initialized(task_id)
+    async with runtime.execution_coordinator.hold(task_id):
+        context = ServerCallContext(state={})
+        task = await runtime.task_store.get(task_id, context)
+        if task is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "a2a_task_not_found"},
+            )
+        if task.status.state in _TERMINAL_TASK_STATES:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "a2a_task_not_cancelable"},
+            )
+        background_job_id, _run_id = await runtime.task_store.execution_ids(task_id)
+        if background_job_id is not None:
+            await runtime.background_runner.cancel(background_job_id)
+        timestamp = Timestamp()
+        timestamp.FromDatetime(datetime.now(UTC))
+        task.status.state = TaskState.TASK_STATE_CANCELED
+        task.status.timestamp.CopyFrom(timestamp)
+        task.status.message.CopyFrom(
+            Message(
+                message_id=f"cancel-{task.id}",
+                task_id=task.id,
+                context_id=task.context_id,
+                role=Role.ROLE_AGENT,
+                parts=[Part(text="Research task cancelled.")],
+            )
+        )
+        await runtime.task_store.save(task, context)
+        await runtime.task_store.append_event(
+            task_id,
+            "cancelled",
+            {"error_code": "cancelled"},
+        )
         return JSONResponse(
-            status_code=404,
-            content={"error": "a2a_task_not_found"},
+            MessageToDict(task),
+            headers={"A2A-Version": PROTOCOL_VERSION_1_0},
         )
-    if task.status.state in _TERMINAL_TASK_STATES:
-        return JSONResponse(
-            status_code=409,
-            content={"error": "a2a_task_not_cancelable"},
-        )
-    background_job_id, _run_id = await runtime.task_store.execution_ids(task_id)
-    if background_job_id is not None:
-        await runtime.background_runner.cancel(background_job_id)
-    timestamp = Timestamp()
-    timestamp.FromDatetime(datetime.now(UTC))
-    task.status.state = TaskState.TASK_STATE_CANCELED
-    task.status.timestamp.CopyFrom(timestamp)
-    task.status.message.CopyFrom(
-        Message(
-            message_id=f"cancel-{task.id}",
-            task_id=task.id,
-            context_id=task.context_id,
-            role=Role.ROLE_AGENT,
-            parts=[Part(text="Research task cancelled.")],
-        )
-    )
-    await runtime.task_store.save(task, context)
-    await runtime.task_store.append_event(
-        task_id,
-        "cancelled",
-        {"error_code": "cancelled"},
-    )
-    return JSONResponse(
-        MessageToDict(task),
-        headers={"A2A-Version": PROTOCOL_VERSION_1_0},
-    )
 
 
 def _route_key(route: object) -> tuple[str, str] | None:

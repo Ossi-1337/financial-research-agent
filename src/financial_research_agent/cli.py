@@ -80,6 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port for serve commands. Defaults to 8000 for UI and 8001 for A2A.",
     )
     parser.add_argument(
+        "--role",
+        choices=["company-research", "financial-report", "stock", "context", "synthesis"],
+        default="company-research",
+        help="Agent role for a2a-serve. Defaults to company-research.",
+    )
+    parser.add_argument(
         "--yes",
         action="store_true",
         help="Confirm destructive local data reset.",
@@ -226,8 +232,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(str(exc))
         try:
             from financial_research_agent.a2a import create_a2a_app
+            from financial_research_agent.orchestration import AgentRole
 
-            app = create_a2a_app(settings=settings)
+            role = AgentRole(args.role)
+            app = create_a2a_app(settings=settings, role=role)
         except ModuleNotFoundError as exc:
             if exc.name and (
                 exc.name == "a2a" or exc.name.startswith(("a2a.", "grpc", "google.protobuf"))
@@ -249,7 +257,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _print_json(payload, pretty=args.pretty)
             return 1
-        uvicorn.run(app, host=host, port=args.port or 8001)
+        default_ports = {
+            "company-research": 8001,
+            "financial-report": 8002,
+            "stock": 8003,
+            "context": 8004,
+            "synthesis": 8005,
+        }
+        uvicorn.run(app, host=host, port=args.port or default_ports[args.role])
         return 0
 
     if args.command == "eval":

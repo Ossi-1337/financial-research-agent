@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -44,6 +45,11 @@ from financial_research_agent.orchestration.contracts import (
     OrchestratorStepKind,
     default_orchestrator_plan,
 )
+from financial_research_agent.orchestration.dispatch import (
+    AgentRole,
+    DelegationRequest,
+    ResearchStepDispatcher,
+)
 from financial_research_agent.orchestration.store import OrchestratorRunStore
 from financial_research_agent.report_analysis import (
     FinancialReportAnalysisAgent,
@@ -82,6 +88,7 @@ class ResearchOrchestrator:
         context_agent: NewsMacroSectorAgent,
         synthesis_agent: SynthesisAgent | None = None,
         run_store: OrchestratorRunStore | None = None,
+        step_dispatcher: ResearchStepDispatcher | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._company_search_provider = company_search_provider
@@ -96,6 +103,7 @@ class ResearchOrchestrator:
         self._context_agent = context_agent
         self._synthesis_agent = synthesis_agent or SynthesisAgent()
         self._run_store = run_store
+        self._step_dispatcher = step_dispatcher
         self._now = now or (lambda: datetime.now(UTC))
 
     async def run(
@@ -111,12 +119,13 @@ class ResearchOrchestrator:
             status=OrchestratorRunStatus.RUNNING,
             created_at=created_at,
             updated_at=created_at,
-            execution_policy=OrchestratorExecutionPolicy.SEQUENTIAL_LOCAL_SAFE,
-            plan=default_orchestrator_plan(),
-            warnings=(
-                "Execution policy is sequential_local_safe to avoid overloading local model "
-                "and provider resources.",
+            execution_policy=(
+                OrchestratorExecutionPolicy.DISTRIBUTED_A2A
+                if self._step_dispatcher is not None
+                else OrchestratorExecutionPolicy.SEQUENTIAL_LOCAL_SAFE
             ),
+            plan=default_orchestrator_plan(),
+            warnings=(_execution_warning(self._step_dispatcher is not None),),
             scenario_id=request.scenario_id,
             scenario_version=request.scenario_version,
         )
@@ -144,17 +153,27 @@ class ResearchOrchestrator:
         for handoff in await self._refresh_data(request, candidate, security, cik):
             run = self._append_handoff(run, handoff, progress_observer)
 
-        for handoff in self._run_specialists(request, candidate, security, cik):
+        for handoff in await self._dispatch_specialists(
+            request,
+            run,
+            candidate,
+            security,
+            cik,
+        ):
             run = self._append_handoff(run, handoff, progress_observer)
 
-        synthesis = self._synthesize(run)
+        synthesis = await self._dispatch_synthesis(run)
         run = self._append_handoff(run, synthesis, progress_observer)
         handoffs = run.handoffs
         run = self._save(
             replace(
                 run,
                 status=_final_status(handoffs),
-                synthesis_summary=str(synthesis.output["summary"]),
+                synthesis_summary=(
+                    str(synthesis.output["summary"])
+                    if synthesis.output.get("summary") is not None
+                    else _synthesis_summary(handoffs)
+                ),
                 limitations=tuple(
                     dict.fromkeys(
                         limitation for handoff in handoffs for limitation in handoff.limitations
@@ -165,6 +184,80 @@ class ResearchOrchestrator:
             progress_observer,
         )
         return run
+
+    async def _dispatch_specialists(
+        self,
+        request: OrchestratorResearchInput,
+        run: OrchestratedResearchRun,
+        candidate: CompanySearchCandidate,
+        security: ResolvedSecurity,
+        cik: str | None,
+    ) -> tuple[AgentHandoff, ...]:
+        if self._step_dispatcher is None:
+            return self._run_specialists(request, candidate, security, cik)
+        requests = (
+            DelegationRequest(
+                role=AgentRole.FINANCIAL_REPORT,
+                run_id=run.id,
+                step_id="financial_report_analysis",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
+                payload={
+                    "company_id": candidate.company.id,
+                    "legal_name": candidate.company.legal_name,
+                    "cik": cik or "",
+                },
+            ),
+            DelegationRequest(
+                role=AgentRole.STOCK,
+                run_id=run.id,
+                step_id="stock_price_analysis",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
+                payload={
+                    "security_id": security.id,
+                    "ticker": security.ticker,
+                    "exchange_mic": security.exchange_mic,
+                    "exchange_name": security.exchange_name,
+                    "currency": security.currency,
+                    "benchmark_symbol": request.benchmark_symbol,
+                },
+            ),
+            DelegationRequest(
+                role=AgentRole.CONTEXT,
+                run_id=run.id,
+                step_id="context_analysis",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
+                payload={
+                    "query": request.query,
+                    "company_symbols": [security.ticker],
+                    "source_items": [item.to_dict() for item in request.context_source_items],
+                },
+            ),
+        )
+        results = await asyncio.gather(
+            *(self._step_dispatcher.dispatch(delegation, run=run) for delegation in requests)
+        )
+        return tuple(result.handoff for result in results)
+
+    async def _dispatch_synthesis(self, run: OrchestratedResearchRun) -> AgentHandoff:
+        if self._step_dispatcher is None:
+            return self._synthesize(run)
+        result = await self._step_dispatcher.dispatch(
+            DelegationRequest(
+                role=AgentRole.SYNTHESIS,
+                run_id=run.id,
+                step_id="synthesis",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.SYNTHESIS,
+                payload={
+                    "handoff_ids": [handoff.id for handoff in run.handoffs],
+                },
+            ),
+            run=run,
+        )
+        return result.handoff
 
     async def _resolve_company(
         self,
@@ -923,6 +1016,18 @@ def _synthesis_summary(handoffs: tuple[AgentHandoff, ...]) -> str:
         "Bounded research workflow completed from stored specialist outputs. "
         f"Specialist statuses: {status_text}. Review each handoff, evidence, warnings, "
         "and limitations before using the result."
+    )
+
+
+def _execution_warning(distributed: bool) -> str:
+    if distributed:
+        return (
+            "Execution policy is distributed_a2a; specialist outages become inspectable "
+            "partial handoffs without hidden local fallback."
+        )
+    return (
+        "Execution policy is sequential_local_safe to avoid overloading local model "
+        "and provider resources."
     )
 
 

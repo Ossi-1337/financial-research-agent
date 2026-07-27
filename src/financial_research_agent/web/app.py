@@ -1598,7 +1598,7 @@ def _settings_payload(
         "settings": {
             "provider": settings.provider.to_dict(),
             "chat": settings.chat.to_dict(),
-            "data_sources": settings.data_sources.to_dict(),
+            "data_sources": _public_data_source_settings(settings),
             "retrieval": settings.retrieval.to_dict(),
             "background": settings.background.to_dict(),
             "performance": settings.performance.to_dict(),
@@ -1700,6 +1700,13 @@ def _provider_metadata_payload(
     }
 
 
+def _public_data_source_settings(settings: Settings) -> dict[str, Any]:
+    payload = settings.data_sources.to_dict()
+    payload.pop("sec_user_agent", None)
+    payload["sec_user_agent_configured"] = bool(settings.data_sources.sec_user_agent)
+    return payload
+
+
 async def _provider_health_payload(provider: str, settings: Settings) -> dict[str, Any]:
     normalized = provider.strip()
     if normalized == "offline-test":
@@ -1710,6 +1717,7 @@ async def _provider_health_payload(provider: str, settings: Settings) -> dict[st
             "reachable": True,
             "authenticated": True,
             "status": "ok",
+            "available_models": [metadata.model],
             "capabilities": [capability.value for capability in metadata.capabilities],
             "limitations": ["Deterministic offline provider; no network or real model calls."],
         }

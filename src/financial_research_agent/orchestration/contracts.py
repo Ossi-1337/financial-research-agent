@@ -16,6 +16,7 @@ NO_ORCHESTRATOR_RECOMMENDATION_NOTICE = (
 
 class OrchestratorExecutionPolicy(StrEnum):
     SEQUENTIAL_LOCAL_SAFE = "sequential_local_safe"
+    DISTRIBUTED_A2A = "distributed_a2a"
 
 
 class OrchestratorRunStatus(StrEnum):
@@ -48,6 +49,47 @@ class HandoffConfidence(StrEnum):
     MEDIUM = "medium"
     LOW = "low"
     UNKNOWN = "unknown"
+
+
+class AgentExecutionMode(StrEnum):
+    LOCAL = "local"
+    A2A = "a2a"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentExecutionMetadata:
+    mode: AgentExecutionMode
+    agent_role: str
+    correlation_id: str
+    delegation_id: str | None = None
+    remote_task_id: str | None = None
+    service_id: str | None = None
+    attempt_count: int = 1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "mode", AgentExecutionMode(self.mode))
+        object.__setattr__(self, "agent_role", _require_text("agent_role", self.agent_role))
+        object.__setattr__(
+            self,
+            "correlation_id",
+            _require_text("correlation_id", self.correlation_id),
+        )
+        object.__setattr__(self, "delegation_id", _optional_text(self.delegation_id))
+        object.__setattr__(self, "remote_task_id", _optional_text(self.remote_task_id))
+        object.__setattr__(self, "service_id", _optional_text(self.service_id))
+        if self.attempt_count <= 0:
+            raise ValueError("attempt_count must be positive")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mode": self.mode.value,
+            "agent_role": self.agent_role,
+            "correlation_id": self.correlation_id,
+            "delegation_id": self.delegation_id,
+            "remote_task_id": self.remote_task_id,
+            "service_id": self.service_id,
+            "attempt_count": self.attempt_count,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +179,7 @@ class AgentHandoff:
     confidence: HandoffConfidence = HandoffConfidence.UNKNOWN
     error_code: str | None = None
     error_message: str | None = None
+    execution: AgentExecutionMetadata | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _require_text("id", self.id))
@@ -159,6 +202,11 @@ class AgentHandoff:
         object.__setattr__(self, "confidence", HandoffConfidence(self.confidence))
         object.__setattr__(self, "error_code", _optional_text(self.error_code))
         object.__setattr__(self, "error_message", _optional_text(self.error_message))
+        if self.execution is not None and not isinstance(
+            self.execution,
+            AgentExecutionMetadata,
+        ):
+            raise ValueError("execution must be AgentExecutionMetadata")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -176,6 +224,7 @@ class AgentHandoff:
             "confidence": self.confidence.value,
             "error_code": self.error_code,
             "error_message": self.error_message,
+            "execution": self.execution.to_dict() if self.execution is not None else None,
         }
 
 

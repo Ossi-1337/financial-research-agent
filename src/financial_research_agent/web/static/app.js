@@ -14,6 +14,7 @@ const state = {
   evidenceByRunId: {},
   runsByRunId: {},
   settings: null,
+  modelOptionsRequestId: 0,
 };
 
 const form = document.querySelector("#chat-form");
@@ -904,6 +905,7 @@ async function loadSettingsPanel() {
   state.settings = payload;
   populateSettingsForm(payload);
   renderSettingsSummary(payload);
+  await refreshProviderModels();
 }
 
 function populateSettingsForm(payload) {
@@ -912,7 +914,7 @@ function populateSettingsForm(payload) {
   const dataSources = payload.settings.data_sources;
   const background = payload.settings.background;
   setField("llm_provider", provider.llm_provider);
-  setField("llm_model", provider.llm_model);
+  setModelOptions([provider.llm_model], provider.llm_model);
   setField("llm_base_url", provider.llm_base_url || "");
   setField("llm_local_runtime", provider.llm_local_runtime);
   setField("llm_timeout_seconds", provider.llm_timeout_seconds);
@@ -929,6 +931,82 @@ function setField(name, value) {
   const field = settingsForm.elements[name];
   if (field) {
     field.value = value ?? "";
+  }
+}
+
+function setModelOptions(models, selectedModel, placeholder = "No models available") {
+  const field = settingsForm.elements.llm_model;
+  const normalized = [...new Set(models.filter((model) => typeof model === "string" && model))];
+  field.replaceChildren();
+  if (normalized.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = placeholder;
+    field.append(option);
+    field.disabled = true;
+    field.removeAttribute("title");
+    return;
+  }
+  for (const model of normalized) {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    field.append(option);
+  }
+  field.disabled = false;
+  field.value = normalized.includes(selectedModel) ? selectedModel : normalized[0];
+  field.title = field.value;
+}
+
+function compatibleConfiguredModel(provider) {
+  const configured = state.settings?.settings.provider;
+  if (!configured || configured.llm_provider !== provider) {
+    return provider === "offline-test" ? "offline-test" : null;
+  }
+  if (provider !== "offline-test" && configured.llm_model === "offline-test") {
+    return null;
+  }
+  return configured.llm_model;
+}
+
+async function refreshProviderModels() {
+  const provider = settingsForm.elements.llm_provider.value;
+  const configuredModel = compatibleConfiguredModel(provider);
+  const requestId = ++state.modelOptionsRequestId;
+  if (provider === "offline-test") {
+    setModelOptions(["offline-test"], "offline-test");
+    settingsProviderStatus.textContent = "offline-test health: ok / deterministic test responses";
+    return;
+  }
+
+  setModelOptions([], null, "Loading models...");
+  try {
+    const payload = await requestJson(
+      `/api/settings/provider-health?provider=${encodeURIComponent(provider)}`
+    );
+    if (requestId !== state.modelOptionsRequestId) {
+      return;
+    }
+    const health = payload.provider_health;
+    const models = [...(health.available_models || [])];
+    if (configuredModel && !models.includes(configuredModel)) {
+      models.push(configuredModel);
+    }
+    setModelOptions(models, configuredModel);
+    settingsProviderStatus.textContent = `${health.provider} health: ${health.status}${
+      health.error ? ` / ${health.error}` : ""
+    }`;
+  } catch (error) {
+    if (requestId !== state.modelOptionsRequestId) {
+      return;
+    }
+    setModelOptions(
+      configuredModel ? [configuredModel] : [],
+      configuredModel,
+      "Provider unavailable"
+    );
+    settingsProviderStatus.textContent =
+      error instanceof Error ? error.message : "Provider health check failed.";
   }
 }
 
@@ -1512,6 +1590,7 @@ settingsForm.addEventListener("submit", async (event) => {
     state.settings = payload;
     populateSettingsForm(payload);
     renderSettingsSummary(payload);
+    await refreshProviderModels();
     await loadStatus();
   } catch (error) {
     showSettingsError(error instanceof Error ? error.message : "Could not save settings.");
@@ -1521,14 +1600,7 @@ settingsForm.addEventListener("submit", async (event) => {
 settingsHealthButton.addEventListener("click", async () => {
   clearSettingsError();
   try {
-    const provider = settingsForm.elements.llm_provider.value;
-    const payload = await requestJson(
-      `/api/settings/provider-health?provider=${encodeURIComponent(provider)}`
-    );
-    const health = payload.provider_health;
-    settingsProviderStatus.textContent = `${health.provider} health: ${health.status}${
-      health.error ? ` / ${health.error}` : ""
-    }`;
+    await refreshProviderModels();
   } catch (error) {
     showSettingsError(error instanceof Error ? error.message : "Provider health check failed.");
   }
@@ -1551,10 +1623,22 @@ settingsResetButton.addEventListener("click", async () => {
     state.settings = payload;
     populateSettingsForm(payload);
     renderSettingsSummary(payload);
+    await refreshProviderModels();
     await loadStatus();
   } catch (error) {
     showSettingsError(error instanceof Error ? error.message : "Could not reset settings.");
   }
+});
+
+settingsForm.elements.llm_provider.addEventListener("change", () => {
+  clearSettingsError();
+  refreshProviderModels().catch((error) => {
+    showSettingsError(error instanceof Error ? error.message : "Could not load provider models.");
+  });
+});
+
+settingsForm.elements.llm_model.addEventListener("change", (event) => {
+  event.currentTarget.title = event.currentTarget.value;
 });
 
 form.addEventListener("submit", async (event) => {

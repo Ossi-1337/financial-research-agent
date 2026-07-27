@@ -86,3 +86,13 @@ def test_runtime_settings_store_clear_removes_overrides(tmp_path: Path) -> None:
 
     assert cleared.to_dict() == {}
     assert RuntimeSettingsStore.from_settings(base).get().to_dict() == {}
+
+
+def test_runtime_settings_reject_offline_test_model_for_real_provider() -> None:
+    base = Settings.from_env({})
+
+    with pytest.raises(ValueError, match="Select a model provided by local-openai"):
+        RuntimeSettingsOverrides(
+            llm_provider="local-openai",
+            llm_model="offline-test",
+        ).apply_to(base)

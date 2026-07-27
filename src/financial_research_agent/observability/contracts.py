@@ -404,7 +404,18 @@ def _event_from_handoff(
         started_at=handoff.started_at,
         completed_at=handoff.completed_at,
         duration_ms=_duration_ms(handoff.started_at, handoff.completed_at),
-        safe_input=_mapping_or_empty(policy.redact(handoff.input_summary)),
+        safe_input=_mapping_or_empty(
+            policy.redact(
+                {
+                    **dict(handoff.input_summary),
+                    **(
+                        {"execution": handoff.execution.to_dict()}
+                        if handoff.execution is not None
+                        else {}
+                    ),
+                }
+            )
+        ),
         safe_output=_mapping_or_empty(policy.redact(handoff.output)),
         evidence_ids=tuple(str(policy.redact(item)) for item in handoff.evidence_ids),
         warnings=tuple(str(policy.redact(item)) for item in handoff.warnings),

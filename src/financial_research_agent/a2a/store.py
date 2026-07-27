@@ -28,6 +28,12 @@ ACTIVE_TASK_STATES = (
     TaskState.TASK_STATE_SUBMITTED,
     TaskState.TASK_STATE_WORKING,
 )
+TERMINAL_TASK_STATES = (
+    TaskState.TASK_STATE_COMPLETED,
+    TaskState.TASK_STATE_CANCELED,
+    TaskState.TASK_STATE_FAILED,
+    TaskState.TASK_STATE_REJECTED,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,27 +46,28 @@ class A2ATaskEventRecord:
 
 
 class SQLiteA2ATaskStore(TaskStore):
-    def __init__(self, database: SQLiteDatabase) -> None:
+    def __init__(self, database: SQLiteDatabase, *, owner: str = "company-research") -> None:
         self.database = database
+        self.owner = _required_text("owner", owner)
 
     async def save(self, task: Task, context: ServerCallContext) -> None:
-        await asyncio.to_thread(self._save, task, _owner(context))
+        await asyncio.to_thread(self._save, task, self.owner)
 
     async def get(self, task_id: str, context: ServerCallContext) -> Task | None:
-        return await asyncio.to_thread(self._get, task_id, _owner(context))
+        return await asyncio.to_thread(self._get, task_id, self.owner)
 
     async def list(
         self,
         params: ListTasksRequest,
         context: ServerCallContext,
     ) -> ListTasksResponse:
-        return await asyncio.to_thread(self._list, params, _owner(context))
+        return await asyncio.to_thread(self._list, params, self.owner)
 
     async def delete(self, task_id: str, context: ServerCallContext) -> None:
-        await asyncio.to_thread(self._delete, task_id, _owner(context))
+        await asyncio.to_thread(self._delete, task_id, self.owner)
 
     async def find_by_message_id(self, message_id: str) -> Task | None:
-        return await asyncio.to_thread(self._find_by_message_id, message_id)
+        return await asyncio.to_thread(self._find_by_message_id, message_id, self.owner)
 
     async def exists(self, task_id: str) -> bool:
         return await asyncio.to_thread(self._exists, task_id)
@@ -94,7 +101,7 @@ class SQLiteA2ATaskStore(TaskStore):
         return await asyncio.to_thread(self._events, task_id)
 
     async def reconcile_restarted_tasks(self) -> int:
-        return await asyncio.to_thread(self._reconcile_restarted_tasks)
+        return await asyncio.to_thread(self._reconcile_restarted_tasks, self.owner)
 
     def _save(self, task: Task, owner: str) -> None:
         if not task.id or not task.context_id:
@@ -103,12 +110,15 @@ class SQLiteA2ATaskStore(TaskStore):
         message_id = _initial_message_id(task)
         with self.database.transaction() as connection:
             existing = connection.execute(
-                "SELECT initial_message_id, created_at FROM a2a_tasks WHERE id = ?",
+                "SELECT initial_message_id, created_at, state FROM a2a_tasks WHERE id = ?",
                 (task.id,),
             ).fetchone()
             if existing is not None:
                 message_id = str(existing["initial_message_id"])
                 created_at = str(existing["created_at"])
+                existing_state = int(existing["state"])
+                if existing_state in TERMINAL_TASK_STATES and task.status.state != existing_state:
+                    return
             else:
                 if message_id is None:
                     raise ValueError("A2A task must preserve its initial message id")
@@ -197,11 +207,11 @@ class SQLiteA2ATaskStore(TaskStore):
                 (_required_text("task_id", task_id), owner),
             )
 
-    def _find_by_message_id(self, message_id: str) -> Task | None:
+    def _find_by_message_id(self, message_id: str, owner: str) -> Task | None:
         with self.database.read() as connection:
             row = connection.execute(
-                "SELECT payload FROM a2a_tasks WHERE initial_message_id = ?",
-                (_required_text("message_id", message_id),),
+                "SELECT payload FROM a2a_tasks WHERE initial_message_id = ? AND owner = ?",
+                (_required_text("message_id", message_id), owner),
             ).fetchone()
         return _task_from_payload(row["payload"]) if row is not None else None
 
@@ -315,12 +325,12 @@ class SQLiteA2ATaskStore(TaskStore):
             for row in rows
         )
 
-    def _reconcile_restarted_tasks(self) -> int:
+    def _reconcile_restarted_tasks(self, owner: str) -> int:
         with self.database.transaction() as connection:
             rows = tuple(
                 connection.execute(
-                    "SELECT id, payload FROM a2a_tasks WHERE state IN (?, ?)",
-                    ACTIVE_TASK_STATES,
+                    "SELECT id, payload FROM a2a_tasks WHERE owner = ? AND state IN (?, ?)",
+                    (owner, *ACTIVE_TASK_STATES),
                 )
             )
             for row in rows:
@@ -373,10 +383,6 @@ class SQLiteA2ATaskStore(TaskStore):
                     ),
                 )
         return len(rows)
-
-
-def _owner(_context: ServerCallContext) -> str:
-    return "local"
 
 
 def _initial_message_id(task: Task) -> str | None:

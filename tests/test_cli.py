@@ -120,6 +120,22 @@ def test_a2a_serve_uses_separate_default_port(monkeypatch, tmp_path: Path) -> No
     assert calls["port"] == 8001
 
 
+def test_a2a_serve_selects_specialist_role_and_port(monkeypatch, tmp_path: Path) -> None:
+    calls = {}
+
+    def fake_run(app, *, host, port):
+        calls.update(app=app, host=host, port=port)
+
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+    monkeypatch.setenv("FRA_A2A_ENABLED", "true")
+    monkeypatch.setattr("financial_research_agent.cli.uvicorn.run", fake_run)
+
+    assert main(["a2a-serve", "--role", "stock"]) == 0
+    assert calls["app"].title == "Financial Research Agent A2A"
+    assert calls["host"] == "127.0.0.1"
+    assert calls["port"] == 8003
+
+
 def test_a2a_serve_rejects_native_remote_bind_in_local_only_mode(
     monkeypatch,
     tmp_path: Path,
@@ -167,7 +183,7 @@ def test_sqlite_storage_check_backup_and_cleanup_commands(
     assert main(["storage-check", "--full", "--pretty"]) == 0
     check = json.loads(capsys.readouterr().out)
     assert check["healthy"] is True
-    assert check["schema_version"] == 2
+    assert check["schema_version"] == 3
 
     assert main(["storage-backup", "--pretty"]) == 0
     backup = json.loads(capsys.readouterr().out)

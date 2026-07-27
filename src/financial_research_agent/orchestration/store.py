@@ -7,6 +7,8 @@ from threading import Lock
 from typing import Any, Self
 
 from financial_research_agent.orchestration.contracts import (
+    AgentExecutionMetadata,
+    AgentExecutionMode,
     AgentHandoff,
     HandoffConfidence,
     OrchestratedResearchRun,
@@ -141,6 +143,27 @@ def _handoff_from_payload(payload: Any) -> AgentHandoff:
         confidence=HandoffConfidence(str(payload.get("confidence", HandoffConfidence.UNKNOWN))),
         error_code=_optional_payload_text(payload, "error_code"),
         error_message=_optional_payload_text(payload, "error_message"),
+        execution=_execution_from_payload(payload.get("execution")),
+    )
+
+
+def handoff_from_dict(payload: dict[str, object]) -> AgentHandoff:
+    return _handoff_from_payload(payload)
+
+
+def _execution_from_payload(value: Any) -> AgentExecutionMetadata | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("execution metadata must be an object")
+    return AgentExecutionMetadata(
+        mode=AgentExecutionMode(str(value["mode"])),
+        agent_role=str(value["agent_role"]),
+        correlation_id=str(value["correlation_id"]),
+        delegation_id=_optional_payload_text(value, "delegation_id"),
+        remote_task_id=_optional_payload_text(value, "remote_task_id"),
+        service_id=_optional_payload_text(value, "service_id"),
+        attempt_count=int(value.get("attempt_count", 1)),
     )
 
 
