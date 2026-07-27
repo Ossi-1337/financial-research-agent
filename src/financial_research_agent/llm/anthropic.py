@@ -115,6 +115,8 @@ class AnthropicProvider:
 
         async for data in self._stream_events("POST", "messages", payload, selected_model):
             event_type = data.get("type")
+            if event_type == "error":
+                raise _stream_provider_error(data, selected_model)
             if event_type == "message_start":
                 message = data.get("message")
                 if isinstance(message, Mapping):
@@ -500,6 +502,38 @@ def _finish_reason(value: object) -> FinishReason:
         "tool_use": FinishReason.TOOL_CALLS,
         "refusal": FinishReason.CONTENT_FILTER,
     }.get(str(value), FinishReason.STOP)
+
+
+def _stream_provider_error(data: Mapping[str, Any], model: str) -> ProviderError:
+    error = data.get("error")
+    error_type = str(error.get("type", "")) if isinstance(error, Mapping) else ""
+    message = (
+        str(error.get("message", "Anthropic API stream failed."))
+        if isinstance(error, Mapping)
+        else "Anthropic API stream failed."
+    )
+    if error_type == "rate_limit_error":
+        code = ProviderErrorCode.RATE_LIMITED
+        retryable = True
+    elif error_type in {"overloaded_error", "api_error"}:
+        code = ProviderErrorCode.PROVIDER_UNAVAILABLE
+        retryable = True
+    elif error_type == "authentication_error":
+        code = ProviderErrorCode.AUTHENTICATION_FAILED
+        retryable = False
+    elif error_type in {"invalid_request_error", "request_too_large"}:
+        code = ProviderErrorCode.INVALID_REQUEST
+        retryable = False
+    else:
+        code = ProviderErrorCode.PROVIDER_UNAVAILABLE
+        retryable = True
+    return ProviderError(
+        code=code,
+        message=f"Anthropic API stream error: {message}",
+        provider="anthropic",
+        model=model,
+        retryable=retryable,
+    )
 
 
 def _stream_tool_call(index: int, block: Mapping[str, Any]) -> ToolCall:

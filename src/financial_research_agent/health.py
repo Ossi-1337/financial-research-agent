@@ -55,6 +55,7 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
             ),
         },
         "interoperability": settings.interoperability.to_dict(),
+        "a2a": settings.a2a.to_dict(),
         "background": settings.background.to_dict(),
         "performance": {
             **settings.performance.to_dict(),

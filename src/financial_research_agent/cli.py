@@ -20,7 +20,7 @@ from financial_research_agent.persistence import (
     existing_legacy_paths,
 )
 from financial_research_agent.retrieval import LocalVectorIndex
-from financial_research_agent.security import validate_bind_host
+from financial_research_agent.security import is_loopback_host, validate_bind_host
 from financial_research_agent.settings import Settings
 
 
@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "health",
             "serve",
+            "a2a-serve",
             "storage-status",
             "storage-migrate",
             "storage-check",
@@ -75,8 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--port",
         type=_port_value,
-        default=8000,
-        help="Port for the local web UI when using the serve command.",
+        default=None,
+        help="Port for serve commands. Defaults to 8000 for UI and 8001 for A2A.",
     )
     parser.add_argument(
         "--yes",
@@ -205,7 +206,50 @@ def main(argv: Sequence[str] | None = None) -> int:
         except PersistenceError as exc:
             _print_json(exc.to_dict(), pretty=args.pretty)
             return 1
-        uvicorn.run(app, host=host, port=args.port)
+        uvicorn.run(app, host=host, port=args.port or 8000)
+        return 0
+
+    if args.command == "a2a-serve":
+        settings = Settings.from_env()
+        if (
+            not is_loopback_host(args.host)
+            and settings.a2a.local_only
+            and not Path("/.dockerenv").exists()
+        ):
+            parser.error("Remote A2A bind requires FRA_A2A_LOCAL_ONLY=false and FRA_A2A_API_KEY.")
+        try:
+            host = validate_bind_host(
+                args.host,
+                allow_remote_bind=settings.security.allow_remote_bind,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        try:
+            from financial_research_agent.a2a import create_a2a_app
+
+            app = create_a2a_app(settings=settings)
+        except ModuleNotFoundError as exc:
+            if exc.name and (
+                exc.name == "a2a" or exc.name.startswith(("a2a.", "grpc", "google.protobuf"))
+            ):
+                _print_json(
+                    {
+                        "error": "a2a_extra_required",
+                        "message": "Install A2A support with: pip install -e '.[a2a]'",
+                    },
+                    pretty=args.pretty,
+                )
+                return 1
+            raise
+        except (PersistenceError, ValueError) as exc:
+            payload = (
+                exc.to_dict()
+                if isinstance(exc, PersistenceError)
+                else {"error": "invalid_a2a_configuration", "message": str(exc)}
+            )
+            _print_json(payload, pretty=args.pretty)
+            return 1
+        uvicorn.run(app, host=host, port=args.port or 8001)
         return 0
 
     if args.command == "eval":

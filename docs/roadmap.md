@@ -14,9 +14,10 @@ constraints.
 
 ## Agent Interoperability
 
-- Turn the current A2A discovery spike into a production-capable local agent server.
-- Define durable task state, authentication, authorization, cancellation, and artifact
-  exchange before distributing specialist agents.
+- Evolve the local A2A task server from one generic research skill into a tested multi-process
+  specialist topology without changing deterministic synthesis ownership.
+- Define remote agent trust, delegation budgets, capability negotiation, and failure isolation
+  before distributing specialist agents.
 - Use MCP for bounded tools and resources where it complements A2A rather than replacing agent
   coordination.
 - Keep skills for developer workflows and domain guidance that do not require runtime protocol

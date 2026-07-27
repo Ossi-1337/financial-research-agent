@@ -56,6 +56,25 @@ python scripts/dev.py docker-up --runtime cuda --detach
 
 Use one profile at a time. First startup may download the selected GGUF model.
 
+Optional local A2A 1.0 task server:
+
+```powershell
+python -m pip install -e ".[a2a]"
+$env:FRA_A2A_ENABLED = "true"
+python -m financial_research_agent a2a-serve --host 127.0.0.1 --port 8001
+```
+
+Or start its separate Compose profile:
+
+```powershell
+docker compose --profile a2a up --build
+```
+
+Discovery is available at
+[`http://127.0.0.1:8001/.well-known/agent-card.json`](http://127.0.0.1:8001/.well-known/agent-card.json).
+One generic `company_research` skill accepts bounded text requests for any company. It does not
+create company-specific endpoints.
+
 ## Demo
 
 The versioned `novo-nordisk` scenario exercises one real-data path through entity resolution,
@@ -92,6 +111,7 @@ flowchart LR
     SY --> EV["Evidence + citations"]
     SY --> EX["Markdown / HTML / PDF exports"]
     UI --> LLM["Provider-neutral LLM boundary"]
+    A2A["Separate A2A 1.0 task server"] --> WF
     LLM --> OFF["offline-test"]
     LLM --> LOC["llama.cpp / local OpenAI-compatible"]
     LLM --> OAI["Hosted OpenAI"]
@@ -126,8 +146,8 @@ Implemented:
 - Local vector retrieval and explicit cited answers over stored filing chunks.
 - Immutable Markdown, self-contained HTML, and PDF report snapshots.
 - SQLite migrations, integrity checks, backup, restore, cleanup, and guarded legacy JSON import.
-- Offline evaluation harness, Docker packaging, local llama.cpp profiles, and an optional
-  read-only A2A/MCP interoperability spike.
+- Offline evaluation harness, Docker packaging, local llama.cpp profiles, a separate optional
+  A2A 1.0 task server, and a bounded read-only MCP spike.
 - Swappable OpenAI, Anthropic, Gemini, and LiteLLM provider adapters with explicit capability
   and credential status.
 - One reproducible Novo Nordisk integration scenario. This demonstrates system integration, not
@@ -137,8 +157,8 @@ Intentional limitations:
 
 - No buy/sell/hold recommendations, trading, broker integration, price targets, or alerts.
 - No automatic news/macro ingestion, PDF extraction, or automatic RAG on every chat message.
-- No production A2A server, hosted telemetry, automatic provider fallback, or public benchmark
-  claims yet.
+- No remote A2A deployment claim, hosted telemetry, automatic provider fallback, or public
+  benchmark claims.
 - Market data may be delayed or provider-limited. SEC coverage is limited to SEC filers.
 - Local LLM quality depends on the selected model, runtime, prompt budget, and hardware.
 

@@ -59,8 +59,12 @@ class RedactionPolicy:
             value
             for value in (
                 settings.provider.openai_api_key,
+                settings.provider.anthropic_api_key,
+                settings.provider.gemini_api_key,
+                settings.provider.litellm_api_key,
                 settings.data_sources.alpha_vantage_api_key,
                 settings.interoperability.api_key,
+                settings.a2a.api_key,
             )
             if value
         )

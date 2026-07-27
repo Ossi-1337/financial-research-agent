@@ -10,6 +10,10 @@ COPY src ./src
 
 RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
+FROM builder AS a2a-builder
+
+RUN python -m pip wheel --no-cache-dir --wheel-dir /a2a-wheels ".[a2a]"
+
 
 FROM python:3.14-slim AS runtime
 
@@ -39,3 +43,23 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=12 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=5).read()"
 
 CMD ["financial-research-agent", "serve", "--host", "0.0.0.0", "--port", "8000"]
+
+
+FROM runtime AS a2a-runtime
+
+USER root
+
+COPY --from=a2a-builder /a2a-wheels /a2a-wheels
+
+RUN python -m pip install --no-cache-dir --no-index --find-links=/a2a-wheels \
+        "a2a-sdk[fastapi]>=1.1.2,<1.2" \
+    && rm -rf /a2a-wheels
+
+USER fra
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=12 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/.well-known/agent-card.json', timeout=5).read()"
+
+CMD ["financial-research-agent", "a2a-serve", "--host", "0.0.0.0", "--port", "8001"]

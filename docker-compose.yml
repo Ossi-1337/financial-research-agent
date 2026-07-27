@@ -42,6 +42,38 @@ services:
       FRA_ALLOW_REMOTE_BIND: "true"
     volumes:
       - fra-data:/data
+
+  a2a:
+    image: financial-research-agent-a2a:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: a2a-runtime
+    profiles: [a2a]
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${FRA_A2A_PORT:-8001}:8001"
+    environment:
+      FRA_ENV: ${FRA_ENV:-local}
+      FRA_HOME: /data
+      FRA_STORAGE_PROVIDER: sqlite
+      FRA_A2A_ENABLED: "true"
+      FRA_A2A_LOCAL_ONLY: "true"
+      FRA_A2A_PUBLIC_BASE_URL: ${FRA_A2A_PUBLIC_BASE_URL:-http://127.0.0.1:8001}
+      FRA_A2A_MAX_CONCURRENT_TASKS: ${FRA_A2A_MAX_CONCURRENT_TASKS:-1}
+      FRA_A2A_MAX_QUEUED_TASKS: ${FRA_A2A_MAX_QUEUED_TASKS:-8}
+      FRA_A2A_MAX_INPUT_CHARS: ${FRA_A2A_MAX_INPUT_CHARS:-4000}
+      FRA_COMPANY_LOOKUP_PROVIDER: ${FRA_COMPANY_LOOKUP_PROVIDER:-sec}
+      FRA_MARKET_DATA_PROVIDER: ${FRA_MARKET_DATA_PROVIDER:-alpha-vantage}
+      FRA_FINANCIAL_STATEMENT_PROVIDER: ${FRA_FINANCIAL_STATEMENT_PROVIDER:-sec-companyfacts}
+      FRA_FILING_PROVIDER: ${FRA_FILING_PROVIDER:-sec-edgar}
+      FRA_ALPHA_VANTAGE_API_KEY: ${FRA_ALPHA_VANTAGE_API_KEY:-}
+      FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
+      FRA_ALLOW_REMOTE_BIND: "true"
+    volumes:
+      - fra-data:/data
   llama-cpp-cpu:
     image: ${FRA_LLAMA_CPP_CPU_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     profiles: [cpu]

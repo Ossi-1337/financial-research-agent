@@ -317,12 +317,11 @@ def test_interop_endpoints_are_disabled_by_default() -> None:
     mcp = client.post("/api/interop/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 
     assert card.status_code == 404
-    assert card.json()["detail"]["error"] == "interoperability_disabled"
     assert mcp.status_code == 404
     assert mcp.json()["detail"]["error"] == "interoperability_disabled"
 
 
-def test_local_interop_agent_card_and_mcp_status_tool_are_read_only() -> None:
+def test_local_interop_exposes_only_mcp_status_tool() -> None:
     settings = Settings.from_env({"FRA_INTEROP_ENABLED": "true"})
     client = _client(settings=settings)
 
@@ -345,19 +344,14 @@ def test_local_interop_agent_card_and_mcp_status_tool_are_read_only() -> None:
         },
     )
 
-    card = card_response.json()
     tool_text = call_response.json()["result"]["content"][0]["text"]
     tool_payload = json.loads(tool_text)
 
-    assert card_response.status_code == 200
-    assert card["name"] == "financial-research-agent"
-    assert card["skills"][0]["id"] == "read_sanitized_status"
-    assert card["capabilities"]["streaming"] is False
+    assert card_response.status_code == 404
     assert initialize_response.json()["result"]["capabilities"]["tools"]["listChanged"] is False
     assert list_response.json()["result"]["tools"][0]["name"] == "financial_research_agent.status"
     assert tool_payload["app"] == "financial-research-agent"
     assert tool_payload["capabilities"]["recommendations"] == "disabled"
-    assert "secret-key" not in json.dumps(card_response.json()).casefold()
     assert "secret" not in tool_text.casefold()
 
 
@@ -371,15 +365,19 @@ def test_interop_remote_mode_requires_api_key_and_accepts_bearer_or_header() -> 
     )
     client = _client(settings=settings)
 
-    denied = client.get("/.well-known/agent.json")
+    denied = client.post(
+        "/api/interop/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
     header_allowed = client.post(
         "/api/interop/mcp",
         headers={"X-FRA-Interop-Key": "secret-key"},
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
     )
-    bearer_allowed = client.get(
-        "/.well-known/agent.json",
+    bearer_allowed = client.post(
+        "/api/interop/mcp",
         headers={"Authorization": "Bearer secret-key"},
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
     )
 
     assert denied.status_code == 401
@@ -451,7 +449,7 @@ def test_storage_integrity_endpoint_is_read_only(tmp_path) -> None:
 
     assert response.status_code == 200
     assert payload["healthy"] is True
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["counts"]["chat_sessions"] == 0
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from financial_research_agent.settings import ProviderTask, Settings
 
 
@@ -36,11 +38,27 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.interoperability.enabled is False
     assert settings.interoperability.local_only is True
     assert settings.interoperability.api_key is None
+    assert settings.a2a.enabled is False
+    assert settings.a2a.local_only is True
+    assert settings.a2a.max_concurrent_tasks == 1
+    assert settings.a2a.max_queued_tasks == 8
+    assert settings.a2a.max_input_chars == 4_000
+    assert settings.a2a.public_base_url == "http://127.0.0.1:8001"
     assert settings.background.max_concurrent_research_runs == 1
     assert settings.performance.prompt_budget_input_tokens == 16_000
     assert settings.performance.prompt_budget_output_tokens == 1_024
     assert settings.performance.embedding_cache_enabled is True
     assert settings.security.allow_remote_bind is False
+
+
+def test_remote_a2a_requires_environment_only_bearer_key() -> None:
+    with pytest.raises(ValueError, match="FRA_A2A_API_KEY"):
+        Settings.from_env(
+            {
+                "FRA_A2A_ENABLED": "true",
+                "FRA_A2A_LOCAL_ONLY": "false",
+            }
+        )
 
 
 def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
@@ -93,6 +111,13 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_INTEROP_ENABLED": "true",
             "FRA_INTEROP_LOCAL_ONLY": "false",
             "FRA_INTEROP_API_KEY": "interop-key",
+            "FRA_A2A_ENABLED": "true",
+            "FRA_A2A_LOCAL_ONLY": "false",
+            "FRA_A2A_API_KEY": "a2a-key",
+            "FRA_A2A_MAX_CONCURRENT_TASKS": "2",
+            "FRA_A2A_MAX_QUEUED_TASKS": "5",
+            "FRA_A2A_MAX_INPUT_CHARS": "2000",
+            "FRA_A2A_PUBLIC_BASE_URL": "https://a2a.example.test",
             "FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS": "2",
             "FRA_PROMPT_BUDGET_INPUT_TOKENS": "12000",
             "FRA_PROMPT_BUDGET_OUTPUT_TOKENS": "800",
@@ -108,6 +133,13 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.provider.llm_model == "qwen3:8b"
     assert settings.provider.llm_base_url == "http://127.0.0.1:11434/v1"
     assert settings.provider.llm_local_runtime == "ollama"
+    assert settings.a2a.enabled is True
+    assert settings.a2a.local_only is False
+    assert settings.a2a.api_key == "a2a-key"
+    assert settings.a2a.max_concurrent_tasks == 2
+    assert settings.a2a.max_queued_tasks == 5
+    assert settings.a2a.max_input_chars == 2_000
+    assert settings.a2a.public_base_url == "https://a2a.example.test"
     assert settings.provider.llm_timeout_seconds == 12.5
     assert settings.provider.embedding_provider == "local-openai"
     assert settings.provider.embedding_model == "nomic-embed-text"

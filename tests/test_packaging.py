@@ -50,5 +50,8 @@ def test_compose_default_is_offline_and_model_services_use_profiles() -> None:
     assert "condition: service_completed_successfully" in compose
     assert "profiles: [cpu]" in compose
     assert "profiles: [cuda]" in compose
+    assert "profiles: [a2a]" in compose
+    assert "target: a2a-runtime" in compose
+    assert 'FRA_A2A_ENABLED: "true"' in compose
     assert "ghcr.io/ggml-org/llama.cpp:server}" in compose
     assert "ghcr.io/ggml-org/llama.cpp:server-cuda}" in compose

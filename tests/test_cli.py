@@ -104,6 +104,35 @@ def test_serve_allows_remote_bind_with_explicit_opt_in(monkeypatch) -> None:
     assert calls["host"] == "0.0.0.0"
 
 
+def test_a2a_serve_uses_separate_default_port(monkeypatch, tmp_path: Path) -> None:
+    calls = {}
+
+    def fake_run(app, *, host, port):
+        calls.update(app=app, host=host, port=port)
+
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+    monkeypatch.setenv("FRA_A2A_ENABLED", "true")
+    monkeypatch.setattr("financial_research_agent.cli.uvicorn.run", fake_run)
+
+    assert main(["a2a-serve"]) == 0
+    assert calls["app"].title == "Financial Research Agent A2A"
+    assert calls["host"] == "127.0.0.1"
+    assert calls["port"] == 8001
+
+
+def test_a2a_serve_rejects_native_remote_bind_in_local_only_mode(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+    monkeypatch.setenv("FRA_A2A_ENABLED", "true")
+    monkeypatch.setenv("FRA_ALLOW_REMOTE_BIND", "true")
+    monkeypatch.setattr("financial_research_agent.cli.Path.exists", lambda _path: False)
+
+    with pytest.raises(SystemExit):
+        main(["a2a-serve", "--host", "0.0.0.0"])
+
+
 def test_storage_status_command_outputs_manifest(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setenv("FRA_HOME", str(tmp_path))
 
@@ -138,7 +167,7 @@ def test_sqlite_storage_check_backup_and_cleanup_commands(
     assert main(["storage-check", "--full", "--pretty"]) == 0
     check = json.loads(capsys.readouterr().out)
     assert check["healthy"] is True
-    assert check["schema_version"] == 1
+    assert check["schema_version"] == 2
 
     assert main(["storage-backup", "--pretty"]) == 0
     backup = json.loads(capsys.readouterr().out)

@@ -91,11 +91,13 @@ class ToolCall:
     id: str
     name: str
     arguments: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _require_text("id", self.id))
         object.__setattr__(self, "name", _require_text("name", self.name))
         object.__setattr__(self, "arguments", _freeze_mapping("arguments", self.arguments))
+        object.__setattr__(self, "metadata", _text_mapping("metadata", self.metadata))
 
 
 @dataclass(frozen=True, slots=True)

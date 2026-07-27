@@ -10,6 +10,8 @@ flowchart TB
     Browser["Browser UI"] --> API["FastAPI web/API layer"]
     CLI["Python CLI"] --> Services["Application services"]
     API --> Services
+    A2AClient["A2A 1.0 client"] --> A2AServer["Separate A2A task server"]
+    A2AServer --> Services
 
     Services --> Orchestrator["Bounded research orchestrator"]
     Services --> Chat["Chat and cited-answer flows"]
@@ -87,6 +89,7 @@ instead of being silently converted into certainty.
 | `persistence` | SQLite schema, migrations, repositories, backup, restore, and import |
 | `observability` | Redacted traces, stored-result replay plans, and debug bundles |
 | `evaluation` | Offline deterministic evaluation contracts and fixtures |
+| `a2a` | Optional A2A 1.0 Agent Card, task execution, SSE, redaction, and SQLite task store |
 
 ## Deterministic And LLM Boundaries
 
@@ -111,7 +114,8 @@ citations, or control scenario completion.
 
 SQLite stores normalized IDs, relations, statuses, timestamps, searchable fields, and
 versioned payloads. This covers companies, securities, sessions, messages, market series,
-statements, filings, citations, research runs, handoffs, jobs, and runtime settings.
+statements, filings, citations, research runs, handoffs, jobs, A2A tasks/events, and runtime
+settings.
 
 Large or append-only artifacts remain files:
 
@@ -132,5 +136,11 @@ External source text is untrusted. It is escaped in exports, framed as evidence 
 never grants tool permissions. Tools are allowlisted by name and permission. There is no shell,
 arbitrary code execution, or unrestricted filesystem tool.
 
-The optional interoperability endpoints are disabled by default and remain a bounded local
-spike, not a production agent server.
+The optional A2A service is a separate process on port `8001`. It exposes one generic
+`company_research` skill over A2A 1.0 HTTP+JSON/REST and SSE, maps requests to the existing
+orchestrator, and persists task events in SQLite. It is disabled and loopback-only by default.
+Remote binding additionally requires an environment-only Bearer key and a trusted TLS reverse
+proxy. Push notifications, gRPC, JSON-RPC, and public deployment are unsupported.
+
+The main web process no longer owns A2A discovery. Its interoperability endpoint remains a
+bounded read-only MCP-style status spike.

@@ -234,6 +234,30 @@ def test_anthropic_rejects_malformed_stream_json() -> None:
     assert exc_info.value.code == ProviderErrorCode.MALFORMED_RESPONSE
 
 
+def test_anthropic_stream_maps_error_event() -> None:
+    body = (
+        "event: error\n"
+        'data: {"type":"error","error":{"type":"overloaded_error",'
+        '"message":"Temporarily overloaded"}}\n\n'
+    )
+
+    async def scenario():
+        async with _provider(lambda _request: httpx.Response(200, content=body)) as provider:
+            return tuple(
+                [
+                    event
+                    async for event in provider.stream_chat(
+                        ChatRequest(messages=(ChatMessage(role="user", content="Stream"),))
+                    )
+                ]
+            )
+
+    with pytest.raises(ProviderError) as exc_info:
+        asyncio.run(scenario())
+    assert exc_info.value.code == ProviderErrorCode.PROVIDER_UNAVAILABLE
+    assert exc_info.value.retryable is True
+
+
 @pytest.mark.parametrize(
     ("status", "expected"),
     [

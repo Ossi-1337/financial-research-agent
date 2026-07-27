@@ -43,6 +43,8 @@ def test_readme_documents_runnable_entrypoints() -> None:
     assert "scenario-run novo-nordisk --pretty" in readme
     assert "/scenario novo-nordisk --with-local-qa" in readme
     assert "python scripts/dev.py check" in readme
+    assert "financial_research_agent a2a-serve" in readme
+    assert "docker compose --profile a2a up --build" in readme
     assert "[LLM providers](docs/providers.md)" in readme
 
 

@@ -98,7 +98,12 @@ class ResearchOrchestrator:
         self._run_store = run_store
         self._now = now or (lambda: datetime.now(UTC))
 
-    async def run(self, request: OrchestratorResearchInput) -> OrchestratedResearchRun:
+    async def run(
+        self,
+        request: OrchestratorResearchInput,
+        *,
+        progress_observer: Callable[[OrchestratedResearchRun], None] | None = None,
+    ) -> OrchestratedResearchRun:
         created_at = _aware_now(self._now())
         run = OrchestratedResearchRun(
             id=request.run_id or f"orchestrator_run_{uuid4().hex}",
@@ -115,13 +120,13 @@ class ResearchOrchestrator:
             scenario_id=request.scenario_id,
             scenario_version=request.scenario_version,
         )
-        run = self._save(run)
+        run = self._save(run, progress_observer)
 
         resolution_handoff, search_result, candidate = await self._resolve_company(request)
-        run = self._append_handoff(run, resolution_handoff)
+        run = self._append_handoff(run, resolution_handoff, progress_observer)
         if candidate is None:
             run = self._finish_without_candidate(run, search_result)
-            return self._save(run)
+            return self._save(run, progress_observer)
 
         company = candidate.company
         security = candidate.securities[0]
@@ -132,17 +137,18 @@ class ResearchOrchestrator:
                 selected_company=company.to_dict(),
                 selected_security=security.to_dict(),
                 updated_at=_aware_now(self._now()),
-            )
+            ),
+            progress_observer,
         )
 
         for handoff in await self._refresh_data(request, candidate, security, cik):
-            run = self._append_handoff(run, handoff)
+            run = self._append_handoff(run, handoff, progress_observer)
 
         for handoff in self._run_specialists(request, candidate, security, cik):
-            run = self._append_handoff(run, handoff)
+            run = self._append_handoff(run, handoff, progress_observer)
 
         synthesis = self._synthesize(run)
-        run = self._append_handoff(run, synthesis)
+        run = self._append_handoff(run, synthesis, progress_observer)
         handoffs = run.handoffs
         run = self._save(
             replace(
@@ -155,7 +161,8 @@ class ResearchOrchestrator:
                     )
                 ),
                 updated_at=_aware_now(self._now()),
-            )
+            ),
+            progress_observer,
         )
         return run
 
@@ -717,13 +724,15 @@ class ResearchOrchestrator:
         self,
         run: OrchestratedResearchRun,
         handoff: AgentHandoff,
+        progress_observer: Callable[[OrchestratedResearchRun], None] | None = None,
     ) -> OrchestratedResearchRun:
         return self._save(
             replace(
                 run,
                 handoffs=(*run.handoffs, handoff),
                 updated_at=_aware_now(self._now()),
-            )
+            ),
+            progress_observer,
         )
 
     def _finish_without_candidate(
@@ -745,10 +754,15 @@ class ResearchOrchestrator:
             updated_at=_aware_now(self._now()),
         )
 
-    def _save(self, run: OrchestratedResearchRun) -> OrchestratedResearchRun:
-        if self._run_store is None:
-            return run
-        return self._run_store.save(run)
+    def _save(
+        self,
+        run: OrchestratedResearchRun,
+        progress_observer: Callable[[OrchestratedResearchRun], None] | None = None,
+    ) -> OrchestratedResearchRun:
+        stored = run if self._run_store is None else self._run_store.save(run)
+        if progress_observer is not None:
+            progress_observer(stored)
+        return stored
 
 
 def _handoff(

@@ -112,6 +112,66 @@ def test_gemini_maps_tool_call_and_tool_result() -> None:
     assert response.finish_reason == FinishReason.TOOL_CALLS
 
 
+def test_gemini_preserves_thought_signature_across_tool_rounds() -> None:
+    signature = "signed-model-thought"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = _request_json(request)
+        assistant_part = payload["contents"][1]["parts"][0]
+        assert assistant_part["thoughtSignature"] == signature
+        return _response(text="done")
+
+    async def scenario():
+        async with _provider(handler) as provider:
+            return await provider.chat(
+                ChatRequest(
+                    messages=(
+                        ChatMessage(role="user", content="Lookup"),
+                        ChatMessage(
+                            role="assistant",
+                            content="",
+                            tool_calls=(
+                                ToolCall(
+                                    id="call_1",
+                                    name="lookup",
+                                    arguments={"query": "NVO"},
+                                    metadata={"gemini_thought_signature": signature},
+                                ),
+                            ),
+                        ),
+                        ChatMessage(
+                            role="tool",
+                            content='{"status":"succeeded"}',
+                            name="lookup",
+                            tool_call_id="call_1",
+                        ),
+                    )
+                )
+            )
+
+    assert asyncio.run(scenario()).message.content == "done"
+
+    parsed = _response(
+        parts=[
+            {
+                "thoughtSignature": signature,
+                "functionCall": {"id": "call_2", "name": "lookup", "args": {}},
+            }
+        ]
+    )
+
+    async def parse_response():
+        async with _provider(lambda _request: parsed) as provider:
+            return await provider.chat(
+                ChatRequest(messages=(ChatMessage(role="user", content="Lookup"),))
+            )
+
+    assert (
+        asyncio.run(parse_response()).tool_calls[0].metadata["gemini_thought_signature"]
+        == signature
+    )
+
+
 def test_gemini_batch_embeddings_preserve_order() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = _request_json(request)

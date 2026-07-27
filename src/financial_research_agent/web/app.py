@@ -44,7 +44,6 @@ from financial_research_agent.interop import (
     InteropAccessDecision,
     InteropAccessPolicy,
     MCPReadOnlyDispatcher,
-    create_agent_card,
     create_sanitized_status_payload,
 )
 from financial_research_agent.llm import (
@@ -476,20 +475,6 @@ def create_app(
     def index() -> FileResponse:
         return FileResponse(static_dir / "index.html")
 
-    @app.get("/.well-known/agent.json")
-    @app.get("/.well-known/agent-card.json")
-    def a2a_agent_card(
-        request: Request,
-        authorization: str | None = Header(default=None),
-        x_fra_interop_key: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        _require_interop_access(request, app_settings, authorization, x_fra_interop_key)
-        return create_agent_card(
-            base_url=str(request.base_url),
-            version=app.version,
-            api_key_required=app_settings.interoperability.api_key is not None,
-        ).to_dict()
-
     @app.post("/api/interop/mcp")
     async def mcp_read_only_endpoint(
         request: Request,
@@ -611,6 +596,7 @@ def create_app(
                 "debug_bundle": "redacted_local_json",
             },
             "interoperability": settings_for_request.interoperability.to_dict(),
+            "a2a": settings_for_request.a2a.to_dict(),
             "security": settings_for_request.security.to_dict(),
             "storage": {
                 "provider": settings_for_request.storage.provider,

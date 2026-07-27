@@ -38,6 +38,12 @@ DEFAULT_RETRIEVAL_TOP_K = 5
 DEFAULT_RETRIEVAL_MIN_SCORE = 0.0
 DEFAULT_INTEROP_ENABLED = False
 DEFAULT_INTEROP_LOCAL_ONLY = True
+DEFAULT_A2A_ENABLED = False
+DEFAULT_A2A_LOCAL_ONLY = True
+DEFAULT_A2A_MAX_CONCURRENT_TASKS = 1
+DEFAULT_A2A_MAX_QUEUED_TASKS = 8
+DEFAULT_A2A_MAX_INPUT_CHARS = 4_000
+DEFAULT_A2A_PUBLIC_BASE_URL = "http://127.0.0.1:8001"
 DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS = 1
 DEFAULT_PROMPT_BUDGET_INPUT_TOKENS = 16_000
 DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS = 1_024
@@ -370,7 +376,48 @@ class InteroperabilitySettings:
             "enabled": self.enabled,
             "local_only": self.local_only,
             "api_key_configured": self.api_key is not None,
-            "protocols": ["a2a_discovery", "mcp_read_only"],
+            "protocols": ["mcp_read_only"],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class A2ASettings:
+    enabled: bool = DEFAULT_A2A_ENABLED
+    local_only: bool = DEFAULT_A2A_LOCAL_ONLY
+    api_key: str | None = None
+    max_concurrent_tasks: int = DEFAULT_A2A_MAX_CONCURRENT_TASKS
+    max_queued_tasks: int = DEFAULT_A2A_MAX_QUEUED_TASKS
+    max_input_chars: int = DEFAULT_A2A_MAX_INPUT_CHARS
+    public_base_url: str = DEFAULT_A2A_PUBLIC_BASE_URL
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "api_key", _optional_text(self.api_key))
+        base_url = _require_text(self.public_base_url).rstrip("/")
+        if not base_url.startswith(("http://", "https://")):
+            raise ValueError("FRA_A2A_PUBLIC_BASE_URL must use http or https")
+        object.__setattr__(self, "public_base_url", base_url)
+        if self.enabled and not self.local_only and self.api_key is None:
+            raise ValueError(
+                "FRA_A2A_API_KEY is required when FRA_A2A_ENABLED=true and FRA_A2A_LOCAL_ONLY=false"
+            )
+        if self.max_concurrent_tasks <= 0:
+            raise ValueError("FRA_A2A_MAX_CONCURRENT_TASKS must be positive")
+        if self.max_queued_tasks <= 0:
+            raise ValueError("FRA_A2A_MAX_QUEUED_TASKS must be positive")
+        if self.max_input_chars < 100:
+            raise ValueError("FRA_A2A_MAX_INPUT_CHARS must be at least 100")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "local_only": self.local_only,
+            "api_key_configured": self.api_key is not None,
+            "max_concurrent_tasks": self.max_concurrent_tasks,
+            "max_queued_tasks": self.max_queued_tasks,
+            "max_input_chars": self.max_input_chars,
+            "public_base_url": self.public_base_url,
+            "protocol_version": "1.0",
+            "protocol_binding": "HTTP+JSON",
         }
 
 
@@ -430,6 +477,7 @@ class Settings:
     storage: StorageSettings
     retrieval: RetrievalSettings
     interoperability: InteroperabilitySettings
+    a2a: A2ASettings
     background: BackgroundSettings
     performance: PerformanceSettings
     security: SecuritySettings
@@ -601,6 +649,35 @@ class Settings:
                     DEFAULT_INTEROP_LOCAL_ONLY,
                 ),
                 api_key=_env_optional(env, "FRA_INTEROP_API_KEY"),
+            ),
+            a2a=A2ASettings(
+                enabled=_env_bool_value(env, "FRA_A2A_ENABLED", DEFAULT_A2A_ENABLED),
+                local_only=_env_bool_value(
+                    env,
+                    "FRA_A2A_LOCAL_ONLY",
+                    DEFAULT_A2A_LOCAL_ONLY,
+                ),
+                api_key=_env_optional(env, "FRA_A2A_API_KEY"),
+                max_concurrent_tasks=_env_int_value(
+                    env,
+                    "FRA_A2A_MAX_CONCURRENT_TASKS",
+                    DEFAULT_A2A_MAX_CONCURRENT_TASKS,
+                ),
+                max_queued_tasks=_env_int_value(
+                    env,
+                    "FRA_A2A_MAX_QUEUED_TASKS",
+                    DEFAULT_A2A_MAX_QUEUED_TASKS,
+                ),
+                max_input_chars=_env_int_value(
+                    env,
+                    "FRA_A2A_MAX_INPUT_CHARS",
+                    DEFAULT_A2A_MAX_INPUT_CHARS,
+                ),
+                public_base_url=_env_value(
+                    env,
+                    "FRA_A2A_PUBLIC_BASE_URL",
+                    DEFAULT_A2A_PUBLIC_BASE_URL,
+                ),
             ),
             background=BackgroundSettings(
                 max_concurrent_research_runs=_env_int_value(

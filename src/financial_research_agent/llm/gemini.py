@@ -395,16 +395,18 @@ def _message_payload(message: ChatMessage) -> dict[str, Any]:
     if message.content:
         parts.append({"text": message.content})
     if message.role == MessageRole.ASSISTANT:
-        parts.extend(
-            {
+        for tool_call in message.tool_calls:
+            part = {
                 "functionCall": {
                     "id": tool_call.id,
                     "name": tool_call.name,
                     "args": _wire.mutable_json_value(tool_call.arguments),
                 }
             }
-            for tool_call in message.tool_calls
-        )
+            thought_signature = tool_call.metadata.get("gemini_thought_signature")
+            if thought_signature:
+                part["thoughtSignature"] = thought_signature
+            parts.append(part)
     return {
         "role": "model" if message.role == MessageRole.ASSISTANT else "user",
         "parts": parts or [{"text": ""}],
@@ -478,6 +480,11 @@ def _candidate_parts(data: Mapping[str, Any], model: str) -> _CandidateParts:
             id=str(call.get("id") or f"gemini-tool:{index}"),
             name=str(call["name"]),
             arguments=call.get("args") if isinstance(call.get("args"), Mapping) else {},
+            metadata=(
+                {"gemini_thought_signature": str(part["thoughtSignature"])}
+                if isinstance(part.get("thoughtSignature"), str)
+                else {}
+            ),
         )
         for index, part in enumerate(parts)
         if isinstance(part, Mapping)
