@@ -14,6 +14,10 @@ DEFAULT_LLM_LOCAL_RUNTIME = "llama.cpp"
 DEFAULT_LLM_TIMEOUT_SECONDS = 30.0
 DEFAULT_EMBEDDING_PROVIDER = "disabled"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
+DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_LITELLM_BASE_URL = "http://127.0.0.1:4000/v1"
 DEFAULT_CHAT_HISTORY_RECENT_TURNS = 6
 DEFAULT_CHAT_HISTORY_SUMMARY_MAX_CHARS = 1200
 DEFAULT_COMPANY_LOOKUP_PROVIDER = "sec"
@@ -39,6 +43,7 @@ DEFAULT_PROMPT_BUDGET_INPUT_TOKENS = 16_000
 DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS = 1_024
 DEFAULT_EMBEDDING_CACHE_ENABLED = True
 DEFAULT_ALLOW_REMOTE_BIND = False
+EXPLICIT_MODEL_PROVIDERS = frozenset({"anthropic", "gemini", "litellm", "openai"})
 
 
 class ProviderTask(StrEnum):
@@ -102,6 +107,13 @@ class ProviderSettings:
     openai_base_url: str = DEFAULT_OPENAI_BASE_URL
     openai_organization: str | None = None
     openai_project: str | None = None
+    anthropic_api_key: str | None = None
+    anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
+    anthropic_api_version: str = DEFAULT_ANTHROPIC_API_VERSION
+    gemini_api_key: str | None = None
+    gemini_base_url: str = DEFAULT_GEMINI_BASE_URL
+    litellm_api_key: str | None = None
+    litellm_base_url: str = DEFAULT_LITELLM_BASE_URL
     chat_provider: str | None = None
     chat_model: str | None = None
     tool_calling_provider: str | None = None
@@ -117,8 +129,20 @@ class ProviderSettings:
         object.__setattr__(self, "openai_base_url", _require_text(self.openai_base_url))
         object.__setattr__(self, "openai_organization", _optional_text(self.openai_organization))
         object.__setattr__(self, "openai_project", _optional_text(self.openai_project))
+        object.__setattr__(self, "anthropic_api_key", _optional_text(self.anthropic_api_key))
+        object.__setattr__(self, "anthropic_base_url", _require_text(self.anthropic_base_url))
+        object.__setattr__(
+            self,
+            "anthropic_api_version",
+            _require_text(self.anthropic_api_version),
+        )
+        object.__setattr__(self, "gemini_api_key", _optional_text(self.gemini_api_key))
+        object.__setattr__(self, "gemini_base_url", _require_text(self.gemini_base_url))
+        object.__setattr__(self, "litellm_api_key", _optional_text(self.litellm_api_key))
+        object.__setattr__(self, "litellm_base_url", _require_text(self.litellm_base_url))
         if self.llm_timeout_seconds <= 0:
             raise ValueError("llm_timeout_seconds must be positive")
+        self._validate_explicit_models()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -133,6 +157,13 @@ class ProviderSettings:
             "openai_base_url": self.openai_base_url,
             "openai_organization_configured": self.openai_organization is not None,
             "openai_project_configured": self.openai_project is not None,
+            "anthropic_api_key_configured": self.anthropic_api_key is not None,
+            "anthropic_base_url": self.anthropic_base_url,
+            "anthropic_api_version": self.anthropic_api_version,
+            "gemini_api_key_configured": self.gemini_api_key is not None,
+            "gemini_base_url": self.gemini_base_url,
+            "litellm_api_key_configured": self.litellm_api_key is not None,
+            "litellm_base_url": self.litellm_base_url,
             "chat_provider": self.chat_provider,
             "chat_model": self.chat_model,
             "tool_calling_provider": self.tool_calling_provider,
@@ -175,6 +206,39 @@ class ProviderSettings:
             model=model_override or self.llm_model,
             base_url=self.llm_base_url,
         )
+
+    def _validate_explicit_models(self) -> None:
+        selections = (
+            ("FRA_LLM_MODEL", self.llm_provider, self.llm_model),
+            (
+                "FRA_CHAT_MODEL",
+                self.chat_provider or self.llm_provider,
+                self.chat_model or self.llm_model,
+            ),
+            (
+                "FRA_TOOL_CALLING_MODEL",
+                self.tool_calling_provider or self.llm_provider,
+                self.tool_calling_model or self.llm_model,
+            ),
+            (
+                "FRA_STRUCTURED_OUTPUT_MODEL",
+                self.structured_output_provider or self.llm_provider,
+                self.structured_output_model or self.llm_model,
+            ),
+            (
+                "FRA_STREAMING_MODEL",
+                self.streaming_provider or self.llm_provider,
+                self.streaming_model or self.llm_model,
+            ),
+            ("FRA_EMBEDDING_MODEL", self.embedding_provider, self.embedding_model),
+        )
+        for setting_name, provider, model in selections:
+            if provider in EXPLICIT_MODEL_PROVIDERS and (
+                model is None or model == DEFAULT_LLM_MODEL
+            ):
+                raise ValueError(
+                    f"{setting_name} must be explicitly configured for provider {provider!r}"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,6 +470,37 @@ class Settings:
                     "OPENAI_ORG_ID",
                 ),
                 openai_project=_env_optional_any(env, "FRA_OPENAI_PROJECT", "OPENAI_PROJECT_ID"),
+                anthropic_api_key=_env_optional_any(
+                    env,
+                    "FRA_ANTHROPIC_API_KEY",
+                    "ANTHROPIC_API_KEY",
+                ),
+                anthropic_base_url=_env_value(
+                    env,
+                    "FRA_ANTHROPIC_BASE_URL",
+                    DEFAULT_ANTHROPIC_BASE_URL,
+                ),
+                anthropic_api_version=_env_value(
+                    env,
+                    "FRA_ANTHROPIC_API_VERSION",
+                    DEFAULT_ANTHROPIC_API_VERSION,
+                ),
+                gemini_api_key=_env_optional_any(
+                    env,
+                    "FRA_GEMINI_API_KEY",
+                    "GEMINI_API_KEY",
+                ),
+                gemini_base_url=_env_value(
+                    env,
+                    "FRA_GEMINI_BASE_URL",
+                    DEFAULT_GEMINI_BASE_URL,
+                ),
+                litellm_api_key=_env_optional(env, "FRA_LITELLM_API_KEY"),
+                litellm_base_url=_env_value(
+                    env,
+                    "FRA_LITELLM_BASE_URL",
+                    DEFAULT_LITELLM_BASE_URL,
+                ),
                 chat_provider=_env_optional(env, "FRA_CHAT_PROVIDER"),
                 chat_model=_env_optional(env, "FRA_CHAT_MODEL"),
                 tool_calling_provider=_env_optional(env, "FRA_TOOL_CALLING_PROVIDER"),

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from typing import Self
 
+from financial_research_agent.llm.anthropic import AnthropicProvider
 from financial_research_agent.llm.contracts import (
     ChatProvider,
     EmbeddingProvider,
     ProviderError,
     ProviderErrorCode,
 )
+from financial_research_agent.llm.gemini import GeminiProvider
+from financial_research_agent.llm.litellm import LiteLLMGatewayProvider
 from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
 from financial_research_agent.llm.offline import OfflineTestProvider
 from financial_research_agent.llm.openai import OpenAIProvider
@@ -70,13 +73,25 @@ def create_default_provider_registry(settings: ProviderSettings | None = None) -
     provider_settings = settings or ProviderSettings()
     local_provider = OpenAICompatibleLocalProvider.from_settings(provider_settings)
     openai_provider = OpenAIProvider.from_settings(provider_settings)
+    anthropic_provider = AnthropicProvider.from_settings(provider_settings)
+    gemini_provider = GeminiProvider.from_settings(provider_settings)
+    litellm_provider = LiteLLMGatewayProvider.from_settings(provider_settings)
     registry.register_chat_provider(
         local_provider.provider, local_provider
     ).register_embedding_provider(local_provider.provider, local_provider)
-    return registry.register_chat_provider(
+    registry.register_chat_provider(
         openai_provider.provider,
         openai_provider,
     ).register_embedding_provider(openai_provider.provider, openai_provider)
+    registry.register_chat_provider(anthropic_provider.provider, anthropic_provider)
+    registry.register_chat_provider(
+        gemini_provider.provider,
+        gemini_provider,
+    ).register_embedding_provider(gemini_provider.provider, gemini_provider)
+    return registry.register_chat_provider(
+        litellm_provider.provider,
+        litellm_provider,
+    ).register_embedding_provider(litellm_provider.provider, litellm_provider)
 
 
 def _normalize_name(name: str) -> str:

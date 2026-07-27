@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -45,6 +45,7 @@ def test_default_scenario_contract_is_immutable_and_has_locked_novo_profile() ->
     assert scenario.preferred_ticker == "NVO"
     assert scenario.preferred_exchange == "NYSE"
     assert dict(scenario.filing_form_limits) == {"20-F": 1, "6-K": 1}
+    assert scenario.market_outputsize == "compact"
     assert scenario.benchmark_symbol == "SPY"
     with pytest.raises(FrozenInstanceError):
         scenario.preferred_ticker = "NONOF"
@@ -113,6 +114,50 @@ def test_context_snapshot_rejects_future_and_local_fixture_sources(
     assert error.value.code == ScenarioErrorCode.INVALID_CONTEXT_SNAPSHOT
 
 
+@pytest.mark.parametrize(
+    ("source_url", "published_at", "title"),
+    (
+        ("https://example.test/company", NOW.isoformat(), "Official company source"),
+        ("https://example.com/company", None, "Official company source"),
+        ("https://example.com/company", NOW.isoformat(), "TEST FIXTURE company source"),
+    ),
+)
+def test_context_snapshot_requires_dated_non_fixture_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_url: str,
+    published_at: str | None,
+    title: str,
+) -> None:
+    from financial_research_agent.scenarios import context as context_module
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    item = {
+        "id": "context:company",
+        "title": title,
+        "summary": "Published company information.",
+        "source_url": source_url,
+        "source_name": "Official source",
+        "source_type": "company_event",
+        "reliability": "official",
+        "scope": "company",
+        "retrieved_at": NOW.isoformat(),
+        "published_at": published_at,
+    }
+    payload = {
+        "schema_version": 1,
+        "scenario_id": "novo-nordisk",
+        "source_items": [item],
+    }
+    (data_dir / "invalid.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(context_module, "files", lambda _package: tmp_path)
+
+    with pytest.raises(ScenarioError) as error:
+        load_context_snapshot("invalid.json", scenario_id="novo-nordisk", now=NOW)
+    assert error.value.code == ScenarioErrorCode.INVALID_CONTEXT_SNAPSHOT
+
+
 def test_prepare_requires_live_credentials_but_provider_free_stored_run_does_not(
     tmp_path: Path,
 ) -> None:
@@ -157,6 +202,42 @@ def test_scenario_checks_reject_empty_benchmark_and_wrong_filing_count(tmp_path:
     assert result.status == ScenarioExecutionStatus.FAILED
     assert checks["market_and_benchmark"].status == ScenarioCheckStatus.FAILED
     assert checks["required_filings"].status == ScenarioCheckStatus.FAILED
+
+
+@pytest.mark.parametrize(
+    ("handoff_status", "expected_status", "expected_check"),
+    (
+        (
+            OrchestratorHandoffStatus.FAILED,
+            ScenarioExecutionStatus.FAILED,
+            ScenarioCheckStatus.FAILED,
+        ),
+        (
+            OrchestratorHandoffStatus.PARTIAL,
+            ScenarioExecutionStatus.PARTIAL,
+            ScenarioCheckStatus.WARNING,
+        ),
+    ),
+)
+def test_scenario_completion_reflects_specialist_handoff_status(
+    tmp_path: Path,
+    handoff_status: OrchestratorHandoffStatus,
+    expected_status: ScenarioExecutionStatus,
+    expected_check: ScenarioCheckStatus,
+) -> None:
+    run = _scenario_run()
+    handoffs = tuple(
+        replace(handoff, status=handoff_status)
+        if handoff.kind == OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS
+        else handoff
+        for handoff in run.handoffs
+    )
+
+    result = asyncio.run(_runner(tmp_path).finalize(replace(run, handoffs=handoffs)))
+    check = next(item for item in result.checks if item.id == "specialists_and_synthesis")
+
+    assert result.status == expected_status
+    assert check.status == expected_check
 
 
 def test_optional_local_qa_keeps_only_resolved_source_markers(tmp_path: Path) -> None:

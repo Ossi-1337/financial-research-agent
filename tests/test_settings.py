@@ -17,6 +17,9 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.provider.embedding_provider == "disabled"
     assert settings.provider.openai_api_key is None
     assert settings.provider.openai_base_url == "https://api.openai.com/v1"
+    assert settings.provider.anthropic_api_key is None
+    assert settings.provider.gemini_api_key is None
+    assert settings.provider.litellm_api_key is None
     assert settings.provider.selection_for_task(ProviderTask.CHAT).provider == "offline-test"
     assert settings.provider.selection_for_task(ProviderTask.CHAT).model == "offline-test"
     assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
@@ -57,6 +60,13 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_OPENAI_BASE_URL": "https://api.openai.test/v1",
             "FRA_OPENAI_ORGANIZATION": "org_123",
             "FRA_OPENAI_PROJECT": "proj_123",
+            "FRA_ANTHROPIC_API_KEY": "anthropic-key",
+            "FRA_ANTHROPIC_BASE_URL": "https://api.anthropic.test/v1",
+            "FRA_ANTHROPIC_API_VERSION": "2023-06-01",
+            "FRA_GEMINI_API_KEY": "gemini-key",
+            "FRA_GEMINI_BASE_URL": "https://gemini.test/v1beta",
+            "FRA_LITELLM_API_KEY": "litellm-key",
+            "FRA_LITELLM_BASE_URL": "http://127.0.0.1:4000/v1",
             "FRA_CHAT_PROVIDER": "online-chat",
             "FRA_CHAT_MODEL": "chat-model",
             "FRA_TOOL_CALLING_PROVIDER": "tool-provider",
@@ -105,6 +115,12 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.provider.openai_base_url == "https://api.openai.test/v1"
     assert settings.provider.openai_organization == "org_123"
     assert settings.provider.openai_project == "proj_123"
+    assert settings.provider.anthropic_api_key == "anthropic-key"
+    assert settings.provider.anthropic_base_url == "https://api.anthropic.test/v1"
+    assert settings.provider.gemini_api_key == "gemini-key"
+    assert settings.provider.gemini_base_url == "https://gemini.test/v1beta"
+    assert settings.provider.litellm_api_key == "litellm-key"
+    assert settings.provider.litellm_base_url == "http://127.0.0.1:4000/v1"
     assert settings.provider.selection_for_task("chat").provider == "online-chat"
     assert settings.provider.selection_for_task("chat").model == "chat-model"
     assert settings.provider.selection_for_task("tool_calling").provider == "tool-provider"
@@ -174,6 +190,40 @@ def test_openai_settings_support_standard_openai_environment_aliases() -> None:
     assert settings.provider.openai_api_key == "standard-key"
     assert settings.provider.openai_organization == "org_standard"
     assert settings.provider.openai_project == "proj_standard"
+
+
+def test_hosted_provider_settings_support_vendor_environment_aliases() -> None:
+    settings = Settings.from_env(
+        {
+            "ANTHROPIC_API_KEY": "anthropic-standard",
+            "GEMINI_API_KEY": "gemini-standard",
+        }
+    )
+
+    assert settings.provider.anthropic_api_key == "anthropic-standard"
+    assert settings.provider.gemini_api_key == "gemini-standard"
+    payload = settings.provider.to_dict()
+    assert payload["anthropic_api_key_configured"] is True
+    assert payload["gemini_api_key_configured"] is True
+    assert "anthropic-standard" not in str(payload)
+    assert "gemini-standard" not in str(payload)
+
+
+def test_hosted_providers_require_explicit_models() -> None:
+    for provider in ("anthropic", "gemini", "litellm", "openai"):
+        try:
+            Settings.from_env({"FRA_LLM_PROVIDER": provider})
+        except ValueError as exc:
+            assert "FRA_LLM_MODEL must be explicitly configured" in str(exc)
+        else:
+            raise AssertionError(f"Expected {provider} without a model to be rejected")
+
+    try:
+        Settings.from_env({"FRA_EMBEDDING_PROVIDER": "gemini"})
+    except ValueError as exc:
+        assert "FRA_EMBEDDING_MODEL must be explicitly configured" in str(exc)
+    else:
+        raise AssertionError("Expected Gemini embeddings without a model to be rejected")
 
 
 def test_invalid_timeout_setting_is_rejected() -> None:

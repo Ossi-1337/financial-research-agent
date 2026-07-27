@@ -556,16 +556,18 @@ function renderStockChart(runId) {
   const title = document.createElement("h3");
   title.textContent = "Indexed Price Development";
   const note = document.createElement("small");
-  note.textContent = "Each series starts at 100. Historical data is not a forecast.";
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 720 260");
   svg.setAttribute("role", "img");
   svg.setAttribute("aria-label", "Indexed historical price chart");
-  const normalized = series.map((item) => normalizeChartSeries(item)).filter(Boolean);
+  const normalized = normalizeAlignedChartSeries(series);
   if (!normalized.length) {
     wrapper.hidden = true;
     return wrapper;
   }
+  note.textContent =
+    `Shared period: ${normalized[0].dates[0]} to ${normalized[0].dates.at(-1)}. ` +
+    "Each series starts at 100. Historical data is not a forecast.";
   const values = normalized.flatMap((item) => item.values);
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
@@ -587,16 +589,36 @@ function renderStockChart(runId) {
   return wrapper;
 }
 
-function normalizeChartSeries(series) {
-  const points = (series.points || []).filter((point) => Number(point.adjusted_close || point.close));
-  if (!points.length) {
-    return null;
+function normalizeAlignedChartSeries(seriesList) {
+  const prepared = seriesList
+    .map((series) => {
+      const points = new Map();
+      for (const point of series.points || []) {
+        const value = Number(point.adjusted_close || point.close);
+        if (point.priced_at && Number.isFinite(value) && value > 0) {
+          points.set(point.priced_at, value);
+        }
+      }
+      return { symbol: series.symbol, points };
+    })
+    .filter((series) => series.points.size);
+  if (prepared.length !== seriesList.length) {
+    return [];
   }
-  const base = Number(points[0].adjusted_close || points[0].close);
-  return {
-    symbol: series.symbol,
-    values: points.map((point) => (Number(point.adjusted_close || point.close) / base) * 100),
-  };
+  const dates = [...prepared[0].points.keys()]
+    .filter((date) => prepared.every((series) => series.points.has(date)))
+    .sort();
+  if (dates.length < 2) {
+    return [];
+  }
+  return prepared.map((series) => {
+    const base = series.points.get(dates[0]);
+    return {
+      symbol: series.symbol,
+      dates,
+      values: dates.map((date) => (series.points.get(date) / base) * 100),
+    };
+  });
 }
 
 function chartPoints(values, minValue, maxValue) {

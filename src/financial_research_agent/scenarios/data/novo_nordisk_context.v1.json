@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "scenario_id": "novo-nordisk",
+  "snapshot_as_of": "2026-07-21T00:00:00+00:00",
+  "source_items": [
+    {
+      "id": "novo-annual-report-2025-performance",
+      "title": "Novo Nordisk 2025 performance and 2026 outlook",
+      "summary": "Novo Nordisk reports 2025 sales of DKK 309,064 million, six percent reported growth, and a 2026 adjusted sales and operating profit growth outlook of negative five to negative thirteen percent at constant exchange rates.",
+      "source_url": "https://annualreport.novonordisk.com/2025/strategic-aspirations/financial-performance.html",
+      "source_name": "Novo Nordisk Annual Report 2025",
+      "source_type": "company_event",
+      "reliability": "company_source",
+      "scope": "company",
+      "retrieved_at": "2026-07-21T00:00:00+00:00",
+      "published_at": "2026-02-04T07:30:00+01:00",
+      "company_symbols": ["NVO", "NOVO-B"],
+      "sector": "pharmaceuticals",
+      "region": "DK",
+      "topics": ["annual-results", "guidance", "sales", "operating-profit"],
+      "metadata": {
+        "snapshot_as_of": "2026-07-21",
+        "content_policy": "bounded-paraphrase"
+      }
+    },
+    {
+      "id": "ecb-rates-2026-06-11",
+      "title": "ECB monetary policy decision, June 2026",
+      "summary": "The ECB raised its three key interest rates by 25 basis points, setting the deposit facility at 2.25 percent, the main refinancing rate at 2.40 percent, and the marginal lending facility at 2.65 percent from 17 June 2026.",
+      "source_url": "https://www.ecb.europa.eu/press/pr/date/2026/html/ecb.mp260611~4d41bd5e83.en.html",
+      "source_name": "European Central Bank",
+      "source_type": "rates",
+      "reliability": "official",
+      "scope": "macro",
+      "retrieved_at": "2026-07-21T00:00:00+00:00",
+      "published_at": "2026-06-11T13:15:00+02:00",
+      "company_symbols": [],
+      "sector": null,
+      "region": "EU",
+      "topics": ["interest-rates", "inflation", "monetary-policy"],
+      "metadata": {
+        "snapshot_as_of": "2026-07-21",
+        "content_policy": "bounded-paraphrase"
+      }
+    },
+    {
+      "id": "who-glp1-obesity-guideline-2025",
+      "title": "WHO guideline on GLP-1 medicines for obesity",
+      "summary": "WHO issued a global guideline on GLP-1 therapies for obesity and emphasized that medicines should be used within a broader long-term care approach rather than as a standalone response.",
+      "source_url": "https://www.who.int/news/item/01-12-2025-who-issues-global-guideline-on-the-use-of-glp-1-medicines-in-treating-obesity",
+      "source_name": "World Health Organization",
+      "source_type": "sector_context",
+      "reliability": "official",
+      "scope": "sector",
+      "retrieved_at": "2026-07-21T00:00:00+00:00",
+      "published_at": "2025-12-01T00:00:00+00:00",
+      "company_symbols": [],
+      "sector": "pharmaceuticals",
+      "region": "GLOBAL",
+      "topics": ["GLP-1", "obesity", "guideline", "access"],
+      "metadata": {
+        "snapshot_as_of": "2026-07-21",
+        "content_policy": "bounded-paraphrase"
+      }
+    }
+  ]
+}

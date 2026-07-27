@@ -89,6 +89,7 @@ def _lint() -> None:
 
 
 def _check() -> None:
+    _run([sys.executable, "scripts/check_docs.py"])
     _lint()
     _run([sys.executable, "-m", "pytest"])
     _run([sys.executable, "-m", "compileall", "-q", "src", "tests"])

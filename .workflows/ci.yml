@@ -16,6 +16,9 @@ env:
   PYTHONUNBUFFERED: true
   FRA_LOCAL_SMOKE_TEST: 0
   FRA_OPENAI_SMOKE_TEST: 0
+  FRA_ANTHROPIC_SMOKE_TEST: 0
+  FRA_GEMINI_SMOKE_TEST: 0
+  FRA_LITELLM_SMOKE_TEST: 0
 
 jobs:
   changes:
@@ -152,6 +155,20 @@ jobs:
           python -m pip install -e ".[dev]"
           python -m financial_research_agent --pretty
 
+  docs:
+    name: Documentation
+    needs: changes
+    if: ${{ needs.changes.outputs.docs == 'true' }}
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.14-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate public documentation
+        run: python scripts/check_docs.py
+
   package:
     name: Package
     needs: changes
@@ -176,8 +193,8 @@ jobs:
           python -m venv /tmp/fra-wheel
           /tmp/fra-wheel/bin/python -m pip install dist/*.whl
           cd /tmp
-          /tmp/fra-wheel/bin/financial-research-agent --pretty
-          /tmp/fra-wheel/bin/python -c "from importlib.resources import files; assert files('financial_research_agent.web').joinpath('static/index.html').is_file(); assert files('financial_research_agent.persistence.migrations').joinpath('0001_initial.sql').is_file(); assert files('financial_research_agent.report_exports').joinpath('assets/NotoSans-Regular.ttf').is_file()"
+          /tmp/fra-wheel/bin/python -m financial_research_agent --pretty
+          /tmp/fra-wheel/bin/python -c "from importlib.resources import files; root = files('financial_research_agent'); assert root.joinpath('web/static/index.html').is_file(); assert root.joinpath('persistence/migrations/0001_initial.sql').is_file(); assert root.joinpath('report_exports/assets/NotoSans-Regular.ttf').is_file(); assert root.joinpath('scenarios/data/novo_nordisk_context.v1.json').is_file()"
 
   diff:
     name: Diff check

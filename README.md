@@ -6,512 +6,185 @@
 [![llama.cpp](https://img.shields.io/badge/local%20LLM-llama.cpp-555555)](https://github.com/ggml-org/llama.cpp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Financial Research Agent is a local-first research workspace for company and stock analysis.
+Financial Research Agent is a local-first Python research workspace for company and stock
+analysis. It combines real financial data, deterministic specialist workflows, source-linked
+evidence, optional local LLMs, and exportable reports behind a FastAPI application.
 
-It combines a lightweight chat UI, provider-neutral LLM adapters, deterministic tools, SEC
-filing and statement ingestion, local storage, retrieval, citations, and bounded specialist
-workflows. The project is designed so local models can run first, while hosted providers can
-be swapped in through the same interfaces when needed.
+The project is built for inspectability rather than autonomous trading. Deterministic research
+remains the source of truth; LLM output is bounded, labeled, and kept separate from financial
+evidence.
 
-The goal is not to create an automated trading system. The goal is to make financial
-research workflows inspectable, source-aware, and runnable on a developer machine.
+![Deterministic Novo Nordisk research report](docs/assets/demo/novo-report-desktop.jpg)
 
 ## Requirements
 
 - Python 3.14
-- Docker Desktop for container-based setup
+- Docker Desktop for container workflows
 - Optional NVIDIA GPU support for the llama.cpp CUDA profile
-- Optional Alpha Vantage API key for daily market data
-- Optional OpenAI API key for hosted LLM usage
-- A real SEC User-Agent/contact string for serious SEC EDGAR usage
+- Alpha Vantage API key and an identifying SEC User-Agent for the live research scenario
+- Optional provider credentials for OpenAI, Anthropic, or Gemini
 
 ## Quick Start
 
-Start the lightweight offline UI with Docker Compose:
+Start the credential-free offline UI:
 
 ```powershell
 docker compose up --build
 ```
 
-Open the app:
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). This path uses the deterministic
+`offline-test` provider and downloads no model.
 
-```text
-http://127.0.0.1:8000
-```
-
-Default startup uses `offline-test`; it needs no model, GPU, API key, or network call after
-the app image has been built. Local state is kept in the `fra-data` Docker volume.
-
-Start an optional llama.cpp model profile through the cross-platform developer command:
-
-```powershell
-python scripts/dev.py docker-up --runtime cpu
-python scripts/dev.py docker-up --runtime cuda
-```
-
-The CPU profile defaults to a small Gemma 3 1B GGUF. The CUDA profile defaults to Mistral
-Small 3.2 24B. Starting a model profile downloads its image and model on first use. Activate
-only one model profile at a time.
-
-Stop the stack:
-
-```powershell
-docker compose down
-```
-
-See [Local Development](docs/local-development.md) for profile overrides and clean-machine
-setup. See [Troubleshooting](docs/troubleshooting.md) for Docker, model, provider, and SQLite
-failures.
-
-## Python Development
-
-Install the project locally:
+For direct Python development:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python scripts/dev.py install
-```
-
-Run the health check:
-
-```powershell
-python -m financial_research_agent --pretty
-```
-
-Run the web UI without Docker:
-
-```powershell
 python scripts/dev.py run
 ```
 
-The default provider is `offline-test`, so the Python-only path works without API keys or
-a local model server. Configure `local-openai` or `openai` when you want real model calls.
+CLI commands load `.env` from the repository root without overriding existing environment
+variables. Start from `.env.example`; keep real credentials in `.env`, which is ignored by Git.
 
-## What Works Today
-
-- Local chat UI with persisted sessions, bounded context, and streamed assistant output.
-- Settings panel for local provider/model, endpoint, embeddings, retrieval, cache, and
-  background-run controls.
-- Inline `@company` mentions backed by SEC company ticker search.
-- Provider-neutral LLM contracts for chat, streaming, embeddings, tool calls, structured
-  output, model metadata, usage, and provider errors.
-- Deterministic `offline-test` provider for tests and local development.
-- OpenAI-compatible local provider for llama.cpp, Ollama, and similar local endpoints.
-- Optional hosted OpenAI provider.
-- Deterministic tool registry with guarded function calling.
-- Deny-by-default tool name/permission allowlists and untrusted-document prompt framing.
-- SEC company lookup using the official company ticker list.
-- Alpha Vantage daily market data ingestion when an API key is configured.
-- SEC companyfacts financial statement ingestion for SEC filers.
-- SEC EDGAR filing ingestion for primary HTML/TXT documents.
-- SQLite persistence for structured application state, with local raw documents, exports,
-  vector indexes, and caches kept as files.
-- Guarded legacy JSON import, integrity checks, checksummed schema migrations, local backup,
-  restore, cleanup, and transactional data reset commands.
-- Local vector retrieval over stored filing chunks when embeddings are configured.
-- Provider-call performance payloads with approximate tokens, latency, and local/offline
-  cost estimates.
-- Prompt budget defaults, local model hardware profiles, and a hash-only embedding cache.
-- Explicit cited-answer workflow over retrieved local evidence.
-- Specialist analysis for financial reports, stock price history, and explicit
-  news/macro/sector context.
-- Bounded orchestrator workflow that coordinates company resolution, data refresh,
-  specialist runs, handoffs, and inspectable research run state.
-- In-process background research queue for `/research ...` chat commands with status,
-  progress, cancellation, and a local concurrency limit.
-- Deterministic synthesis reports with current situation, strengths, weaknesses,
-  opportunities, risks, upside/downside scenarios, unknowns, confidence, and evidence
-  coverage indicators.
-- Immutable local synthesis report exports in Markdown, self-contained HTML, and PDF,
-  with source appendix, timestamps, hashes, limitations, and no-advice framing.
-- A versioned Novo Nordisk end-to-end scenario that binds NVO/NYSE, SPY benchmark data,
-  annual IFRS/DKK statements, one 20-F, one 6-K, dated context sources, evidence, charts,
-  synthesis, and all three export formats. Live acceptance requires configured data access.
-- Local observability for orchestrator runs, including redacted trace timelines,
-  stored-result replay plans, and exportable debug bundles without hosted telemetry.
-- Offline deterministic evaluation harness for fixture-labeled research artifacts,
-  citations, source freshness, refusal behavior, guardrails, and traceability.
-- Optional interoperability spike with A2A discovery metadata and one local-safe,
-  read-only MCP-style status tool. It is disabled by default.
-
-## Not Built Yet
-
-- Anthropic, Gemini, and gateway provider adapters.
-- LLM-generated narrative report writing beyond deterministic source-backed synthesis.
-- Automatic news or macro ingestion.
-- Production A2A agent server or broad MCP tool server.
-- PDF extraction.
-- Remote database storage.
-- Automatic chat RAG for every message.
-- Hosted telemetry, production audit logging, or remote observability exports.
-- Paid or hosted LLM-as-judge evaluation as part of the default local test path.
-- Public benchmark claims.
-- Trading, broker integration, alerts, monitoring, or buy/sell/hold recommendations.
-
-## Architecture
-
-The system is split into replaceable boundaries:
-
-```text
-Chat UI / HTTP API
-        |
-        v
-Provider-neutral LLM layer
-        |
-        +--> offline-test
-        +--> local-openai  -> llama.cpp / Ollama / compatible local servers
-        +--> openai        -> hosted OpenAI-compatible calls
-
-Research workflow layer
-        |
-        +--> tools and tool-call runner
-        +--> prompt contracts
-        +--> retrieval and cited answers
-        +--> specialist agents
-        +--> orchestrator
-
-Data layer
-        |
-        +--> SEC company lookup
-        +--> Alpha Vantage market data
-        +--> SEC companyfacts statements
-        +--> SEC EDGAR filings
-        +--> local SQLite + filesystem artifacts under FRA_HOME
-```
-
-The orchestration policy is intentionally bounded and local-safe. Steps run through declared
-providers and stores, persist handoffs separately, and preserve partial results when one
-provider or specialist step fails.
-
-## Configuration
-
-CLI commands load `.env` from the current working directory. Existing process or container
-environment variables override values from that file. `.env.example` documents supported
-variables; never commit a real `.env` file.
-
-`FRA` means Financial Research Agent.
-
-Common settings:
-
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `FRA_HOME` | Local app data directory | `~/.financial-research-agent` |
-| `FRA_LLM_PROVIDER` | Main LLM provider | `offline-test` |
-| `FRA_LLM_MODEL` | Main LLM model | `offline-test` |
-| `FRA_LLM_BASE_URL` | OpenAI-compatible local endpoint | `http://127.0.0.1:8080/v1` |
-| `FRA_LLM_LOCAL_RUNTIME` | Local runtime label | `llama.cpp` |
-| `FRA_OPENAI_API_KEY` | Hosted OpenAI API key | empty |
-| `FRA_SEC_USER_AGENT` | SEC EDGAR User-Agent/contact | project placeholder |
-| `FRA_ALPHA_VANTAGE_API_KEY` | Alpha Vantage API key | empty |
-| `FRA_EMBEDDING_PROVIDER` | Embedding provider for retrieval | `disabled` |
-| `FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS` | Local background research concurrency limit | `1` |
-| `FRA_PROMPT_BUDGET_INPUT_TOKENS` | Approximate prompt input token budget | `16000` |
-| `FRA_PROMPT_BUDGET_OUTPUT_TOKENS` | Default response output budget | `1024` |
-| `FRA_EMBEDDING_CACHE_ENABLED` | Cache embeddings by provider/model/text hash | `true` |
-| `FRA_ALLOW_REMOTE_BIND` | Permit non-loopback web server binding | `false` |
-| `FRA_CPU_MODEL` | Docker Compose CPU profile model | Gemma 3 1B GGUF |
-| `FRA_CUDA_MODEL` | Docker Compose CUDA profile model | Mistral Small GGUF |
-
-The settings UI can save non-secret runtime overrides under `FRA_HOME`. API keys remain
-environment-only and are shown only as configured/not-configured flags.
-
-Example local model configuration outside Docker Compose:
+Optional local llama.cpp profiles:
 
 ```powershell
-$env:FRA_LLM_PROVIDER = "local-openai"
-$env:FRA_LLM_MODEL = "your-local-model-name"
-$env:FRA_LLM_BASE_URL = "http://127.0.0.1:8080/v1"
-$env:FRA_LLM_LOCAL_RUNTIME = "llama.cpp"
-python -m financial_research_agent --pretty
+python scripts/dev.py docker-up --runtime cpu --detach
+python scripts/dev.py docker-up --runtime cuda --detach
 ```
 
-Example hosted OpenAI configuration:
+Use one profile at a time. First startup may download the selected GGUF model.
 
-```powershell
-$env:FRA_LLM_PROVIDER = "openai"
-$env:FRA_LLM_MODEL = "your-openai-model"
-$env:FRA_OPENAI_API_KEY = "your-api-key"
-python -m financial_research_agent --pretty
-```
+## Demo
 
-Do not commit real API keys.
+The versioned `novo-nordisk` scenario exercises one real-data path through entity resolution,
+NVO and SPY market history, IFRS/DKK statements, SEC filings, specialist analysis, synthesis,
+evidence, charts, and Markdown/HTML/PDF exports.
 
-## Security
-
-- API keys remain environment-only and are never written by the settings UI.
-- Retrieved filings and external source text are treated as untrusted data, not instructions.
-- Tool calls require both an explicit tool-name allowlist and matching permissions.
-- Direct app runs bind to `127.0.0.1` by default. Non-loopback binds require
-  `FRA_ALLOW_REMOTE_BIND=true`.
-- Docker Compose publishes app and llama.cpp ports on host loopback only.
-- No shell, arbitrary code execution, or unrestricted local-file tool exists.
-
-Use remote binding only behind a trusted network boundary with appropriate authentication.
-
-## CLI
-
-```powershell
-python -m financial_research_agent --pretty
-python -m financial_research_agent serve --host 127.0.0.1 --port 8000
-python -m financial_research_agent storage-status --pretty
-python -m financial_research_agent storage-migrate --pretty
-python -m financial_research_agent storage-check --full --pretty
-python -m financial_research_agent storage-backup --pretty
-python -m financial_research_agent storage-restore --backup <backup_id> --yes --pretty
-python -m financial_research_agent storage-cleanup --dataset chat-sessions --older-than-days 90 --pretty
-python -m financial_research_agent cache-clear --pretty
-python -m financial_research_agent data-reset --yes --pretty
-python -m financial_research_agent retrieval-status --pretty
-python -m financial_research_agent retrieval-clear --pretty
-python -m financial_research_agent eval --pretty
-python -m financial_research_agent scenario-run novo-nordisk --pretty
-```
-
-The installed console script is also available after `pip install -e .`:
-
-```powershell
-financial-research-agent --pretty
-```
-
-## HTTP API
-
-Start the app first:
-
-```powershell
-python -m financial_research_agent serve --host 127.0.0.1 --port 8000
-```
-
-Core endpoints:
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /api/status` | Runtime status without secrets |
-| `GET /api/settings` | Inspect active runtime settings without secrets |
-| `PUT /api/settings` | Save local non-secret runtime overrides |
-| `DELETE /api/settings` | Clear local runtime overrides |
-| `GET /api/settings/provider-health` | Check active or selected provider health |
-| `GET /api/storage` | Inspect storage provider, schema, size, counts, and warnings |
-| `GET /api/storage/integrity` | Run a read-only SQLite integrity check |
-| `POST /api/sessions` | Create a chat session |
-| `GET /api/sessions/{session_id}` | Read a chat session |
-| `POST /api/sessions/{session_id}/messages/stream` | Stream a chat response |
-| `GET /api/company-search?query=...` | Search SEC company ticker candidates |
-| `POST /api/market-data/history` | Fetch/store daily market data |
-| `POST /api/financial-statements` | Fetch/store SEC companyfacts statements |
-| `POST /api/filings/ingest` | Fetch/store SEC filing documents |
-| `POST /api/retrieval/index/filings` | Index stored filing chunks |
-| `POST /api/retrieval/search` | Search the local vector index |
-| `POST /api/sessions/{session_id}/cited-answer` | Ask with retrieved citations |
-| `POST /api/financial-report-analysis` | Analyze stored statements and filings |
-| `POST /api/stock-price-analysis` | Analyze stored market data |
-| `POST /api/context-analysis` | Analyze explicit source-linked context |
-| `POST /api/orchestrator/research` | Run the bounded research workflow |
-| `POST /api/background/research-runs` | Queue a background research workflow |
-| `GET /api/background/research-runs/{job_id}` | Inspect background run status and progress |
-| `POST /api/background/research-runs/{job_id}/cancel` | Cancel a queued or running background run |
-| `POST /api/scenarios/novo-nordisk/runs` | Queue the versioned Novo Nordisk scenario |
-| `GET /api/orchestrator/runs` | Inspect stored orchestrator runs |
-| `GET /api/orchestrator/runs/{run_id}/evidence` | Inspect deduplicated sources and unresolved evidence IDs |
-| `POST /api/orchestrator/runs/{run_id}/exports` | Create a saved Markdown/HTML/PDF report snapshot |
-| `GET /api/report-exports` | List saved local report exports |
-| `GET /api/report-exports/{export_id}` | Inspect an export manifest |
-| `GET /api/report-exports/{export_id}/files/{format}` | Download a Markdown, HTML, or PDF artifact |
-| `GET /api/orchestrator/runs/{run_id}/trace` | Inspect a redacted run timeline |
-| `POST /api/orchestrator/runs/{run_id}/replay` | Build a stored-result replay plan |
-| `GET /api/orchestrator/runs/{run_id}/debug-bundle` | Export a redacted local debug bundle |
-| `POST /api/sessions/{session_id}/synthesis-report` | Append a rendered synthesis report to a chat session |
-| `POST /api/interop/mcp` | Optional disabled-by-default read-only MCP-style spike endpoint |
-
-Example orchestrated research request:
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/orchestrator/research" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"query":"Apple financial situation","refresh":true}'
-```
-
-In the chat UI, an explicit `/research Apple financial situation` message queues the same
-bounded workflow in the background, shows progress, and renders the synthesis report when
-the run completes. Ordinary chat messages remain direct LLM chat and do not automatically
-run research tools.
-
-### Novo Nordisk Scenario
-
-The `novo-nordisk` profile provides one reproducible real-data path through the complete
-research workflow. Configure a real SEC contact and Alpha Vantage key in `.env`:
-
-```dotenv
-FRA_SEC_USER_AGENT=financial-research-agent/0.1 your-real-email@your-domain.example
-FRA_ALPHA_VANTAGE_API_KEY=your-alpha-vantage-key
-```
-
-Then run it from the CLI:
+Configure `FRA_ALPHA_VANTAGE_API_KEY` and `FRA_SEC_USER_AGENT`, then run:
 
 ```powershell
 python -m financial_research_agent scenario-run novo-nordisk --pretty
 ```
 
-Or enter this command in chat to run it as a background job with progress:
+In the chat UI:
 
 ```text
 /scenario novo-nordisk
+/scenario novo-nordisk --with-local-qa
 ```
 
-The deterministic synthesis remains the source of truth. Add `--with-local-qa` to the CLI
-command, or append it to the chat command, for one optional source-marker-bounded answer from
-the configured chat provider. That answer does not modify the report or determine whether the
-scenario passed. Without valid live-data configuration, the scenario exits safely and its
-roadmap status remains in progress.
+The second command adds one source-bounded local-LLM answer. It does not rewrite or change the
+deterministic report.
 
-Synthesis messages include an optional run trace inspector. Trace and debug-bundle
-payloads redact configured secrets and sensitive local paths, and replay plans use stored
-handoff outputs only; they do not call providers, LLMs, tools, or data sources.
+See the [reproducible demo walkthrough](docs/demo.md) for setup, evidence inspection, exports,
+and cleanup.
 
-Synthesis reports also include an `Export` action. One click creates a new immutable local
-snapshot containing Markdown, self-contained HTML, and PDF, then shows a download link for
-each format. Export uses only the persisted run and specialist handoffs; it does not call an
-LLM, refresh data, or publish the report.
+## Architecture
 
-Optional interoperability spike:
-
-```powershell
-$env:FRA_INTEROP_ENABLED = "true"
-$env:FRA_INTEROP_LOCAL_ONLY = "true"
-python -m financial_research_agent serve --host 127.0.0.1 --port 8000
+```mermaid
+flowchart LR
+    UI["FastAPI + vanilla chat UI"] --> WF["Bounded research workflow"]
+    WF --> DS["SEC + Alpha Vantage adapters"]
+    WF --> AG["Deterministic specialist agents"]
+    AG --> SY["Deterministic synthesis"]
+    SY --> EV["Evidence + citations"]
+    SY --> EX["Markdown / HTML / PDF exports"]
+    UI --> LLM["Provider-neutral LLM boundary"]
+    LLM --> OFF["offline-test"]
+    LLM --> LOC["llama.cpp / local OpenAI-compatible"]
+    LLM --> OAI["Hosted OpenAI"]
+    LLM --> ANT["Anthropic"]
+    LLM --> GEM["Gemini"]
+    LLM --> GW["LiteLLM gateway"]
+    WF --> DB["SQLite structured state"]
+    WF --> FS["Local files, caches, and indexes"]
 ```
 
-When enabled for local use, A2A-style discovery metadata is available at
-`/.well-known/agent.json` and `/.well-known/agent-card.json`. The MCP-style endpoint supports
-`initialize`, `tools/list`, and `tools/call` for `financial_research_agent.status` only. Remote
-interop requires `FRA_INTEROP_API_KEY`; do not expose this endpoint publicly without an
-explicit deployment security review.
+Core boundaries:
 
-## Local Data
+- Provider-neutral async LLM contracts for chat, streaming, tools, structured output, and
+  embeddings.
+- Deterministic tools and specialists for data acquisition, analysis, evidence, and synthesis.
+- SQLite for structured state; filesystem storage for source documents, vector indexes, caches,
+  and immutable report exports.
+- Local-first operation with loopback binding, environment-only secrets, and no shell tool.
 
-Local runtime data is stored under `FRA_HOME`, which defaults to:
+Detailed diagrams and ownership boundaries are in [Architecture](docs/architecture.md).
 
-```text
-~/.financial-research-agent
-```
+## Current Status
 
-Structured state is stored by default in:
+Implemented:
 
-```text
-FRA_HOME/data/financial_research_agent.sqlite3
-```
+- Persistent streamed chat with bounded context and `@company` entity references.
+- SEC company lookup, CompanyFacts statements, and EDGAR HTML/TXT filing ingestion.
+- Alpha Vantage daily market data with source metadata, pacing, and freshness warnings.
+- Financial report, stock, and explicit company/macro/sector specialist analysis.
+- Bounded orchestration, persisted handoffs, deterministic synthesis, evidence inspection, and
+  local trace/debug views.
+- Local vector retrieval and explicit cited answers over stored filing chunks.
+- Immutable Markdown, self-contained HTML, and PDF report snapshots.
+- SQLite migrations, integrity checks, backup, restore, cleanup, and guarded legacy JSON import.
+- Offline evaluation harness, Docker packaging, local llama.cpp profiles, and an optional
+  read-only A2A/MCP interoperability spike.
+- Swappable OpenAI, Anthropic, Gemini, and LiteLLM provider adapters with explicit capability
+  and credential status.
+- One reproducible Novo Nordisk integration scenario. This demonstrates system integration, not
+  general financial accuracy.
 
-This includes companies, securities, chat sessions, market series, statements, filing/chunk
-metadata, cited runs, orchestrator handoffs, background job history, and non-secret runtime
-settings. Filing source documents and extracted text, report exports, retrieval vector indexes,
-embedding caches, and provider caches remain filesystem artifacts. Secrets remain
-environment-only.
+Intentional limitations:
 
-Existing installations with legacy JSON stores do not import automatically. Back up and import
-them explicitly before starting the app with SQLite:
+- No buy/sell/hold recommendations, trading, broker integration, price targets, or alerts.
+- No automatic news/macro ingestion, PDF extraction, or automatic RAG on every chat message.
+- No production A2A server, hosted telemetry, automatic provider fallback, or public benchmark
+  claims yet.
+- Market data may be delayed or provider-limited. SEC coverage is limited to SEC filers.
+- Local LLM quality depends on the selected model, runtime, prompt budget, and hardware.
 
-```powershell
-python -m financial_research_agent storage-migrate --pretty
-python -m financial_research_agent storage-check --full --pretty
-```
+See [Roadmap](docs/roadmap.md) for the honest backlog.
 
-The importer validates legacy contracts, creates a hashed backup under `FRA_HOME/backups/`,
-builds a temporary database, checks counts and integrity, then activates it atomically. Set
-`FRA_STORAGE_PROVIDER=local-json` only when the compatibility path is intentionally required.
+## Data And Trust
 
-The embedding cache stores provider/model/text hashes and vectors, not raw prompt or
-document text.
-
-Use these commands to inspect or clean local state:
-
-```powershell
-python -m financial_research_agent storage-status --pretty
-python -m financial_research_agent storage-check --full --pretty
-python -m financial_research_agent storage-backup --pretty
-python -m financial_research_agent cache-clear --pretty
-python -m financial_research_agent data-reset --yes --pretty
-```
-
-`storage-cleanup` is a dry run unless `--yes` is supplied. Filing source document cleanup also
-requires `--include-source-documents`. `cache-clear` removes clearable provider caches.
-`data-reset --yes` clears resettable SQLite tables transactionally and removes resettable file
-artifacts while preserving schema history, backups, and logs.
-
-## Data Sources
-
-| Area | Primary source | Notes |
+| Area | Primary source | Local handling |
 | --- | --- | --- |
-| Company lookup | SEC company ticker list | SEC filer coverage only |
-| Market data | Alpha Vantage daily prices | Requires API key; delayed/provider-limited |
-| Financial statements | SEC companyfacts XBRL JSON | SEC filers only |
-| Filings | SEC EDGAR submissions and Archives | Primary HTML/TXT extraction only |
-| Retrieval | Local vector index | Derived from already stored filing chunks |
-| Context | Explicit user/API-provided source items | No automatic news scraping yet |
+| Company identifiers | SEC company ticker data | SQLite + cache |
+| Daily prices | Alpha Vantage | SQLite |
+| Financial statements | SEC CompanyFacts | SQLite |
+| Filings | SEC EDGAR submissions and archives | Metadata in SQLite; raw/text files locally |
+| Context | Versioned, dated official-source snapshot | Package resource + persisted handoff |
+| Reports | Persisted specialist handoffs | Immutable local exports |
 
-Every research path is expected to preserve source URLs, retrieval timestamps, provider
-labels, and limitations. Fake data is only for tests and clearly labeled fixtures.
+External documents are treated as untrusted evidence, never as instructions. API keys stay in
+environment variables. Runtime state lives under `FRA_HOME`, which defaults to
+`~/.financial-research-agent`.
 
-## Financial Advice Policy
+This software provides research tooling, not financial advice.
 
-This project is for research support only. It does not provide personalized financial
-advice, trading signals, price targets, or buy/sell/hold recommendations.
+## Development
 
-Outputs should be treated as source-linked analysis drafts that require human review.
-Provider limits, stale data, missing filings, incomplete identifiers, and local model
-limitations must be considered before using any result.
-
-## Testing
-
-Run the local verification suite:
+Common commands:
 
 ```powershell
-python -m pytest
-python -m ruff check .
-python -m ruff format --check .
-python -m compileall -q src tests
+python scripts/dev.py lint
+python scripts/dev.py test
+python scripts/dev.py check
 python -m financial_research_agent eval --pretty
-python -m build
-git diff --check
+python -m financial_research_agent storage-check --full --pretty
 ```
 
-The default eval command runs offline against fixture-labeled artifacts. It checks schema
-paths, citation coverage, source freshness, refusal behavior, hallucination-sensitive
-patterns, and trace components. LLM-as-judge evaluation is represented as a separate
-skipped check unless a future milestone explicitly configures it.
+`python scripts/dev.py check` runs docs validation, Ruff, tests, compilation, deterministic
+evaluation, and package build.
 
-Validate Docker Compose without starting services:
+## Documentation
 
-```powershell
-docker compose config --quiet
-docker compose --profile cpu config --quiet
-docker compose --profile cuda config --quiet
-```
-
-## Project Status
-
-Financial Research Agent is in active early development. The current codebase is useful as
-a local research foundation and integration testbed, but it is not a production investment
-platform.
-
-Near-term direction:
-
-- more provider adapters
-- optional narrative report writing over source-backed exports
-- better identifier resolution
-- PDF and additional document formats
-- more complete retrieval workflows
-
-## References
-
-- [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
-- [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)
-- [OpenAI API reference](https://developers.openai.com/api/reference/overview/)
-- [SEC EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
-- [SEC EDGAR access policy](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data)
-- [Alpha Vantage documentation](https://www.alphavantage.co/documentation/)
-- [Agent2Agent Protocol](https://github.com/a2aproject/A2A)
-- [Model Context Protocol](https://modelcontextprotocol.io/specification/2025-03-26/)
+- [Architecture](docs/architecture.md)
+- [Demo walkthrough](docs/demo.md)
+- [Engineering notes](docs/engineering-notes.md)
+- [LLM providers](docs/providers.md)
+- [Roadmap](docs/roadmap.md)
+- [Local development](docs/local-development.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
 ## License
 

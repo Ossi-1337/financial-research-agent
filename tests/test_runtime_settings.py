@@ -16,6 +16,9 @@ def test_runtime_settings_overrides_are_applied_without_storing_secrets() -> Non
     base = Settings.from_env(
         {
             "FRA_OPENAI_API_KEY": "secret-key",
+            "FRA_ANTHROPIC_API_KEY": "anthropic-key",
+            "FRA_GEMINI_API_KEY": "gemini-key",
+            "FRA_LITELLM_API_KEY": "litellm-key",
             "FRA_ALPHA_VANTAGE_API_KEY": "alpha-key",
         }
     )
@@ -35,6 +38,9 @@ def test_runtime_settings_overrides_are_applied_without_storing_secrets() -> Non
     assert settings.provider.llm_model == "test-model"
     assert settings.provider.llm_base_url == "http://127.0.0.1:8080/v1"
     assert settings.provider.openai_api_key == "secret-key"
+    assert settings.provider.anthropic_api_key == "anthropic-key"
+    assert settings.provider.gemini_api_key == "gemini-key"
+    assert settings.provider.litellm_api_key == "litellm-key"
     assert settings.data_sources.alpha_vantage_api_key == "alpha-key"
     assert settings.retrieval.top_k == 9
     assert settings.background.max_concurrent_research_runs == 2
@@ -66,6 +72,9 @@ def test_runtime_settings_reject_unknown_and_secret_fields() -> None:
 
     with pytest.raises(ValueError, match="Secret settings are environment-only"):
         RuntimeSettingsOverrides.from_mapping({"openai_api_key": "secret"})
+    for field in ("anthropic_api_key", "gemini_api_key", "litellm_api_key"):
+        with pytest.raises(ValueError, match="Secret settings are environment-only"):
+            RuntimeSettingsOverrides.from_mapping({field: "secret"})
 
 
 def test_runtime_settings_store_clear_removes_overrides(tmp_path: Path) -> None:

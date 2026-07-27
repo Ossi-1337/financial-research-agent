@@ -57,6 +57,9 @@ from financial_research_agent.llm import (
     ProviderErrorCode,
     StreamEventType,
 )
+from financial_research_agent.llm.anthropic import AnthropicProvider
+from financial_research_agent.llm.gemini import GeminiProvider
+from financial_research_agent.llm.litellm import LiteLLMGatewayProvider
 from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
 from financial_research_agent.llm.offline import OfflineTestProvider
 from financial_research_agent.llm.openai import OpenAIProvider
@@ -132,6 +135,7 @@ from financial_research_agent.scenarios import (
     ScenarioError,
     ScenarioErrorCode,
     ScenarioExecutionStatus,
+    ScenarioLocalQA,
     ScenarioRunner,
     create_default_scenario_catalog,
 )
@@ -291,6 +295,9 @@ class RuntimeSettingsRequest(BaseModel):
     llm_local_runtime: str | None = Field(default=None, min_length=1, max_length=80)
     llm_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
     openai_api_key: str | None = Field(default=None, max_length=500)
+    anthropic_api_key: str | None = Field(default=None, max_length=500)
+    gemini_api_key: str | None = Field(default=None, max_length=500)
+    litellm_api_key: str | None = Field(default=None, max_length=500)
     alpha_vantage_api_key: str | None = Field(default=None, max_length=500)
     interop_api_key: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=500)
@@ -961,6 +968,8 @@ def create_app(
             )
             report = _synthesis_report_from_run(run)
             content = _synthesis_message_content(run, report)
+            if result.local_qa is not None:
+                content = _append_scenario_local_qa(content, result.local_qa)
             if result.status == ScenarioExecutionStatus.FAILED:
                 content = f"Scenario validation found missing acceptance data.\n\n{content}"
             sessions.append_exchange(
@@ -1615,6 +1624,9 @@ def _settings_payload(
             "strategy": "environment_only",
             "plaintext_storage": "disabled",
             "openai_api_key_configured": settings.provider.openai_api_key is not None,
+            "anthropic_api_key_configured": settings.provider.anthropic_api_key is not None,
+            "gemini_api_key_configured": settings.provider.gemini_api_key is not None,
+            "litellm_api_key_configured": settings.provider.litellm_api_key is not None,
             "alpha_vantage_api_key_configured": (
                 settings.data_sources.alpha_vantage_api_key is not None
             ),
@@ -1664,6 +1676,9 @@ def _provider_options_payload(
         OfflineTestProvider().metadata,
         OpenAICompatibleLocalProvider.from_settings(settings.provider).metadata,
         OpenAIProvider.from_settings(settings.provider).metadata,
+        AnthropicProvider.from_settings(settings.provider).metadata,
+        GeminiProvider.from_settings(settings.provider).metadata,
+        LiteLLMGatewayProvider.from_settings(settings.provider).metadata,
     )
     return [
         _provider_metadata_payload(
@@ -1718,6 +1733,14 @@ async def _provider_health_payload(provider: str, settings: Settings) -> dict[st
         ).to_dict()
     if normalized == "openai":
         return (await OpenAIProvider.from_settings(settings.provider).check_health()).to_dict()
+    if normalized == "anthropic":
+        return (await AnthropicProvider.from_settings(settings.provider).check_health()).to_dict()
+    if normalized == "gemini":
+        return (await GeminiProvider.from_settings(settings.provider).check_health()).to_dict()
+    if normalized == "litellm":
+        return (
+            await LiteLLMGatewayProvider.from_settings(settings.provider).check_health()
+        ).to_dict()
     raise HTTPException(
         status_code=404,
         detail={"error": "provider_not_supported", "provider": normalized},
@@ -1930,6 +1953,18 @@ def _synthesis_message_content(
     if isinstance(notice, str) and notice.strip():
         parts.append(notice)
     return "\n\n".join(parts) if parts else "Synthesis report generated."
+
+
+def _append_scenario_local_qa(content: str, local_qa: ScenarioLocalQA) -> str:
+    markers = ", ".join(local_qa.source_markers) or "No resolved source markers"
+    return (
+        f"{content}\n\n"
+        "## LLM-generated source-bounded Q&A\n"
+        f"{local_qa.answer}\n\n"
+        f"Sources: {markers}\n"
+        f"Provider: {local_qa.provider} / {local_qa.model}\n"
+        "This optional answer does not modify the deterministic report."
+    )
 
 
 def _message_content(content: str) -> str:

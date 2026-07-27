@@ -98,3 +98,19 @@ def test_health_report_includes_openai_provider_when_configured(monkeypatch) -> 
     assert report["status"] == "ok"
     assert report["online_provider"]["authenticated"] is True
     assert report["online_provider"]["available_models"] == ["gpt-5.5"]
+
+
+def test_health_report_marks_unconfigured_anthropic_as_degraded() -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_LLM_PROVIDER": "anthropic",
+            "FRA_LLM_MODEL": "claude-configured",
+        }
+    )
+
+    report = build_health_report(settings)
+
+    assert report["status"] == "degraded"
+    assert report["online_provider"]["provider"] == "anthropic"
+    assert report["online_provider"]["status"] == "missing_api_key"
+    assert report["online_provider"]["authenticated"] is False

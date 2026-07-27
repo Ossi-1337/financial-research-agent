@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+import asyncio
+import time
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -32,6 +34,25 @@ class AlphaVantageProvider:
     base_url: str = ALPHA_VANTAGE_BASE_URL
     http_client: httpx.AsyncClient | None = None
     now: Callable[[], datetime] | None = None
+    minimum_request_interval_seconds: float = 2.0
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    monotonic: Callable[[], float] = time.monotonic
+    _request_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _last_request_at: list[float] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        if self.minimum_request_interval_seconds < 0:
+            raise ValueError("minimum_request_interval_seconds must not be negative")
 
     async def fetch_daily_prices(
         self,
@@ -109,6 +130,7 @@ class AlphaVantageProvider:
         )
 
     async def _get(self, params: Mapping[str, object]) -> Mapping[str, Any]:
+        await self._wait_for_request_slot()
         try:
             if self.http_client is None:
                 async with httpx.AsyncClient(timeout=20.0) as client:
@@ -171,6 +193,16 @@ class AlphaVantageProvider:
             )
         _raise_for_alpha_vantage_message(payload)
         return payload
+
+    async def _wait_for_request_slot(self) -> None:
+        async with self._request_lock:
+            now = self.monotonic()
+            if self._last_request_at:
+                remaining = self.minimum_request_interval_seconds - (now - self._last_request_at[0])
+                if remaining > 0:
+                    await self.sleep(remaining)
+                    now = self.monotonic()
+            self._last_request_at[:] = [now]
 
     def _source(self, *, data_as_of: date | None = None) -> MarketDataSource:
         return MarketDataSource(

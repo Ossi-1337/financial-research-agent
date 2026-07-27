@@ -98,6 +98,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="context-source-list"' in root_response.text
     assert 'id="settings-panel"' in root_response.text
     assert 'id="settings-button"' in root_response.text
+    assert '<option value="anthropic">anthropic</option>' in root_response.text
+    assert '<option value="gemini">gemini</option>' in root_response.text
+    assert '<option value="litellm">litellm</option>' in root_response.text
     assert 'class="composer-action"' in root_response.text
     assert 'id="company-search-form"' not in root_response.text
     assert 'id="selected-company"' not in root_response.text
@@ -121,6 +124,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".synthesis-report" in css_response.text
     assert ".trace-timeline" in css_response.text
     assert ".settings-panel" in css_response.text
+    assert "max-width: calc(100% - 98px)" in css_response.text
+    assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
 
 
 def test_static_script_contains_mention_autocomplete_wiring() -> None:
@@ -140,6 +145,8 @@ def test_static_script_contains_mention_autocomplete_wiring() -> None:
     assert "renderMessageCitations" in response.text
     assert "renderContextPanel" in response.text
     assert "renderSynthesisReport" in response.text
+    assert "normalizeAlignedChartSeries" in response.text
+    assert "Shared period:" in response.text
     assert "createReportExport" in response.text
     assert "renderTraceTimeline" in response.text
     assert "loadRunTrace" in response.text
@@ -164,6 +171,9 @@ def test_runtime_settings_endpoint_returns_redacted_provider_management_payload(
     settings = Settings.from_env(
         {
             "FRA_OPENAI_API_KEY": "secret-value",
+            "FRA_ANTHROPIC_API_KEY": "anthropic-secret",
+            "FRA_GEMINI_API_KEY": "gemini-secret",
+            "FRA_LITELLM_API_KEY": "litellm-secret",
             "FRA_ALPHA_VANTAGE_API_KEY": "alpha-secret",
         }
     )
@@ -178,10 +188,19 @@ def test_runtime_settings_endpoint_returns_redacted_provider_management_payload(
     assert payload["secrets"]["strategy"] == "environment_only"
     assert payload["secrets"]["plaintext_storage"] == "disabled"
     assert payload["secrets"]["openai_api_key_configured"] is True
+    assert payload["secrets"]["anthropic_api_key_configured"] is True
+    assert payload["secrets"]["gemini_api_key_configured"] is True
+    assert payload["secrets"]["litellm_api_key_configured"] is True
+    assert {"anthropic", "gemini", "litellm"} <= {
+        provider["provider"] for provider in payload["providers"]
+    }
     assert any(provider["provider"] == "offline-test" for provider in payload["providers"])
     assert payload["management"]["cache_clear_endpoint"] == "/api/storage/cache"
     assert "secret-value" not in dumped
     assert "alpha-secret" not in dumped
+    assert "anthropic-secret" not in dumped
+    assert "gemini-secret" not in dumped
+    assert "litellm-secret" not in dumped
 
 
 def test_runtime_settings_update_changes_chat_model_without_restart() -> None:
@@ -210,6 +229,10 @@ def test_runtime_settings_reject_secret_fields_and_can_reset() -> None:
 
     rejected = client.put("/api/settings", json={"openai_api_key": "secret-value"})
     rejected_generic = client.put("/api/settings", json={"api_key": "another-secret"})
+    rejected_anthropic = client.put(
+        "/api/settings",
+        json={"anthropic_api_key": "anthropic-secret"},
+    )
     saved = client.put("/api/settings", json={"llm_model": "custom-offline-model"})
     reset = client.delete("/api/settings")
 
@@ -217,6 +240,8 @@ def test_runtime_settings_reject_secret_fields_and_can_reset() -> None:
     assert "secret-value" not in json.dumps(rejected.json())
     assert rejected_generic.status_code == 400
     assert "another-secret" not in json.dumps(rejected_generic.json())
+    assert rejected_anthropic.status_code == 400
+    assert "anthropic-secret" not in json.dumps(rejected_anthropic.json())
     assert saved.json()["overrides"]["llm_model"] == "custom-offline-model"
     assert reset.status_code == 200
     assert reset.json()["overrides"] == {}
@@ -1181,6 +1206,39 @@ def test_novo_scenario_endpoint_uses_background_progress_evidence_and_exports(
     assert secret not in json.dumps(evidence_response.json())
 
 
+def test_novo_scenario_local_qa_is_labeled_in_chat_without_changing_report(
+    tmp_path,
+) -> None:
+    provider = SourceBoundedProvider()
+    registry = ProviderRegistry().register_chat_provider("capture", provider)
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_ALPHA_VANTAGE_API_KEY": "TEST_ALPHA_VANTAGE_SECRET",
+            "FRA_SEC_USER_AGENT": "financial-research-agent-tests test@example.com",
+            "FRA_LLM_PROVIDER": "capture",
+            "FRA_LLM_MODEL": "capture-model",
+        }
+    )
+    client = _client(settings=settings, registry=registry)
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    response = client.post(
+        "/api/scenarios/novo-nordisk/runs",
+        json={"session_id": session_id, "refresh": True, "with_local_qa": True},
+    )
+    job = _poll_background_job(client, response.json()["job"]["id"])
+    session = client.get(f"/api/sessions/{session_id}").json()["session"]
+    assistant = session["messages"][-1]
+
+    assert job["status"] == "succeeded"
+    assert "## LLM-generated source-bounded Q&A" in assistant["content"]
+    assert "Source-bounded TEST answer [S1]." in assistant["content"]
+    assert "does not modify the deterministic report" in assistant["content"]
+    assert "local_qa" not in assistant["synthesis_report"]
+    assert provider.requests
+
+
 def test_novo_scenario_endpoint_maps_preflight_and_unknown_scenario_errors(tmp_path) -> None:
     client = _client(settings=Settings.from_env({"FRA_HOME": str(tmp_path)}))
     session_id = client.post("/api/sessions").json()["session"]["id"]
@@ -1315,6 +1373,19 @@ class CapturingProvider:
         yield StreamEvent(event_type=StreamEventType.MESSAGE_DELTA, delta="captured")
         yield StreamEvent(event_type=StreamEventType.MESSAGE_DELTA, delta=" response")
         yield StreamEvent(event_type=StreamEventType.COMPLETED, response=response)
+
+
+class SourceBoundedProvider(CapturingProvider):
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        self.requests.append(request)
+        return ChatResponse(
+            message=ChatMessage(
+                role=MessageRole.ASSISTANT,
+                content="Source-bounded TEST answer [S1].",
+            ),
+            provider="capture",
+            model=request.model or "capture-model",
+        )
 
 
 class FakeCompanySearchProvider:

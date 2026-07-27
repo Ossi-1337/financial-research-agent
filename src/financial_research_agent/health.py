@@ -5,6 +5,9 @@ import platform
 from typing import Any
 
 from financial_research_agent import __version__
+from financial_research_agent.llm.anthropic import AnthropicProvider
+from financial_research_agent.llm.gemini import GeminiProvider
+from financial_research_agent.llm.litellm import LiteLLMGatewayProvider
 from financial_research_agent.llm.local_openai import OpenAICompatibleLocalProvider
 from financial_research_agent.llm.openai import OpenAIProvider
 from financial_research_agent.llm.registry import create_default_provider_registry
@@ -72,8 +75,8 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
         "notes": [
             "Foundation health check only.",
             (
-                "LLM calls use offline-test by default; local-openai or openai only run "
-                "when configured."
+                "LLM calls use offline-test by default; network providers only run when "
+                "explicitly configured."
             ),
             (
                 "SEC company ticker lookup and Alpha Vantage daily market data ingestion "
@@ -106,5 +109,15 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
         )
         report["online_provider"] = online_provider.to_dict()
         if not online_provider.reachable or not online_provider.authenticated:
+            report["status"] = "degraded"
+    elif settings.provider.llm_provider in {"anthropic", "gemini", "litellm"}:
+        provider = {
+            "anthropic": AnthropicProvider.from_settings,
+            "gemini": GeminiProvider.from_settings,
+            "litellm": LiteLLMGatewayProvider.from_settings,
+        }[settings.provider.llm_provider](settings.provider)
+        provider_health = asyncio.run(provider.check_health())
+        report["online_provider"] = provider_health.to_dict()
+        if not provider_health.reachable or not provider_health.authenticated:
             report["status"] = "degraded"
     return report

@@ -13,7 +13,7 @@ def create_default_scenario_catalog() -> ScenarioCatalog:
                 preferred_exchange="NYSE",
                 fiscal_years=3,
                 filing_form_limits={"20-F": 1, "6-K": 1},
-                market_outputsize="full",
+                market_outputsize="compact",
                 benchmark_symbol="SPY",
                 context_resource="novo_nordisk_context.v1.json",
             ),

@@ -1,5 +1,6 @@
 """Provider-neutral LLM contracts and offline test provider."""
 
+from financial_research_agent.llm.anthropic import AnthropicProvider
 from financial_research_agent.llm.contracts import (
     ChatMessage,
     ChatProvider,
@@ -9,11 +10,13 @@ from financial_research_agent.llm.contracts import (
     EmbeddingRequest,
     EmbeddingResponse,
     FinishReason,
+    HealthCheckProvider,
     MessageRole,
     ModelMetadata,
     ProviderCapability,
     ProviderError,
     ProviderErrorCode,
+    ProviderHealth,
     ResponseFormat,
     ResponseFormatType,
     RetryPolicy,
@@ -23,6 +26,8 @@ from financial_research_agent.llm.contracts import (
     ToolCall,
     ToolDefinition,
 )
+from financial_research_agent.llm.gemini import GeminiProvider
+from financial_research_agent.llm.litellm import LiteLLMGatewayProvider
 from financial_research_agent.llm.local_openai import (
     LocalEndpointHealth,
     LocalRuntime,
@@ -42,6 +47,7 @@ from financial_research_agent.llm.registry import (
 )
 
 __all__ = [
+    "AnthropicProvider",
     "ChatMessage",
     "ChatProvider",
     "ChatRequest",
@@ -50,6 +56,9 @@ __all__ = [
     "EmbeddingRequest",
     "EmbeddingResponse",
     "FinishReason",
+    "GeminiProvider",
+    "HealthCheckProvider",
+    "LiteLLMGatewayProvider",
     "LocalEndpointHealth",
     "LocalRuntime",
     "MessageRole",
@@ -62,6 +71,7 @@ __all__ = [
     "ProviderCapability",
     "ProviderError",
     "ProviderErrorCode",
+    "ProviderHealth",
     "ProviderRegistry",
     "ResponseFormat",
     "ResponseFormatType",

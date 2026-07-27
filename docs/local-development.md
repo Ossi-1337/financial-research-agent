@@ -37,13 +37,13 @@ chat smoke tests, not high-quality financial research. The CUDA default is
 Override models or cache location in `.env`:
 
 ```dotenv
-FRA_CPU_MODEL=your-cpu-gguf-repository:quant
-FRA_CUDA_MODEL=your-cuda-gguf-repository:quant
-FRA_HUGGINGFACE_CACHE=C:\Users\your-name\.cache\huggingface
+FRA_CPU_MODEL=ggml-org/gemma-3-1b-it-GGUF:Q4_K_M
+FRA_CUDA_MODEL=unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF:UD-Q4_K_XL
 ```
 
 Model files are downloaded by llama.cpp only when a model profile starts. They are never
-bundled in the app image or repository.
+bundled in the app image or repository. Set `FRA_HUGGINGFACE_CACHE` to an absolute local cache
+directory when the Compose default should be overridden.
 
 ## Direct Python
 

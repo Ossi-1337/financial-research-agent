@@ -19,6 +19,9 @@ RUNTIME_SETTINGS_STORE_VERSION = 1
 
 _SECRET_FIELD_NAMES = {
     "openai_api_key",
+    "anthropic_api_key",
+    "gemini_api_key",
+    "litellm_api_key",
     "alpha_vantage_api_key",
     "interop_api_key",
     "api_key",
@@ -199,6 +202,13 @@ def _replace_provider_settings(
         openai_base_url=settings.openai_base_url,
         openai_organization=settings.openai_organization,
         openai_project=settings.openai_project,
+        anthropic_api_key=settings.anthropic_api_key,
+        anthropic_base_url=settings.anthropic_base_url,
+        anthropic_api_version=settings.anthropic_api_version,
+        gemini_api_key=settings.gemini_api_key,
+        gemini_base_url=settings.gemini_base_url,
+        litellm_api_key=settings.litellm_api_key,
+        litellm_base_url=settings.litellm_base_url,
         chat_provider=(
             overrides.chat_provider
             if overrides.chat_provider is not None

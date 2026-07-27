@@ -125,6 +125,7 @@ def test_check_runs_expected_python_commands(monkeypatch: pytest.MonkeyPatch) ->
 
     assert dev.main(["check"]) == 0
     assert calls == [
+        [sys.executable, "scripts/check_docs.py"],
         [sys.executable, "-m", "ruff", "check", "."],
         [sys.executable, "-m", "ruff", "format", "--check", "."],
         [sys.executable, "-m", "pytest"],

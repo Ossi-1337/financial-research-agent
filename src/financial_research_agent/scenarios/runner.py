@@ -13,6 +13,7 @@ from financial_research_agent.llm import (
 )
 from financial_research_agent.orchestration import (
     OrchestratedResearchRun,
+    OrchestratorHandoffStatus,
     OrchestratorResearchInput,
     OrchestratorRunStatus,
     OrchestratorStepKind,
@@ -320,12 +321,41 @@ def _scenario_checks(
         OrchestratorStepKind.CONTEXT_ANALYSIS,
         OrchestratorStepKind.SYNTHESIS,
     }
+    specialist_statuses = {
+        kind: handoffs[kind].status for kind in specialist_kinds if kind in handoffs
+    }
+    missing_or_failed = specialist_kinds.difference(specialist_statuses) or any(
+        status in {OrchestratorHandoffStatus.FAILED, OrchestratorHandoffStatus.SKIPPED}
+        for status in specialist_statuses.values()
+    )
+    partial = any(
+        status == OrchestratorHandoffStatus.PARTIAL for status in specialist_statuses.values()
+    )
     checks.append(
-        _presence_check(
-            "specialists_and_synthesis",
-            specialist_kinds.issubset(handoffs)
-            and run.status in {OrchestratorRunStatus.COMPLETE, OrchestratorRunStatus.PARTIAL},
-            "Specialist handoffs and deterministic synthesis are present.",
+        ScenarioCheck(
+            id="specialists_and_synthesis",
+            status=(
+                ScenarioCheckStatus.FAILED
+                if missing_or_failed
+                else ScenarioCheckStatus.WARNING
+                if partial or run.status == OrchestratorRunStatus.PARTIAL
+                else ScenarioCheckStatus.PASSED
+            ),
+            message=(
+                "Specialist handoffs and deterministic synthesis are available."
+                if not missing_or_failed
+                else "One or more required specialist handoffs or synthesis outputs failed."
+            ),
+            details={
+                "handoff_statuses": {
+                    kind.value: status.value
+                    for kind, status in sorted(
+                        specialist_statuses.items(),
+                        key=lambda item: item[0].value,
+                    )
+                },
+                "run_status": run.status.value,
+            },
         )
     )
     checks.append(

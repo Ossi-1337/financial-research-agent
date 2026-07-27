@@ -314,8 +314,20 @@ def raise_http_error(
 ) -> None:
     status_code = response.status_code
     error_message, provider_code = _error_details_from_response(response)
-    if provider_code == "context_length_exceeded" or "context length" in error_message.lower():
+    normalized_message = error_message.lower()
+    if provider_code in {"context_length_exceeded", "request_too_large"} or any(
+        marker in normalized_message
+        for marker in (
+            "context length",
+            "context window",
+            "input token count exceeds",
+            "prompt is too long",
+        )
+    ):
         code = ProviderErrorCode.CONTEXT_LENGTH_EXCEEDED
+        retryable = False
+    elif "not supported" in normalized_message or "unsupported" in normalized_message:
+        code = ProviderErrorCode.UNSUPPORTED_FEATURE
         retryable = False
     elif status_code in (400, 422):
         code = ProviderErrorCode.INVALID_REQUEST
@@ -323,7 +335,7 @@ def raise_http_error(
     elif status_code in (401, 403):
         code = ProviderErrorCode.AUTHENTICATION_FAILED
         retryable = False
-    elif status_code in (408,):
+    elif status_code in (408, 504):
         code = ProviderErrorCode.TIMEOUT
         retryable = True
     elif status_code in (409,):
@@ -488,7 +500,7 @@ def _error_details_from_response(response: httpx.Response) -> tuple[str, str | N
     if not isinstance(error, Mapping):
         return "", None
     message = error.get("message")
-    code = error.get("code")
+    code = error.get("code", error.get("type"))
     return (
         message if isinstance(message, str) else "",
         code if isinstance(code, str) else None,

@@ -20,6 +20,12 @@ def test_required_runtime_resources_are_packaged() -> None:
         .joinpath("data/novo_nordisk_context.v1.json")
         .is_file()
     )
+    scenario_context = (
+        files("financial_research_agent.scenarios")
+        .joinpath("data/novo_nordisk_context.v1.json")
+        .read_text(encoding="utf-8")
+    )
+    assert scenario_context.strip().startswith("{")
 
 
 def test_runtime_docker_stage_contains_only_installed_package() -> None:

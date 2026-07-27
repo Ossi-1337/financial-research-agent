@@ -17,6 +17,7 @@ from financial_research_agent.llm.contracts import (
     ProviderCapability,
     ProviderError,
     ProviderErrorCode,
+    ProviderHealth,
     StreamEvent,
     StreamEventType,
     TokenUsage,
@@ -35,32 +36,7 @@ class OpenAIModelProfile:
     max_output_tokens: int | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class OnlineProviderHealth:
-    provider: str
-    base_url: str
-    model: str
-    reachable: bool
-    authenticated: bool
-    status: str
-    available_models: tuple[str, ...] = ()
-    capabilities: tuple[ProviderCapability, ...] = ()
-    limitations: tuple[str, ...] = ()
-    error: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "provider": self.provider,
-            "base_url": self.base_url,
-            "model": self.model,
-            "reachable": self.reachable,
-            "authenticated": self.authenticated,
-            "status": self.status,
-            "available_models": list(self.available_models),
-            "capabilities": [capability.value for capability in self.capabilities],
-            "limitations": list(self.limitations),
-            "error": self.error,
-        }
+OnlineProviderHealth = ProviderHealth
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +49,10 @@ class OpenAIProvider:
     embedding_model: str = DEFAULT_OPENAI_EMBEDDING_MODEL
     timeout_seconds: float = 30.0
     provider: str = "openai"
+    service_label: str = "OpenAI API"
+    user_agent: str = "financial-research-agent/openai"
+    require_api_key: bool = True
+    limitations: tuple[str, ...] = field(default_factory=lambda: _openai_limitations())
     client: httpx.AsyncClient | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -87,6 +67,17 @@ class OpenAIProvider:
             _wire.require_text("embedding_model", self.embedding_model),
         )
         object.__setattr__(self, "provider", _wire.require_text("provider", self.provider))
+        object.__setattr__(
+            self,
+            "service_label",
+            _wire.require_text("service_label", self.service_label),
+        )
+        object.__setattr__(self, "user_agent", _wire.require_text("user_agent", self.user_agent))
+        object.__setattr__(
+            self,
+            "limitations",
+            tuple(_wire.require_text("limitation", value) for value in self.limitations),
+        )
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
@@ -129,7 +120,7 @@ class OpenAIProvider:
             self.provider,
             selected_model,
             request,
-            "OpenAI API",
+            self.service_label,
         )
 
     async def stream_chat(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
@@ -175,11 +166,11 @@ class OpenAIProvider:
             data,
             self.provider,
             selected_model,
-            "OpenAI API",
+            self.service_label,
         )
 
     async def check_health(self) -> OnlineProviderHealth:
-        if self.api_key is None:
+        if self.require_api_key and self.api_key is None:
             return OnlineProviderHealth(
                 provider=self.provider,
                 base_url=self.base_url,
@@ -188,8 +179,8 @@ class OpenAIProvider:
                 authenticated=False,
                 status="missing_api_key",
                 capabilities=(),
-                limitations=_openai_limitations(),
-                error="OpenAI API key is not configured.",
+                limitations=self.limitations,
+                error=f"{self.service_label} API key is not configured.",
             )
 
         try:
@@ -208,7 +199,7 @@ class OpenAIProvider:
                 authenticated=authenticated,
                 status="unreachable" if not reachable else "error",
                 capabilities=(),
-                limitations=_openai_limitations(),
+                limitations=self.limitations,
                 error=exc.message,
             )
 
@@ -222,7 +213,7 @@ class OpenAIProvider:
             status="ok",
             available_models=available_models,
             capabilities=profile.capabilities,
-            limitations=_openai_limitations(),
+            limitations=self.limitations,
         )
 
     async def list_models(self) -> tuple[str, ...]:
@@ -238,20 +229,20 @@ class OpenAIProvider:
     ) -> Mapping[str, Any]:
         response = await self._request(method, path, json_payload=json_payload)
         if response.status_code >= 400:
-            _wire.raise_http_error(response, self.provider, self.model, "OpenAI API")
+            _wire.raise_http_error(response, self.provider, self.model, self.service_label)
         try:
             data = response.json()
         except ValueError as exc:
             raise ProviderError(
                 code=ProviderErrorCode.MALFORMED_RESPONSE,
-                message=f"OpenAI API returned malformed JSON from {path}.",
+                message=f"{self.service_label} returned malformed JSON from {path}.",
                 provider=self.provider,
                 model=self.model,
             ) from exc
         if not isinstance(data, Mapping):
             raise ProviderError(
                 code=ProviderErrorCode.MALFORMED_RESPONSE,
-                message=f"OpenAI API returned non-object JSON from {path}.",
+                message=f"{self.service_label} returned non-object JSON from {path}.",
                 provider=self.provider,
                 model=self.model,
             )
@@ -272,7 +263,7 @@ class OpenAIProvider:
                 json_payload=json_payload,
                 provider=self.provider,
                 model=self.model,
-                service_label="OpenAI API",
+                service_label=self.service_label,
             ):
                 yield data
 
@@ -291,14 +282,14 @@ class OpenAIProvider:
                     exc,
                     self.provider,
                     self.model,
-                    "OpenAI API",
+                    self.service_label,
                 ) from exc
             except httpx.RequestError as exc:
                 raise _wire.provider_error_from_request_error(
                     exc,
                     self.provider,
                     self.model,
-                    "OpenAI API",
+                    self.service_label,
                 ) from exc
 
     def _client_context(self) -> _wire.AsyncClientContext:
@@ -314,19 +305,16 @@ class OpenAIProvider:
         return _wire.AsyncClientContext(client, close=True)
 
     def _headers(self) -> dict[str, str]:
-        if self.api_key is None:
+        if self.api_key is None and self.require_api_key:
             raise ProviderError(
                 code=ProviderErrorCode.AUTHENTICATION_FAILED,
-                message=(
-                    "OpenAI API key is not configured. Set FRA_OPENAI_API_KEY or OPENAI_API_KEY."
-                ),
+                message=(f"{self.service_label} API key is not configured."),
                 provider=self.provider,
                 model=self.model,
             )
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "User-Agent": "financial-research-agent/openai",
-        }
+        headers = {"User-Agent": self.user_agent}
+        if self.api_key is not None:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if self.organization is not None:
             headers["OpenAI-Organization"] = self.organization
         if self.project is not None:

@@ -74,6 +74,8 @@ vite.svg
 .financial-research-agent/
 .docker/
 data/
+!src/financial_research_agent/scenarios/data/
+!src/financial_research_agent/scenarios/data/novo_nordisk_context.v1.json
 cache/
 .cache/
 logs/

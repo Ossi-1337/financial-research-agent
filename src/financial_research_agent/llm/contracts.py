@@ -153,6 +153,48 @@ class ModelMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderHealth:
+    provider: str
+    base_url: str
+    model: str
+    reachable: bool
+    authenticated: bool
+    status: str
+    available_models: tuple[str, ...] = ()
+    capabilities: tuple[ProviderCapability, ...] = ()
+    limitations: tuple[str, ...] = ()
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "provider", _require_text("provider", self.provider))
+        object.__setattr__(self, "base_url", _require_text("base_url", self.base_url))
+        object.__setattr__(self, "model", _require_text("model", self.model))
+        object.__setattr__(self, "status", _require_text("status", self.status))
+        object.__setattr__(
+            self,
+            "available_models",
+            _text_tuple("available_models", self.available_models),
+        )
+        object.__setattr__(self, "capabilities", _capability_tuple(self.capabilities))
+        object.__setattr__(self, "limitations", _text_tuple("limitations", self.limitations))
+        object.__setattr__(self, "error", _optional_text(self.error))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "provider": self.provider,
+            "base_url": self.base_url,
+            "model": self.model,
+            "reachable": self.reachable,
+            "authenticated": self.authenticated,
+            "status": self.status,
+            "available_models": list(self.available_models),
+            "capabilities": [capability.value for capability in self.capabilities],
+            "limitations": list(self.limitations),
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ChatRequest:
     messages: tuple[ChatMessage, ...]
     model: str | None = None
@@ -236,7 +278,7 @@ class EmbeddingResponse:
         object.__setattr__(self, "metadata", _text_mapping("metadata", self.metadata))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ProviderError(Exception):
     code: ProviderErrorCode
     message: str
@@ -322,6 +364,11 @@ class EmbeddingProvider(Protocol):
     def metadata(self) -> ModelMetadata: ...
 
     async def embed(self, request: EmbeddingRequest) -> EmbeddingResponse: ...
+
+
+@runtime_checkable
+class HealthCheckProvider(Protocol):
+    async def check_health(self) -> ProviderHealth: ...
 
 
 def _require_text(name: str, value: str) -> str:
@@ -414,6 +461,12 @@ def _required_text_tuple(name: str, values: Iterable[str]) -> tuple[str, ...]:
     if not result:
         raise ValueError(f"{name} must contain at least one value")
     return result
+
+
+def _text_tuple(name: str, values: Iterable[str]) -> tuple[str, ...]:
+    if isinstance(values, str):
+        raise ValueError(f"{name} must be an iterable of strings, not a string")
+    return tuple(_require_text(f"{name}[{index}]", value) for index, value in enumerate(values))
 
 
 def _capability_tuple(

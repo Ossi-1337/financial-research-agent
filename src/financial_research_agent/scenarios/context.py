@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -66,20 +67,27 @@ def _source_item(payload: object, *, now: datetime) -> ContextSourceItem:
     hostname = (parsed_url.hostname or "").lower()
     if parsed_url.scheme != "https" or not hostname or hostname == "localhost":
         raise _invalid("Context source URLs must use public HTTPS endpoints.")
-    if hostname.endswith((".invalid", ".local")):
+    if hostname.endswith((".invalid", ".local", ".test")):
         raise _invalid("Fixture and local context source URLs are not allowed.")
     metadata_payload = payload.get("metadata", {})
     if not isinstance(metadata_payload, Mapping):
         raise _invalid("Context source metadata must be an object.")
     metadata = {str(key): str(value) for key, value in metadata_payload.items()}
-    if metadata.get("fixture", "").lower() == "true":
+    marker_fields = (
+        payload.get("id"),
+        payload.get("title"),
+        payload.get("summary"),
+        payload.get("source_name"),
+        *metadata.values(),
+    )
+    if any(re.search(r"\bfixture\b", str(value), re.IGNORECASE) for value in marker_fields):
         raise _invalid("Fixture context sources are not allowed.")
     retrieved_at = _aware_datetime(payload.get("retrieved_at"), "retrieved_at")
     published_value = payload.get("published_at")
-    published_at = (
-        _aware_datetime(published_value, "published_at") if published_value is not None else None
-    )
-    if retrieved_at > now or (published_at is not None and published_at > now):
+    if published_value is None:
+        raise _invalid("Context sources must include published_at.")
+    published_at = _aware_datetime(published_value, "published_at")
+    if retrieved_at > now or published_at > now:
         raise _invalid("Future-dated context sources are not allowed.")
     try:
         return ContextSourceItem(

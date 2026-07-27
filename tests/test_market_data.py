@@ -168,6 +168,31 @@ def test_alpha_vantage_maps_malformed_daily_payload() -> None:
     assert exc_info.value.code == MarketDataErrorCode.MALFORMED_RESPONSE
 
 
+def test_alpha_vantage_spaces_requests_for_free_tier() -> None:
+    current = [100.0]
+    waits: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        waits.append(delay)
+        current[0] += delay
+
+    provider = AlphaVantageProvider(
+        api_key="test-key",
+        http_client=_client_with_json(DAILY_FIXTURE),
+        minimum_request_interval_seconds=2.0,
+        sleep=sleep,
+        monotonic=lambda: current[0],
+    )
+
+    async def fetch_twice() -> None:
+        await provider.fetch_daily_prices(MarketSecurity(symbol="NVO"))
+        await provider.fetch_daily_prices(MarketSecurity(symbol="SPY"))
+
+    asyncio.run(fetch_twice())
+
+    assert waits == [pytest.approx(2.0)]
+
+
 def test_market_data_store_persists_and_marks_stale_history(tmp_path) -> None:
     store = MarketDataStore(
         storage_path=tmp_path / "market_data_price_bars.json",
