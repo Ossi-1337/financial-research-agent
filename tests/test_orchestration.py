@@ -35,7 +35,10 @@ NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
 
 
 def test_orchestration_contracts_are_immutable_and_a2a_only() -> None:
-    request = OrchestratorResearchInput(query="Research TEST TOOL OUTPUT company")
+    request = OrchestratorResearchInput(
+        query="Research TEST TOOL OUTPUT company",
+        orchestrator_skill_references=("company-research@1.0.0",),
+    )
 
     assert OrchestratorExecutionPolicy.DISTRIBUTED_A2A.value == "distributed_a2a"
     assert OrchestratorExecutionPolicy.SEQUENTIAL_LOCAL_SAFE.value == "sequential_local_safe"
@@ -51,6 +54,7 @@ def test_orchestration_contracts_are_immutable_and_a2a_only() -> None:
     ]
     with pytest.raises(FrozenInstanceError):
         request.query = "changed"  # type: ignore[misc]
+    assert request.orchestrator_skill_references == ("company-research@1.0.0",)
 
 
 def test_orchestrator_requires_dispatcher() -> None:

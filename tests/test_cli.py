@@ -147,6 +147,22 @@ def test_a2a_serve_rejects_native_remote_bind_in_local_only_mode(
         main(["a2a-serve", "--host", "0.0.0.0"])
 
 
+def test_mcp_serve_uses_stdio_runtime(monkeypatch, tmp_path: Path) -> None:
+    calls = {}
+
+    def fake_run_mcp_stdio() -> None:
+        calls["called"] = True
+
+    monkeypatch.setenv("FRA_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "financial_research_agent.mcp.run_mcp_stdio",
+        fake_run_mcp_stdio,
+    )
+
+    assert main(["mcp-serve"]) == 0
+    assert calls["called"] is True
+
+
 def test_storage_status_command_outputs_manifest(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setenv("FRA_HOME", str(tmp_path))
 

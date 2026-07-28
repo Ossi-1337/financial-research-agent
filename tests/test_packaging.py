@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from importlib.resources import files
 from pathlib import Path
 
@@ -26,6 +27,15 @@ def test_required_runtime_resources_are_packaged() -> None:
         .read_text(encoding="utf-8")
     )
     assert scenario_context.strip().startswith("{")
+
+
+def test_mcp_sdk_is_optional_but_available_to_development_checks() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads(root.joinpath("pyproject.toml").read_text(encoding="utf-8"))
+    optional = config["project"]["optional-dependencies"]
+
+    assert optional["mcp"] == ["mcp>=1.28.1,<2"]
+    assert "mcp>=1.28.1,<2" in optional["dev"]
 
 
 def test_runtime_docker_stage_contains_only_installed_package() -> None:

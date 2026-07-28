@@ -570,6 +570,9 @@ def create_app(
                         specialist_roles=plan.decision.specialist_roles,
                         agent_provider=plan.provider.metadata.provider,
                         agent_model=plan.model,
+                        orchestrator_skill_references=tuple(
+                            f"{skill.id}@{skill.version.value}" for skill in plan.decision.skills
+                        ),
                     )
                 )
                 report = synthesis_report_from_run(run)
@@ -687,6 +690,9 @@ def create_app(
                     specialist_roles=plan.decision.specialist_roles,
                     agent_provider=plan.provider.metadata.provider,
                     agent_model=plan.model,
+                    orchestrator_skill_references=tuple(
+                        f"{skill.id}@{skill.version.value}" for skill in plan.decision.skills
+                    ),
                 ),
                 run=run_and_append,
                 metadata={"session_id": session_id},

@@ -75,6 +75,7 @@ class ResearchOrchestrator:
             specialist_roles=request.specialist_roles,
             agent_provider=agent_provider,
             agent_model=agent_model,
+            orchestrator_skill_references=request.orchestrator_skill_references,
             warnings=(
                 "Research uses the canonical A2A specialist topology.",
                 f"Selected specialists: {', '.join(request.specialist_roles)}.",

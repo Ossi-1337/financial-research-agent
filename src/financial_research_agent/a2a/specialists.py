@@ -737,6 +737,7 @@ def _agent_execution(
         model=result.model,
         tool_status=tool_status,
         reasoning_summary=str(result.output.get("reasoning_summary", "")),
+        skill_references=tuple(f"{skill.id}@{skill.version.value}" for skill in result.skills),
     )
 
 

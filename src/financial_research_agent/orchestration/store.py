@@ -110,6 +110,9 @@ def orchestrated_research_run_from_dict(payload: Any) -> OrchestratedResearchRun
         ),
         agent_provider=_optional_payload_text(payload, "agent_provider"),
         agent_model=_optional_payload_text(payload, "agent_model"),
+        orchestrator_skill_references=tuple(
+            str(item) for item in payload.get("orchestrator_skill_references", ())
+        ),
         handoffs=tuple(_handoff_from_payload(item) for item in payload.get("handoffs", ())),
         selected_company=_optional_mapping(payload.get("selected_company")),
         selected_security=_optional_mapping(payload.get("selected_security")),
@@ -179,6 +182,7 @@ def _execution_from_payload(value: Any) -> AgentExecutionMetadata | None:
         model=_optional_payload_text(value, "model"),
         tool_status=_optional_payload_text(value, "tool_status"),
         reasoning_summary=_optional_payload_text(value, "reasoning_summary"),
+        skill_references=tuple(str(item) for item in value.get("skill_references", ())),
     )
 
 

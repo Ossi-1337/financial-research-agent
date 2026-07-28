@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -36,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
             "health",
             "serve",
             "a2a-serve",
+            "mcp-serve",
             "storage-status",
             "storage-migrate",
             "storage-check",
@@ -253,6 +255,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "synthesis": 8005,
         }
         uvicorn.run(app, host=host, port=args.port or default_ports[args.role])
+        return 0
+
+    if args.command == "mcp-serve":
+        from financial_research_agent.mcp import McpDependencyError, run_mcp_stdio
+
+        try:
+            run_mcp_stdio()
+        except (McpDependencyError, ValueError) as exc:
+            payload = (
+                exc.to_dict()
+                if isinstance(exc, PersistenceError)
+                else {"error": "mcp_server_unavailable", "message": str(exc)}
+            )
+            print(json.dumps(payload, sort_keys=True), file=sys.stderr)
+            return 1
         return 0
 
     if args.command == "eval":

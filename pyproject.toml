@@ -19,8 +19,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+    "mcp>=1.28.1,<2",
+]
 dev = [
     "build>=1.5,<1.6",
+    "mcp>=1.28.1,<2",
     "pytest>=8.4,<9",
     "ruff>=0.15,<0.16",
 ]

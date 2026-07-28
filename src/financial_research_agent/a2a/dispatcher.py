@@ -97,6 +97,9 @@ class A2AResearchStepDispatcher:
                         if handoff.execution is not None
                         else None
                     ),
+                    skill_references=(
+                        handoff.execution.skill_references if handoff.execution is not None else ()
+                    ),
                 )
                 result = DelegationResult(
                     handoff=replace(handoff, execution=metadata),

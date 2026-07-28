@@ -50,6 +50,22 @@ python scripts/dev.py check
 CLI commands load the repository `.env` without overriding existing process environment
 variables. Start from `.env.example`; `.env` is ignored by Git.
 
+## Local MCP
+
+An optional MCP `stdio` server provides another interface to the same application flow as the Chat
+UI. Start the application topology first, then run the MCP server:
+
+```powershell
+pip install -e ".[mcp]"
+python -m financial_research_agent mcp-serve
+```
+
+MCP exposes `send_message`, `get_research_status`, `get_research_result`, and `cancel_research`.
+`send_message` enters the canonical application conversation service, which decides whether to
+answer directly or delegate research over A2A. MCP is not used between agents and does not provide
+a parallel research implementation. Set `FRA_MCP_APP_BASE_URL` only when the local app uses a
+different loopback address.
+
 ## Project Status
 
 Implemented:
@@ -62,6 +78,7 @@ Implemented:
 - One LLM orchestrator selects from four tool-using A2A specialist services started by default
   through Docker Compose.
 - Structured specialist outputs with evidence-ID validation and one bounded schema-repair attempt.
+- Versioned runtime skills and an optional MCP interface to the canonical orchestrator flow.
 - Offline evaluation, package verification, guarded storage operations, and local CI through Actio.
 
 Current boundaries:

@@ -173,6 +173,7 @@ def test_financial_tool_exposes_analysis_evidence_ids_to_agent_validation() -> N
     assert handoff.execution is not None
     assert handoff.execution.provider == "scripted"
     assert handoff.execution.model == "scripted-model"
+    assert handoff.execution.skill_references == ("filing-review@1.0.0",)
 
 
 def test_specialist_uses_run_provider_snapshot_after_runtime_setting_changes() -> None:

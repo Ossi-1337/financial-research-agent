@@ -58,6 +58,7 @@ class PromptContract:
     description: str
     allowed_tools: tuple[str, ...]
     output_schema: AgentOutputSchema
+    skill_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _require_text("id", self.id))
@@ -71,6 +72,7 @@ class PromptContract:
         )
         object.__setattr__(self, "description", _require_text("description", self.description))
         object.__setattr__(self, "allowed_tools", _text_tuple("allowed_tools", self.allowed_tools))
+        object.__setattr__(self, "skill_ids", _text_tuple("skill_ids", self.skill_ids))
         if not isinstance(self.output_schema, AgentOutputSchema):
             raise ValueError("output_schema must be an AgentOutputSchema")
 

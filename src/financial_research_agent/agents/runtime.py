@@ -7,7 +7,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
-from financial_research_agent.agents.contracts import PromptContract
+from financial_research_agent.agents.contracts import AgentRole, PromptContract
+from financial_research_agent.agents.defaults import create_default_prompt_catalog
 from financial_research_agent.llm import (
     ChatMessage,
     ChatProvider,
@@ -19,6 +20,11 @@ from financial_research_agent.llm import (
 )
 from financial_research_agent.orchestration.contracts import (
     ALLOWED_RESEARCH_SPECIALIST_ROLES,
+)
+from financial_research_agent.skills import (
+    SkillCatalog,
+    SkillReference,
+    create_default_skill_catalog,
 )
 from financial_research_agent.tools import (
     ToolCallingRunner,
@@ -43,6 +49,7 @@ class AgentDecision:
     company_query: str | None = None
     specialist_roles: tuple[str, ...] = ()
     reasoning_summary: str = ""
+    skills: tuple[SkillReference, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "mode", AgentDecisionMode(self.mode))
@@ -65,6 +72,10 @@ class AgentDecision:
                 raise ValueError("research decision requires synthesis specialist")
         object.__setattr__(self, "specialist_roles", roles)
         object.__setattr__(self, "reasoning_summary", self.reasoning_summary.strip())
+        skills = tuple(self.skills)
+        if not all(isinstance(skill, SkillReference) for skill in skills):
+            raise ValueError("skills must contain SkillReference values")
+        object.__setattr__(self, "skills", skills)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +84,12 @@ class StructuredAgentResult:
     provider: str
     model: str
     tool_results: tuple[ToolResult, ...]
+    skills: tuple[SkillReference, ...] = ()
     repaired: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "output", MappingProxyType(dict(self.output)))
+        object.__setattr__(self, "skills", tuple(self.skills))
 
 
 @dataclass(slots=True)
@@ -139,9 +152,16 @@ ORCHESTRATOR_DECISION_FORMAT = ResponseFormat(
 
 
 class AgentDecisionService:
-    def __init__(self, provider: ChatProvider, *, model: str | None = None) -> None:
+    def __init__(
+        self,
+        provider: ChatProvider,
+        *,
+        model: str | None = None,
+        skill_catalog: SkillCatalog | None = None,
+    ) -> None:
         self._provider = provider
         self._model = model
+        self._skill_catalog = skill_catalog or create_default_skill_catalog()
 
     async def decide(
         self,
@@ -150,6 +170,15 @@ class AgentDecisionService:
         context_messages: Iterable[ChatMessage] = (),
         company_references: Iterable[Mapping[str, object]] = (),
     ) -> AgentDecision:
+        prompt_contract = create_default_prompt_catalog().by_role(AgentRole.ORCHESTRATOR)
+        skill_instructions, skills = self._skill_catalog.compose_for_prompt(
+            role=prompt_contract.role.value,
+            skill_ids=prompt_contract.skill_ids,
+            prompt_allowed_tools=prompt_contract.allowed_tools,
+        )
+        system_prompt = ORCHESTRATOR_DECISION_PROMPT
+        if skill_instructions:
+            system_prompt = f"{system_prompt}\n\nReusable workflow skills:\n{skill_instructions}"
         if self._provider.metadata.provider == "offline-test":
             references = tuple(company_references)
             if references:
@@ -160,11 +189,13 @@ class AgentDecisionService:
                     company_query=company or content,
                     specialist_roles=("financial-report", "stock", "context", "synthesis"),
                     reasoning_summary="Resolved company reference requires research.",
+                    skills=skills,
                 )
             return AgentDecision(
                 mode=AgentDecisionMode.DIRECT_ANSWER,
                 answer="",
                 reasoning_summary="Offline test provider supports direct deterministic chat only.",
+                skills=skills,
             )
 
         reference_payload = json.dumps(
@@ -175,7 +206,7 @@ class AgentDecisionService:
         response = await self._provider.chat(
             ChatRequest(
                 messages=(
-                    ChatMessage(role=MessageRole.SYSTEM, content=ORCHESTRATOR_DECISION_PROMPT),
+                    ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
                     *tuple(context_messages),
                     ChatMessage(
                         role=MessageRole.USER,
@@ -189,7 +220,12 @@ class AgentDecisionService:
                 model=self._model,
                 response_format=ORCHESTRATOR_DECISION_FORMAT,
                 temperature=0,
-                metadata={"agent_role": "orchestrator"},
+                metadata={
+                    "agent_role": "orchestrator",
+                    "prompt_id": prompt_contract.id,
+                    "prompt_version": prompt_contract.version.value,
+                    "skills": ",".join(f"{skill.id}@{skill.version.value}" for skill in skills),
+                },
             )
         )
         payload = _structured_payload(response.structured_output, response.message.content)
@@ -200,6 +236,7 @@ class AgentDecisionService:
                 company_query=_optional_text(payload.get("company_query")),
                 specialist_roles=_string_tuple(payload.get("specialist_roles", ())),
                 reasoning_summary=str(payload.get("reasoning_summary", "")),
+                skills=skills,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise AgentRuntimeError(
@@ -215,10 +252,12 @@ class StructuredAgentRunner:
         *,
         model: str | None = None,
         max_tool_rounds: int = 3,
+        skill_catalog: SkillCatalog | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
         self._max_tool_rounds = max_tool_rounds
+        self._skill_catalog = skill_catalog or create_default_skill_catalog()
 
     async def run(
         self,
@@ -247,6 +286,22 @@ class StructuredAgentRunner:
         )
         if evidence_ids:
             prepared_payload["allowed_evidence_ids"] = list(evidence_ids)
+        skill_instructions, skills = self._skill_catalog.compose_for_prompt(
+            role=contract.role.value,
+            skill_ids=contract.skill_ids,
+            prompt_allowed_tools=contract.allowed_tools,
+        )
+        system_prompt = contract.system_prompt
+        if skill_instructions:
+            system_prompt = f"{system_prompt}\n\nReusable workflow skills:\n{skill_instructions}"
+        skill_metadata = ",".join(f"{skill.id}@{skill.version.value}" for skill in skills)
+        metadata = {
+            "agent_role": contract.role.value,
+            "prompt_id": contract.id,
+            "prompt_version": contract.version.value,
+        }
+        if skill_metadata:
+            metadata["skills"] = skill_metadata
         runner = ToolCallingRunner(
             provider=self._provider,
             registry=registry,
@@ -254,7 +309,7 @@ class StructuredAgentRunner:
         )
         loop = await runner.run(
             (
-                ChatMessage(role=MessageRole.SYSTEM, content=contract.system_prompt),
+                ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
                 ChatMessage(
                     role=MessageRole.USER,
                     content=json.dumps(prepared_payload, sort_keys=True, separators=(",", ":")),
@@ -263,11 +318,7 @@ class StructuredAgentRunner:
             model=self._model,
             context=context,
             response_format=contract.response_format(),
-            metadata={
-                "agent_role": contract.role.value,
-                "prompt_id": contract.id,
-                "prompt_version": contract.version.value,
-            },
+            metadata=metadata,
         )
         successful_tools = tuple(
             result
@@ -320,6 +371,7 @@ class StructuredAgentRunner:
                         "agent_role": contract.role.value,
                         "prompt_id": contract.id,
                         "prompt_version": contract.version.value,
+                        **({"skills": skill_metadata} if skill_metadata else {}),
                         "repair_attempt": "1",
                     },
                 )
@@ -343,6 +395,7 @@ class StructuredAgentRunner:
             provider=final_response.provider,
             model=final_response.model,
             tool_results=(*preloaded_tool_results, *loop.tool_results),
+            skills=skills,
             repaired=repaired,
         )
 

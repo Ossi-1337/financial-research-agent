@@ -56,8 +56,11 @@ def test_orchestrator_accepts_each_valid_decision(mode: AgentDecisionMode) -> No
     )
 
     assert decision.mode == mode
+    assert tuple(skill.id for skill in decision.skills) == ("company-research",)
     assert provider.requests[0].response_format is not None
     assert provider.requests[0].metadata["agent_role"] == "orchestrator"
+    assert provider.requests[0].metadata["skills"] == "company-research@1.0.0"
+    assert "Reusable workflow skills:" in provider.requests[0].messages[0].content
 
 
 def test_orchestrator_rejects_client_selected_specialist() -> None:
@@ -116,6 +119,7 @@ def test_structured_agent_runs_allowlisted_tool_and_preserves_metadata() -> None
     assert result.tool_results[0].data["evidence_ids"] == (EVIDENCE_ID,)
     assert provider.requests[-1].metadata["prompt_id"] == "test.financial"
     assert provider.requests[-1].metadata["prompt_version"] == "1.0.0"
+    assert "skills" not in provider.requests[-1].metadata
 
 
 def test_structured_agent_preloads_required_tool_for_local_model() -> None:

@@ -101,6 +101,33 @@ extracted text, vector indexes, caches, backups, logs, and immutable report expo
 are untrusted evidence, never instructions. The application exposes no shell or unrestricted
 filesystem tool.
 
+## Protocol And Skill Boundaries
+
+| Boundary | Responsibility |
+| --- | --- |
+| A2A | Mandatory orchestrator-to-specialist delegation, task state, progress, retry, and cancellation |
+| Tools | Deterministic, allowlisted data access and calculations owned by each agent |
+| RAG | Stored filing evidence retrieval owned by the financial-report agent |
+| Skills | Versioned workflow instructions composed into role prompts without granting permissions |
+| MCP | Optional local interface to the canonical application conversation and research flow |
+
+Both the Chat UI and MCP enter through the application message boundary:
+
+```mermaid
+flowchart LR
+    UI["Chat UI"] --> APP["Application conversation service"]
+    MCP["MCP stdio client"] --> APP
+    APP --> ORC["Orchestrator agent"]
+    ORC -->|A2A| FIN["Financial report agent"]
+    ORC -->|A2A| STOCK["Stock agent"]
+    ORC -->|A2A| CONTEXT["Context agent"]
+    ORC -->|A2A| SYNTH["Synthesis agent"]
+```
+
+The MCP process is a loopback-only adapter to the running application API. It can send messages,
+inspect or cancel the resulting research jobs, and retrieve completed reports. It is not used
+between agents and does not implement its own orchestration, provider calls, or data access.
+
 ## Package Ownership
 
 | Package | Responsibility |
@@ -113,5 +140,6 @@ filesystem tool.
 | `market_data`, `stock_analysis` | Stock agent data and analysis |
 | `context_analysis` | Context agent analysis |
 | `synthesis`, `report_exports` | Validated LLM synthesis, deterministic report mapping, and immutable exports |
-| `llm`, `tools`, `agents` | Provider abstraction, guarded tools, and prompt contracts |
+| `llm`, `tools`, `agents`, `skills` | Provider abstraction, guarded tools, prompts, and bounded workflow skills |
+| `mcp` | Optional local MCP adapter to the canonical application message and research APIs |
 | `persistence`, `storage` | SQLite, migrations, files, backup, restore, and cleanup |

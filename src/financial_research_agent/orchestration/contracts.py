@@ -79,6 +79,7 @@ class AgentExecutionMetadata:
     model: str | None = None
     tool_status: str | None = None
     reasoning_summary: str | None = None
+    skill_references: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "mode", AgentExecutionMode(self.mode))
@@ -97,6 +98,11 @@ class AgentExecutionMetadata:
         object.__setattr__(self, "model", _optional_text(self.model))
         object.__setattr__(self, "tool_status", _optional_text(self.tool_status))
         object.__setattr__(self, "reasoning_summary", _optional_text(self.reasoning_summary))
+        object.__setattr__(
+            self,
+            "skill_references",
+            _text_tuple("skill_references", self.skill_references),
+        )
         if self.attempt_count <= 0:
             raise ValueError("attempt_count must be positive")
 
@@ -115,6 +121,7 @@ class AgentExecutionMetadata:
             "model": self.model,
             "tool_status": self.tool_status,
             "reasoning_summary": self.reasoning_summary,
+            "skill_references": list(self.skill_references),
         }
 
 
@@ -135,6 +142,7 @@ class OrchestratorResearchInput:
     specialist_roles: tuple[str, ...] = DEFAULT_RESEARCH_SPECIALIST_ROLES
     agent_provider: str | None = None
     agent_model: str | None = None
+    orchestrator_skill_references: tuple[str, ...] = ()
     scenario_id: str | None = None
     scenario_version: str | None = None
 
@@ -176,6 +184,14 @@ class OrchestratorResearchInput:
         )
         object.__setattr__(self, "agent_provider", _optional_text(self.agent_provider))
         object.__setattr__(self, "agent_model", _optional_text(self.agent_model))
+        object.__setattr__(
+            self,
+            "orchestrator_skill_references",
+            _text_tuple(
+                "orchestrator_skill_references",
+                self.orchestrator_skill_references,
+            ),
+        )
         if (self.agent_provider is None) != (self.agent_model is None):
             raise ValueError("agent_provider and agent_model must be provided together")
 
@@ -280,6 +296,7 @@ class OrchestratedResearchRun:
     specialist_roles: tuple[str, ...] = DEFAULT_RESEARCH_SPECIALIST_ROLES
     agent_provider: str | None = None
     agent_model: str | None = None
+    orchestrator_skill_references: tuple[str, ...] = ()
     handoffs: tuple[AgentHandoff, ...] = ()
     selected_company: Mapping[str, object] | None = None
     selected_security: Mapping[str, object] | None = None
@@ -311,6 +328,14 @@ class OrchestratedResearchRun:
         )
         object.__setattr__(self, "agent_provider", _optional_text(self.agent_provider))
         object.__setattr__(self, "agent_model", _optional_text(self.agent_model))
+        object.__setattr__(
+            self,
+            "orchestrator_skill_references",
+            _text_tuple(
+                "orchestrator_skill_references",
+                self.orchestrator_skill_references,
+            ),
+        )
         if (self.agent_provider is None) != (self.agent_model is None):
             raise ValueError("agent_provider and agent_model must be provided together")
         object.__setattr__(self, "handoffs", _handoff_tuple(self.handoffs))
@@ -349,6 +374,7 @@ class OrchestratedResearchRun:
             "specialist_roles": list(self.specialist_roles),
             "agent_provider": self.agent_provider,
             "agent_model": self.agent_model,
+            "orchestrator_skill_references": list(self.orchestrator_skill_references),
             "handoffs": [handoff.to_dict() for handoff in self.handoffs],
             "selected_company": (
                 dict(self.selected_company) if self.selected_company is not None else None

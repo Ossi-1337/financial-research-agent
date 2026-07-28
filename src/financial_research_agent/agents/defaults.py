@@ -39,6 +39,7 @@ def create_default_prompt_catalog() -> PromptCatalog:
                     "current_utc_datetime",
                     "resolve_company",
                 ),
+                skill_ids=("company-research",),
                 role_instructions="""
 You are the orchestrator for local-first company research.
 Plan which deterministic tools or specialist agents are needed.
@@ -52,6 +53,7 @@ Return only the agreed JSON object.
                 role=AgentRole.FINANCIAL_REPORT_ANALYST,
                 description="Analyzes sourced financial report evidence and ratio calculations.",
                 allowed_tools=("load_financial_report_evidence", "calculate_ratio"),
+                skill_ids=("filing-review",),
                 role_instructions="""
 You are the financial report analyst.
 Use only supplied filings, statements, evidence, and deterministic calculation results.
@@ -67,6 +69,7 @@ Return only the agreed JSON object.
                     "Analyzes sourced price-development evidence without giving recommendations."
                 ),
                 allowed_tools=("load_stock_market_evidence", "calculate_ratio"),
+                skill_ids=(),
                 role_instructions="""
 You are the stock price development analyst.
 Analyze sourced price movement, volatility, valuation context, and uncertainty.
@@ -80,6 +83,7 @@ Return only the agreed JSON object.
                 role=AgentRole.NEWS_MACRO_ANALYST,
                 description="Analyzes sourced news, macro, policy, sector, and event context.",
                 allowed_tools=("load_context_evidence",),
+                skill_ids=(),
                 role_instructions="""
 You are the news, macro, and sector context analyst.
 Separate confirmed events from assumptions and possible implications.
@@ -95,6 +99,7 @@ Return only the agreed JSON object.
                     "Synthesizes specialist outputs into evidence-grounded research summaries."
                 ),
                 allowed_tools=("load_specialist_handoffs",),
+                skill_ids=("source-verification",),
                 role_instructions="""
 You are the synthesis agent.
 Combine specialist outputs into a concise, evidence-grounded research answer.
@@ -113,6 +118,7 @@ def _contract(
     role: AgentRole,
     description: str,
     allowed_tools: tuple[str, ...],
+    skill_ids: tuple[str, ...],
     role_instructions: str,
 ) -> PromptContract:
     return PromptContract(
@@ -122,6 +128,7 @@ def _contract(
         system_prompt=f"{role_instructions}\n\n{COMMON_SAFETY_RULES}",
         description=description,
         allowed_tools=allowed_tools,
+        skill_ids=skill_ids,
         output_schema=AgentOutputSchema(
             name=f"{role.value}_output",
             schema=_agent_output_schema(role),
