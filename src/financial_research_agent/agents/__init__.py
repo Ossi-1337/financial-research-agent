@@ -8,6 +8,10 @@ from financial_research_agent.agents.contracts import (
     PromptVersion,
 )
 from financial_research_agent.agents.defaults import create_default_prompt_catalog
+from financial_research_agent.agents.provider_runtime import (
+    AgentRuntimeResolver,
+    AgentRuntimeSelection,
+)
 from financial_research_agent.agents.runtime import (
     AgentDecision,
     AgentDecisionMode,
@@ -24,6 +28,8 @@ __all__ = [
     "AgentOutputSchema",
     "AgentRole",
     "AgentRuntimeError",
+    "AgentRuntimeResolver",
+    "AgentRuntimeSelection",
     "PromptCatalog",
     "PromptContract",
     "PromptVersion",

@@ -17,6 +17,7 @@ from financial_research_agent.a2a import (
     A2AResearchStepDispatcher,
     SQLiteA2ATaskStore,
     create_a2a_app,
+    create_default_a2a_runtime,
 )
 from financial_research_agent.orchestration import (
     AgentEndpoint,
@@ -28,6 +29,7 @@ from financial_research_agent.orchestration import (
     OrchestratorStepKind,
 )
 from financial_research_agent.persistence import create_persistence
+from financial_research_agent.runtime_settings import RuntimeSettingsOverrides
 from financial_research_agent.settings import Settings
 
 NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
@@ -205,6 +207,33 @@ def test_retry_reuses_deterministic_message_id(tmp_path: Path) -> None:
     assert result.attempt_count == 2
     assert len(transport.message_ids) == 2
     assert len(set(transport.message_ids)) == 1
+
+
+def test_specialist_runtime_reloads_shared_provider_settings_without_restart(
+    tmp_path: Path,
+) -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_A2A_ENABLED": "true",
+            "FRA_SEC_USER_AGENT": "financial-research-agent tests tests@example.com",
+        }
+    )
+    runtime = create_default_a2a_runtime(settings, role=AgentRole.STOCK)
+
+    initial = runtime.specialist_service.agent_runtime.resolve()
+    runtime.persistence.runtime_settings.update(
+        RuntimeSettingsOverrides(
+            llm_provider="local-openai",
+            llm_model="runtime-selected-model",
+        ),
+        base_settings=settings,
+    )
+    updated = runtime.specialist_service.agent_runtime.resolve()
+
+    assert initial.provider_name == "offline-test"
+    assert updated.provider_name == "local-openai"
+    assert updated.model == "runtime-selected-model"
 
 
 def _runtime(

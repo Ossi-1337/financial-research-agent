@@ -35,6 +35,7 @@ const settingsPanel = document.querySelector("#settings-panel");
 const settingsCloseButton = document.querySelector("#settings-close-button");
 const settingsForm = document.querySelector("#settings-form");
 const settingsError = document.querySelector("#settings-error");
+const settingsAgentRuntimeStatus = document.querySelector("#settings-agent-runtime-status");
 const settingsProviderStatus = document.querySelector("#settings-provider-status");
 const settingsSecretNote = document.querySelector("#settings-secret-note");
 const settingsHealthButton = document.querySelector("#settings-health-button");
@@ -1012,6 +1013,7 @@ async function refreshProviderModels() {
 
 function renderSettingsSummary(payload) {
   const activeProvider = payload.settings.provider.llm_provider;
+  const agentRuntime = payload.research_agent_runtime;
   const provider = payload.providers.find((item) => item.provider === activeProvider);
   const capabilityStatus = provider?.capability_status || {};
   const capabilityRows = ["chat", "streaming", "tool_calls", "structured_output", "embeddings"]
@@ -1020,6 +1022,11 @@ function renderSettingsSummary(payload) {
   settingsProviderStatus.textContent = provider
     ? `${provider.provider} capabilities: ${capabilityRows}`
     : "Selected provider is not registered.";
+  settingsAgentRuntimeStatus.textContent = agentRuntime
+    ? `Research agent runtime: ${agentRuntime.provider || "unavailable"} / ${
+        agentRuntime.model || "unavailable"
+      } (${agentRuntime.compatible ? "ready" : agentRuntime.error_code || "unavailable"})`
+    : "Research agent runtime is unavailable.";
   settingsSecretNote.textContent = payload.secrets.message;
 }
 

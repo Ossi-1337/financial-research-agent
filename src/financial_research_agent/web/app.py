@@ -15,7 +15,11 @@ from financial_research_agent.a2a import (
     SQLiteA2ADelegationStore,
     create_a2a_dispatcher,
 )
-from financial_research_agent.agents import AgentDecisionMode, AgentRuntimeError
+from financial_research_agent.agents import (
+    AgentDecisionMode,
+    AgentRuntimeError,
+    AgentRuntimeResolver,
+)
 from financial_research_agent.background import BackgroundResearchRunner
 from financial_research_agent.entities import (
     CompanySearchError,
@@ -202,6 +206,24 @@ def create_app(
     scenario_catalog = create_default_scenario_catalog()
     runtime_settings = runtime_settings_store or persistence.runtime_settings
     embeddings_cache = embedding_cache or LocalEmbeddingCache.from_settings(app_settings)
+
+    def current_settings() -> Settings:
+        return runtime_settings.settings(app_settings)
+
+    def current_registry() -> ProviderRegistry:
+        if registry is not None:
+            return provider_registry
+        return create_default_provider_registry(current_settings().provider)
+
+    agent_runtime = AgentRuntimeResolver(
+        settings=current_settings,
+        registry=lambda _current: current_registry(),
+    )
+
+    def current_agent_runtime_selection() -> tuple[str, str]:
+        selection = agent_runtime.resolve(require_research=True)
+        return selection.provider_name, selection.model
+
     background_research = background_runner or BackgroundResearchRunner(
         max_concurrent_runs=app_settings.background.max_concurrent_research_runs,
         job_store=persistence.background_jobs if persistence is not None else None,
@@ -223,6 +245,7 @@ def create_app(
         company_search_provider=company_search,
         run_store=orchestrator_runs,
         step_dispatcher=dispatcher,
+        agent_runtime_selection=current_agent_runtime_selection,
     )
     static_dir = Path(__file__).with_name("static")
 
@@ -237,6 +260,7 @@ def create_app(
     app.state.filing_store = filings
     app.state.storage_manager = storage
     app.state.runtime_settings_store = runtime_settings
+    app.state.agent_runtime = agent_runtime
     app.state.embedding_cache = embeddings_cache
     app.state.retrieval_index = retrieval
     app.state.report_run_store = report_runs
@@ -250,17 +274,10 @@ def create_app(
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-    def current_settings() -> Settings:
-        return runtime_settings.settings(app_settings)
-
-    def current_registry() -> ProviderRegistry:
-        if registry is not None:
-            return provider_registry
-        return create_default_provider_registry(current_settings().provider)
-
     conversation = AgentConversationService(
         settings=current_settings,
         registry=current_registry,
+        agent_runtime=agent_runtime,
     )
     app.include_router(
         create_research_router(
@@ -301,6 +318,7 @@ def create_app(
                 "base_url": selection.base_url,
                 "registered": registry_for_request.has_chat_provider(selection.provider),
             },
+            "research_agent_runtime": _agent_runtime_status_payload(agent_runtime),
             "history": {
                 "recent_turns": sessions.recent_turns,
                 "summary_max_chars": sessions.summary_max_chars,
@@ -411,6 +429,7 @@ def create_app(
             registry_for_request,
             storage,
             embeddings_cache,
+            agent_runtime,
         )
 
     @app.put("/api/settings")
@@ -430,6 +449,7 @@ def create_app(
             registry_for_request,
             storage,
             embeddings_cache,
+            agent_runtime,
         )
 
     @app.delete("/api/settings")
@@ -443,6 +463,7 @@ def create_app(
             registry_for_request,
             storage,
             embeddings_cache,
+            agent_runtime,
         )
 
     @app.get("/api/settings/provider-health")
@@ -546,6 +567,9 @@ def create_app(
                     OrchestratorResearchInput(
                         query=content,
                         company_query=plan.decision.company_query,
+                        specialist_roles=plan.decision.specialist_roles,
+                        agent_provider=plan.provider.metadata.provider,
+                        agent_model=plan.model,
                     )
                 )
                 report = synthesis_report_from_run(run)
@@ -660,6 +684,9 @@ def create_app(
                 OrchestratorResearchInput(
                     query=content,
                     company_query=plan.decision.company_query,
+                    specialist_roles=plan.decision.specialist_roles,
+                    agent_provider=plan.provider.metadata.provider,
+                    agent_model=plan.model,
                 ),
                 run=run_and_append,
                 metadata={"session_id": session_id},
@@ -802,6 +829,7 @@ def _settings_payload(
     registry: ProviderRegistry,
     storage: LocalStorageManager,
     embedding_cache: LocalEmbeddingCache,
+    agent_runtime: AgentRuntimeResolver,
 ) -> dict[str, Any]:
     return {
         "settings": {
@@ -815,6 +843,7 @@ def _settings_payload(
         },
         "overrides": overrides.to_dict(),
         "providers": _provider_options_payload(settings, registry),
+        "research_agent_runtime": _agent_runtime_status_payload(agent_runtime),
         "secrets": {
             "strategy": "environment_only",
             "plaintext_storage": "disabled",
@@ -839,6 +868,40 @@ def _settings_payload(
             "embedding_cache": embedding_cache.to_dict(),
         },
         "performance": _performance_status_payload(settings, embedding_cache),
+    }
+
+
+def _agent_runtime_status_payload(
+    resolver: AgentRuntimeResolver,
+) -> dict[str, Any]:
+    try:
+        selection = resolver.resolve()
+    except AgentRuntimeError as exc:
+        return {
+            "provider": None,
+            "model": None,
+            "compatible": False,
+            "error_code": exc.code,
+            "message": exc.message,
+            "required_capabilities": ["chat", "tool_calls", "structured_output"],
+        }
+    try:
+        resolver.validate_research(selection)
+    except AgentRuntimeError as exc:
+        compatible = False
+        error_code = exc.code
+        message = exc.message
+    else:
+        compatible = True
+        error_code = None
+        message = "Configured provider can run research agents."
+    return {
+        "provider": selection.provider_name,
+        "model": selection.model,
+        "compatible": compatible,
+        "error_code": error_code,
+        "message": message,
+        "required_capabilities": ["chat", "tool_calls", "structured_output"],
     }
 
 

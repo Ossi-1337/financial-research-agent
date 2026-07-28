@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -43,6 +42,7 @@ class ResearchOrchestrator:
         company_search_provider: CompanySearchProvider,
         step_dispatcher: ResearchStepDispatcher,
         run_store: OrchestratorRunStore | None = None,
+        agent_runtime_selection: Callable[[], tuple[str, str]] | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         if step_dispatcher is None:
@@ -50,6 +50,7 @@ class ResearchOrchestrator:
         self._company_search_provider = company_search_provider
         self._step_dispatcher = step_dispatcher
         self._run_store = run_store
+        self._agent_runtime_selection = agent_runtime_selection
         self._now = now or (lambda: datetime.now(UTC))
 
     async def run(
@@ -59,6 +60,10 @@ class ResearchOrchestrator:
         progress_observer: Callable[[OrchestratedResearchRun], None] | None = None,
     ) -> OrchestratedResearchRun:
         created_at = _aware_now(self._now())
+        agent_provider = request.agent_provider
+        agent_model = request.agent_model
+        if agent_provider is None and self._agent_runtime_selection is not None:
+            agent_provider, agent_model = self._agent_runtime_selection()
         run = OrchestratedResearchRun(
             id=request.run_id or f"orchestrator_run_{uuid4().hex}",
             query=request.query,
@@ -66,8 +71,14 @@ class ResearchOrchestrator:
             created_at=created_at,
             updated_at=created_at,
             execution_policy=OrchestratorExecutionPolicy.DISTRIBUTED_A2A,
-            plan=default_orchestrator_plan(),
-            warnings=("Research uses the canonical A2A specialist topology.",),
+            plan=default_orchestrator_plan(request.specialist_roles),
+            specialist_roles=request.specialist_roles,
+            agent_provider=agent_provider,
+            agent_model=agent_model,
+            warnings=(
+                "Research uses the canonical A2A specialist topology.",
+                f"Selected specialists: {', '.join(request.specialist_roles)}.",
+            ),
             scenario_id=request.scenario_id,
             scenario_version=request.scenario_version,
         )
@@ -208,12 +219,13 @@ class ResearchOrchestrator:
         security: ResolvedSecurity,
         cik: str | None,
     ) -> tuple[AgentHandoff, ...]:
-        if not request.refresh:
-            now = _aware_now(self._now())
-            return tuple(
-                _skipped_handoff(kind, step_id, now, "Refresh disabled by request.")
-                for kind, step_id in (
-                    (OrchestratorStepKind.MARKET_DATA_REFRESH, "refresh_market_data"),
+        roles = set(request.specialist_roles)
+        refresh_steps: list[tuple[OrchestratorStepKind, str]] = []
+        if "stock" in roles:
+            refresh_steps.append((OrchestratorStepKind.MARKET_DATA_REFRESH, "refresh_market_data"))
+        if "financial-report" in roles:
+            refresh_steps.extend(
+                (
                     (
                         OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
                         "refresh_financial_statements",
@@ -221,55 +233,66 @@ class ResearchOrchestrator:
                     (OrchestratorStepKind.FILING_REFRESH, "refresh_filings"),
                 )
             )
-        delegations = (
-            DelegationRequest(
-                role=AgentRole.STOCK,
-                run_id=run.id,
-                step_id="refresh_market_data",
-                correlation_id=run.id,
-                expected_kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
-                payload={
-                    "security_id": security.id,
-                    "ticker": security.ticker,
-                    "exchange_mic": security.exchange_mic,
-                    "exchange_name": security.exchange_name,
-                    "currency": security.currency,
-                    "outputsize": request.market_outputsize,
-                    "benchmark_symbol": request.benchmark_symbol,
-                },
-            ),
-            DelegationRequest(
-                role=AgentRole.FINANCIAL_REPORT,
-                run_id=run.id,
-                step_id="refresh_financial_statements",
-                correlation_id=run.id,
-                expected_kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
-                payload={
-                    "company_id": candidate.company.id,
-                    "legal_name": candidate.company.legal_name,
-                    "cik": cik or "",
-                    "fiscal_years": request.fiscal_years,
-                },
-            ),
-            DelegationRequest(
-                role=AgentRole.FINANCIAL_REPORT,
-                run_id=run.id,
-                step_id="refresh_filings",
-                correlation_id=run.id,
-                expected_kind=OrchestratorStepKind.FILING_REFRESH,
-                payload={
-                    "company_id": candidate.company.id,
-                    "legal_name": candidate.company.legal_name,
-                    "cik": cik or "",
-                    "forms": list(request.filing_forms),
-                    "limit": request.filing_limit,
-                    "form_limits": dict(request.filing_form_limits),
-                },
-            ),
-        )
-        results = await asyncio.gather(
-            *(self._step_dispatcher.dispatch(item, run=run) for item in delegations)
-        )
+        if not request.refresh:
+            now = _aware_now(self._now())
+            return tuple(
+                _skipped_handoff(kind, step_id, now, "Refresh disabled by request.")
+                for kind, step_id in refresh_steps
+            )
+        delegations: list[DelegationRequest] = []
+        if "stock" in roles:
+            delegations.append(
+                DelegationRequest(
+                    role=AgentRole.STOCK,
+                    run_id=run.id,
+                    step_id="refresh_market_data",
+                    correlation_id=run.id,
+                    expected_kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
+                    payload={
+                        "security_id": security.id,
+                        "ticker": security.ticker,
+                        "exchange_mic": security.exchange_mic,
+                        "exchange_name": security.exchange_name,
+                        "currency": security.currency,
+                        "outputsize": request.market_outputsize,
+                        "benchmark_symbol": request.benchmark_symbol,
+                    },
+                )
+            )
+        if "financial-report" in roles:
+            delegations.extend(
+                (
+                    DelegationRequest(
+                        role=AgentRole.FINANCIAL_REPORT,
+                        run_id=run.id,
+                        step_id="refresh_financial_statements",
+                        correlation_id=run.id,
+                        expected_kind=OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH,
+                        payload={
+                            "company_id": candidate.company.id,
+                            "legal_name": candidate.company.legal_name,
+                            "cik": cik or "",
+                            "fiscal_years": request.fiscal_years,
+                        },
+                    ),
+                    DelegationRequest(
+                        role=AgentRole.FINANCIAL_REPORT,
+                        run_id=run.id,
+                        step_id="refresh_filings",
+                        correlation_id=run.id,
+                        expected_kind=OrchestratorStepKind.FILING_REFRESH,
+                        payload={
+                            "company_id": candidate.company.id,
+                            "legal_name": candidate.company.legal_name,
+                            "cik": cik or "",
+                            "forms": list(request.filing_forms),
+                            "limit": request.filing_limit,
+                            "form_limits": dict(request.filing_form_limits),
+                        },
+                    ),
+                )
+            )
+        results = [await self._step_dispatcher.dispatch(item, run=run) for item in delegations]
         return tuple(result.handoff for result in results)
 
     async def _dispatch_specialists(
@@ -280,50 +303,57 @@ class ResearchOrchestrator:
         security: ResolvedSecurity,
         cik: str | None,
     ) -> tuple[AgentHandoff, ...]:
-        delegations = (
-            DelegationRequest(
-                role=AgentRole.FINANCIAL_REPORT,
-                run_id=run.id,
-                step_id="financial_report_analysis",
-                correlation_id=run.id,
-                expected_kind=OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
-                payload={
-                    "company_id": candidate.company.id,
-                    "legal_name": candidate.company.legal_name,
-                    "cik": cik or "",
-                },
-            ),
-            DelegationRequest(
-                role=AgentRole.STOCK,
-                run_id=run.id,
-                step_id="stock_price_analysis",
-                correlation_id=run.id,
-                expected_kind=OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
-                payload={
-                    "security_id": security.id,
-                    "ticker": security.ticker,
-                    "exchange_mic": security.exchange_mic,
-                    "exchange_name": security.exchange_name,
-                    "currency": security.currency,
-                    "benchmark_symbol": request.benchmark_symbol,
-                },
-            ),
-            DelegationRequest(
-                role=AgentRole.CONTEXT,
-                run_id=run.id,
-                step_id="context_analysis",
-                correlation_id=run.id,
-                expected_kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
-                payload={
-                    "query": request.query,
-                    "company_symbols": [security.ticker],
-                    "source_items": [item.to_dict() for item in request.context_source_items],
-                },
-            ),
-        )
-        results = await asyncio.gather(
-            *(self._step_dispatcher.dispatch(item, run=run) for item in delegations)
-        )
+        roles = set(request.specialist_roles)
+        delegations: list[DelegationRequest] = []
+        if "financial-report" in roles:
+            delegations.append(
+                DelegationRequest(
+                    role=AgentRole.FINANCIAL_REPORT,
+                    run_id=run.id,
+                    step_id="financial_report_analysis",
+                    correlation_id=run.id,
+                    expected_kind=OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
+                    payload={
+                        "company_id": candidate.company.id,
+                        "legal_name": candidate.company.legal_name,
+                        "cik": cik or "",
+                    },
+                )
+            )
+        if "stock" in roles:
+            delegations.append(
+                DelegationRequest(
+                    role=AgentRole.STOCK,
+                    run_id=run.id,
+                    step_id="stock_price_analysis",
+                    correlation_id=run.id,
+                    expected_kind=OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
+                    payload={
+                        "security_id": security.id,
+                        "ticker": security.ticker,
+                        "exchange_mic": security.exchange_mic,
+                        "exchange_name": security.exchange_name,
+                        "currency": security.currency,
+                        "benchmark_symbol": request.benchmark_symbol,
+                    },
+                )
+            )
+        if "context" in roles:
+            delegations.append(
+                DelegationRequest(
+                    role=AgentRole.CONTEXT,
+                    run_id=run.id,
+                    step_id="context_analysis",
+                    correlation_id=run.id,
+                    expected_kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
+                    payload={
+                        "query": request.query,
+                        "company_symbols": [security.ticker],
+                        "source_items": [item.to_dict() for item in request.context_source_items],
+                    },
+                )
+            )
+        results = [await self._step_dispatcher.dispatch(item, run=run) for item in delegations]
         return tuple(result.handoff for result in results)
 
     async def _dispatch_synthesis(self, run: OrchestratedResearchRun) -> AgentHandoff:

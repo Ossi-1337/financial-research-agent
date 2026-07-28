@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,7 @@ from financial_research_agent.agents import (
     AgentOutputSchema,
     AgentRole,
     AgentRuntimeError,
+    AgentRuntimeResolver,
     PromptContract,
     PromptVersion,
     StructuredAgentRunner,
@@ -24,8 +26,11 @@ from financial_research_agent.llm import (
     MessageRole,
     ModelMetadata,
     OfflineTestProvider,
+    ProviderCapability,
     ToolCall,
 )
+from financial_research_agent.llm.registry import ProviderRegistry
+from financial_research_agent.settings import Settings
 from financial_research_agent.tools import (
     ToolContext,
     ToolPermission,
@@ -64,6 +69,35 @@ def test_orchestrator_rejects_client_selected_specialist() -> None:
         )
 
 
+def test_orchestrator_research_decision_requires_synthesis() -> None:
+    provider = DecisionProvider(AgentDecisionMode.RESEARCH, roles=("stock",))
+
+    with pytest.raises(AgentRuntimeError, match="invalid decision"):
+        asyncio.run(
+            AgentDecisionService(provider).decide(content="Research TEST TOOL OUTPUT company")
+        )
+
+
+def test_agent_runtime_rejects_provider_without_research_capabilities() -> None:
+    provider = ScriptedAgentProvider(())
+    registry = ProviderRegistry().register_chat_provider("scripted", provider)
+    settings = Settings.from_env(
+        {
+            "FRA_LLM_PROVIDER": "scripted",
+            "FRA_LLM_MODEL": "scripted-model",
+        }
+    )
+    resolver = AgentRuntimeResolver(
+        settings=lambda: settings,
+        registry=lambda _current: registry,
+    )
+
+    with pytest.raises(AgentRuntimeError) as raised:
+        resolver.resolve(require_research=True)
+
+    assert raised.value.code == "agent_provider_incompatible"
+
+
 def test_structured_agent_runs_allowlisted_tool_and_preserves_metadata() -> None:
     provider = ScriptedAgentProvider((_tool_call(), _agent_response(_valid_output())))
     runner = StructuredAgentRunner(provider, model="scripted-model")
@@ -82,6 +116,29 @@ def test_structured_agent_runs_allowlisted_tool_and_preserves_metadata() -> None
     assert result.tool_results[0].data["evidence_ids"] == (EVIDENCE_ID,)
     assert provider.requests[-1].metadata["prompt_id"] == "test.financial"
     assert provider.requests[-1].metadata["prompt_version"] == "1.0.0"
+
+
+def test_structured_agent_preloads_required_tool_for_local_model() -> None:
+    provider = ScriptedAgentProvider((_agent_response(_valid_output()),))
+
+    result = asyncio.run(
+        StructuredAgentRunner(provider).run(
+            contract=_contract(),
+            user_payload={
+                "query": "TEST TOOL OUTPUT",
+                "required_tool": "load_evidence",
+            },
+            registry=_registry(),
+            context=_context(),
+            known_evidence_ids=(EVIDENCE_ID,),
+        )
+    )
+
+    payload = json.loads(provider.requests[0].messages[-1].content)
+
+    assert payload["required_tool_result"]["data"]["evidence_ids"] == [EVIDENCE_ID]
+    assert result.tool_results[0].tool_name == "load_evidence"
+    assert len(provider.requests) == 1
 
 
 def test_structured_agent_repairs_malformed_output_once() -> None:
@@ -109,6 +166,7 @@ def test_structured_agent_repairs_malformed_output_once() -> None:
 
     assert result.repaired is True
     assert provider.requests[-1].metadata["repair_attempt"] == "1"
+    assert EVIDENCE_ID in provider.requests[-1].messages[-1].content
 
 
 def test_structured_agent_rejects_unknown_evidence_after_repair() -> None:
@@ -130,6 +188,27 @@ def test_structured_agent_rejects_unknown_evidence_after_repair() -> None:
 
     assert raised.value.code == "agent_output_invalid"
     assert len(provider.requests) == 3
+
+
+def test_structured_agent_repairs_invalid_nested_schema_types() -> None:
+    invalid = _valid_output()
+    invalid["findings"] = ["not-an-object"]
+    provider = ScriptedAgentProvider(
+        (_tool_call(), _agent_response(invalid), _agent_response(_valid_output()))
+    )
+
+    result = asyncio.run(
+        StructuredAgentRunner(provider).run(
+            contract=_contract(),
+            user_payload={"query": "TEST TOOL OUTPUT"},
+            registry=_registry(),
+            context=_context(),
+            known_evidence_ids=(EVIDENCE_ID,),
+        )
+    )
+
+    assert result.repaired is True
+    assert provider.requests[-1].metadata["repair_attempt"] == "1"
 
 
 def test_offline_provider_cannot_run_real_specialist() -> None:
@@ -156,7 +235,15 @@ class DecisionProvider:
 
     @property
     def metadata(self) -> ModelMetadata:
-        return ModelMetadata(provider="scripted", model="scripted-model")
+        return ModelMetadata(
+            provider="scripted",
+            model="scripted-model",
+            capabilities=(
+                ProviderCapability.CHAT,
+                ProviderCapability.TOOL_CALLS,
+                ProviderCapability.STRUCTURED_OUTPUT,
+            ),
+        )
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)

@@ -9,6 +9,7 @@ from financial_research_agent.agents import (
 )
 from financial_research_agent.agents import (
     AgentRuntimeError,
+    AgentRuntimeResolver,
     PromptCatalog,
     PromptContract,
     StructuredAgentResult,
@@ -30,7 +31,7 @@ from financial_research_agent.filings import (
     FilingProvider,
     FilingStore,
 )
-from financial_research_agent.llm import ChatProvider, ProviderError
+from financial_research_agent.llm import ProviderError
 from financial_research_agent.market_data import (
     MarketDataError,
     MarketDataProvider,
@@ -89,8 +90,7 @@ class SpecialistExecutionService:
         filing_store: FilingStore | None = None,
         synthesis_agent: SynthesisAgent | None = None,
         run_store: object | None = None,
-        chat_provider: ChatProvider,
-        chat_model: str | None = None,
+        agent_runtime: AgentRuntimeResolver,
         prompt_catalog: PromptCatalog | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -105,7 +105,7 @@ class SpecialistExecutionService:
         self.filing_store = filing_store
         self.synthesis_agent = synthesis_agent or SynthesisAgent()
         self.run_store = run_store
-        self.agent_runner = StructuredAgentRunner(chat_provider, model=chat_model)
+        self.agent_runtime = agent_runtime
         self.prompt_catalog = prompt_catalog or create_default_prompt_catalog()
         self._now = now or (lambda: datetime.now(UTC))
 
@@ -125,6 +125,26 @@ class SpecialistExecutionService:
         if request.role == AgentRole.SYNTHESIS:
             return await self._synthesis(request)
         raise ValueError(f"unsupported specialist role: {request.role.value}")
+
+    def _agent_runner(self, request: DelegationRequest) -> StructuredAgentRunner:
+        run = (
+            self.run_store.get(request.run_id)
+            if self.run_store is not None and hasattr(self.run_store, "get")
+            else None
+        )
+        if (
+            isinstance(run, OrchestratedResearchRun)
+            and run.agent_provider is not None
+            and run.agent_model is not None
+        ):
+            runtime = self.agent_runtime.resolve_selection(
+                provider_name=run.agent_provider,
+                model=run.agent_model,
+                require_research=True,
+            )
+        else:
+            runtime = self.agent_runtime.resolve(require_research=True)
+        return StructuredAgentRunner(runtime.provider, model=runtime.model)
 
     async def _refresh_market_data(self, request: DelegationRequest) -> AgentHandoff:
         started_at = _aware_now(self._now())
@@ -302,7 +322,7 @@ class SpecialistExecutionService:
                 )
             )
             result_holder["analysis"] = result
-            evidence_ids = _stock_evidence_ids(result.to_dict())
+            evidence_ids = tuple(snippet.id for snippet in result.evidence)
             return ToolResult.succeeded(
                 tool_call_id="load_financial_report_evidence",
                 tool_name="load_financial_report_evidence",
@@ -322,7 +342,7 @@ class SpecialistExecutionService:
                     ),
                 )
             )
-            agent = await self.agent_runner.run(
+            agent = await self._agent_runner(request).run(
                 contract=self.prompt_catalog.by_role(PromptAgentRole.FINANCIAL_REPORT_ANALYST),
                 user_payload={
                     "task": "Analyze financial statements and filing evidence.",
@@ -400,7 +420,7 @@ class SpecialistExecutionService:
                     ),
                 )
             )
-            agent = await self.agent_runner.run(
+            agent = await self._agent_runner(request).run(
                 contract=self.prompt_catalog.by_role(PromptAgentRole.STOCK_ANALYST),
                 user_payload={
                     "task": "Analyze company and benchmark market evidence.",
@@ -445,6 +465,12 @@ class SpecialistExecutionService:
             _context_source_from_dict(item)
             for item in _mapping_list(request.payload.get("source_items", ()))
         )
+        if not source_items:
+            return _skipped_handoff(
+                request,
+                started_at,
+                "No approved context sources were available.",
+            )
         symbols = tuple(str(item) for item in _list(request.payload.get("company_symbols", ())))
         result_holder: dict[str, object] = {}
 
@@ -478,7 +504,7 @@ class SpecialistExecutionService:
                     ),
                 )
             )
-            agent = await self.agent_runner.run(
+            agent = await self._agent_runner(request).run(
                 contract=self.prompt_catalog.by_role(PromptAgentRole.NEWS_MACRO_ANALYST),
                 user_payload={
                     "task": "Analyze only approved source-linked context.",
@@ -533,7 +559,7 @@ class SpecialistExecutionService:
             _context: ToolContext,
             _arguments: Mapping[str, object],
         ) -> ToolResult:
-            payload = [handoff.to_dict() for handoff in specialist_handoffs]
+            payload = [_synthesis_handoff_payload(handoff) for handoff in specialist_handoffs]
             result_holder["handoffs"] = payload
             return ToolResult.succeeded(
                 tool_call_id="load_specialist_handoffs",
@@ -560,7 +586,7 @@ class SpecialistExecutionService:
                     ),
                 )
             )
-            agent = await self.agent_runner.run(
+            agent = await self._agent_runner(request).run(
                 contract=self.prompt_catalog.by_role(PromptAgentRole.SYNTHESIS_AGENT),
                 user_payload={
                     "task": "Synthesize validated specialist handoffs.",
@@ -714,13 +740,29 @@ def _agent_execution(
     )
 
 
+def _synthesis_handoff_payload(handoff: AgentHandoff) -> dict[str, object]:
+    agent_output = handoff.output.get("agent_output")
+    return {
+        "id": handoff.id,
+        "kind": handoff.kind.value,
+        "status": handoff.status.value,
+        "agent_output": dict(agent_output) if isinstance(agent_output, Mapping) else {},
+        "evidence_ids": list(handoff.evidence_ids),
+        "warnings": list(handoff.warnings),
+        "limitations": list(handoff.limitations),
+        "confidence": handoff.confidence.value,
+        "error_code": handoff.error_code,
+    }
+
+
 def _stock_evidence_ids(payload: Mapping[str, object]) -> tuple[str, ...]:
     security = _mapping(payload.get("security", {}))
     symbol = str(security.get("symbol") or "unknown").upper()
     evidence_ids: list[str] = []
     if payload.get("primary_source") is not None:
         evidence_ids.append(f"stock:{symbol}:primary")
-    benchmark = _mapping(payload.get("benchmark_security", {}))
+    benchmark_value = payload.get("benchmark_security")
+    benchmark = _mapping(benchmark_value) if isinstance(benchmark_value, Mapping) else {}
     benchmark_symbol = str(benchmark.get("symbol") or "").upper()
     if payload.get("benchmark_source") is not None and benchmark_symbol:
         evidence_ids.append(f"stock:{benchmark_symbol}:benchmark")
@@ -907,10 +949,7 @@ def _mapping_list(value: object) -> tuple[Mapping[str, object], ...]:
 
 
 def _positive_int(payload: Mapping[str, object], name: str) -> int:
-    value = payload.get(name)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
+    return _positive_int_value(payload.get(name), name)
 
 
 def _positive_int_mapping(value: object) -> dict[str, int]:
@@ -919,10 +958,22 @@ def _positive_int_mapping(value: object) -> dict[str, int]:
     for key, item in mapping.items():
         if not isinstance(key, str) or not key.strip():
             raise ValueError("mapping keys must be non-empty strings")
-        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
-            raise ValueError("mapping values must be positive integers")
-        result[key.strip()] = item
+        result[key.strip()] = _positive_int_value(item, "mapping value")
     return result
+
+
+def _positive_int_value(value: object, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float) and value.is_integer():
+        parsed = int(value)
+    else:
+        raise ValueError(f"{name} must be a positive integer")
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return parsed
 
 
 def _text_tuple(payload: Mapping[str, object], name: str) -> tuple[str, ...]:

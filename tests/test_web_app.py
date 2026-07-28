@@ -31,6 +31,7 @@ from financial_research_agent.llm import (
     MessageRole,
     ModelMetadata,
     OfflineTestProvider,
+    ProviderCapability,
     ProviderError,
     ProviderErrorCode,
     StreamEvent,
@@ -73,6 +74,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="context-panel"' in root_response.text
     assert 'id="context-source-list"' in root_response.text
     assert 'id="settings-panel"' in root_response.text
+    assert 'id="settings-agent-runtime-status"' in root_response.text
     assert 'id="settings-button"' in root_response.text
     assert '<option value="anthropic">anthropic</option>' in root_response.text
     assert '<option value="gemini">gemini</option>' in root_response.text
@@ -136,6 +138,8 @@ def test_runtime_settings_endpoint_returns_redacted_provider_management_payload(
 
     assert response.status_code == 200
     assert payload["settings"]["provider"]["llm_provider"] == "offline-test"
+    assert payload["research_agent_runtime"]["provider"] == "offline-test"
+    assert payload["research_agent_runtime"]["compatible"] is False
     assert payload["secrets"]["strategy"] == "environment_only"
     assert payload["secrets"]["plaintext_storage"] == "disabled"
     assert payload["secrets"]["openai_api_key_configured"] is True
@@ -173,6 +177,7 @@ def test_runtime_settings_update_changes_chat_model_without_restart() -> None:
     assert settings_response.status_code == 200
     assert settings_response.json()["overrides"]["llm_model"] == "custom-offline-model"
     assert status["chat"]["model"] == "custom-offline-model"
+    assert status["research_agent_runtime"]["model"] == "custom-offline-model"
     assert chat_response.status_code == 200
     assert chat_response.json()["model"] == "custom-offline-model"
 
@@ -693,9 +698,58 @@ def test_plain_company_question_starts_canonical_agent_research() -> None:
     assert response.status_code == 200
     assert event["type"] == "research"
     assert job["status"] == "succeeded"
-    assert dispatcher.requests[-1].step_id == "synthesis"
+    assert [request.step_id for request in dispatcher.requests] == [
+        "refresh_market_data",
+        "stock_price_analysis",
+        "synthesis",
+    ]
     assert session["messages"][-1]["research_run_id"] == job["orchestrator_run_id"]
     assert session["messages"][-1]["synthesis_report"]["status"] == "complete"
+
+
+def test_resolved_mention_replaces_internal_company_id_before_research() -> None:
+    provider = ResearchDecisionProvider(company_query="sec:cik:0000353278")
+    company_search = RecordingCompanySearchProvider()
+    registry = ProviderRegistry().register_chat_provider("capture", provider)
+    settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
+    client = _client(
+        settings=settings,
+        registry=registry,
+        company_search_provider=company_search,
+        research_dispatcher=ResearchDispatcher(),
+    )
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    with client.stream(
+        "POST",
+        f"/api/sessions/{session_id}/messages/stream",
+        json={
+            "content": "How is @NVO performing financially?",
+            "mentions": [
+                {
+                    "id": "sec:cik:0000353278",
+                    "label": "NVO",
+                    "company_id": "sec:cik:0000353278",
+                    "legal_name": "NOVO NORDISK A S",
+                    "ticker": "NVO",
+                    "cik": "0000353278",
+                    "source_provider": "sec_company_tickers",
+                }
+            ],
+        },
+    ) as response:
+        event = json.loads(next(line for line in response.iter_lines() if line))
+    job_id = event["job"]["id"]
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/background/research-runs/{job_id}").json()["job"]
+        if job["status"] != "running":
+            break
+        time.sleep(0.01)
+
+    assert response.status_code == 200
+    assert job["status"] == "succeeded"
+    assert company_search.queries == ["NOVO NORDISK A S"]
 
 
 def _client(
@@ -737,7 +791,16 @@ class CapturingProvider:
 
     @property
     def metadata(self) -> ModelMetadata:
-        return ModelMetadata(provider="capture", model="capture-model")
+        return ModelMetadata(
+            provider="capture",
+            model="capture-model",
+            capabilities=(
+                ProviderCapability.CHAT,
+                ProviderCapability.TOOL_CALLS,
+                ProviderCapability.STRUCTURED_OUTPUT,
+                ProviderCapability.STREAMING,
+            ),
+        )
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
@@ -768,6 +831,10 @@ class CapturingProvider:
 
 
 class ResearchDecisionProvider(CapturingProvider):
+    def __init__(self, *, company_query: str = "Tesla") -> None:
+        super().__init__()
+        self.company_query = company_query
+
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
         if request.response_format and request.response_format.name == "orchestrator_decision":
@@ -778,11 +845,9 @@ class ResearchDecisionProvider(CapturingProvider):
                 structured_output={
                     "mode": "research",
                     "answer": "",
-                    "company_query": "Tesla",
+                    "company_query": self.company_query,
                     "specialist_roles": [
-                        "financial-report",
                         "stock",
-                        "context",
                         "synthesis",
                     ],
                     "reasoning_summary": "Current company research requires specialists.",
@@ -874,6 +939,15 @@ class FakeCompanySearchProvider:
             ),
             source=source,
         )
+
+
+class RecordingCompanySearchProvider(FakeCompanySearchProvider):
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def search(self, query: str, *, limit: int = 10) -> CompanySearchResult:
+        self.queries.append(query)
+        return await super().search(query, limit=limit)
 
 
 class FailingCompanySearchProvider:

@@ -1,6 +1,8 @@
 """Orchestrated research workflow contracts, store, and coordinator."""
 
 from financial_research_agent.orchestration.contracts import (
+    ALLOWED_RESEARCH_SPECIALIST_ROLES,
+    DEFAULT_RESEARCH_SPECIALIST_ROLES,
     NO_ORCHESTRATOR_RECOMMENDATION_NOTICE,
     AgentExecutionMetadata,
     AgentExecutionMode,
@@ -28,6 +30,8 @@ from financial_research_agent.orchestration.store import OrchestratorRunStore, h
 from financial_research_agent.orchestration.workflow import ResearchOrchestrator
 
 __all__ = [
+    "ALLOWED_RESEARCH_SPECIALIST_ROLES",
+    "DEFAULT_RESEARCH_SPECIALIST_ROLES",
     "NO_ORCHESTRATOR_RECOMMENDATION_NOTICE",
     "AgentEndpoint",
     "AgentExecutionMetadata",

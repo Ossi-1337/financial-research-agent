@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -58,6 +59,13 @@ class SpecialistAgentExecutor(AgentExecutor):
         self.service = service
         self.task_store = task_store
         self.redaction_policy = redaction_policy
+        self.artifact_redaction_policy = replace(
+            redaction_policy,
+            collection_preview_items=max(
+                redaction_policy.collection_preview_items,
+                128,
+            ),
+        )
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = _required(context.task_id, "task_id")
@@ -92,7 +100,7 @@ class SpecialistAgentExecutor(AgentExecutor):
                 {"error_code": "specialist_execution_failed"},
             )
             return
-        safe_payload = self.redaction_policy.redact(handoff.to_dict())
+        safe_payload = self.artifact_redaction_policy.redact(handoff.to_dict())
         await updater.add_artifact(
             [_data_part(safe_payload)],
             artifact_id=f"specialist-{handoff.id}",

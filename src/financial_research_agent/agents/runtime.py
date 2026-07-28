@@ -15,6 +15,10 @@ from financial_research_agent.llm import (
     MessageRole,
     ResponseFormat,
     ResponseFormatType,
+    ToolCall,
+)
+from financial_research_agent.orchestration.contracts import (
+    ALLOWED_RESEARCH_SPECIALIST_ROLES,
 )
 from financial_research_agent.tools import (
     ToolCallingRunner,
@@ -49,7 +53,7 @@ class AgentDecision:
             self.company_query.strip() if self.company_query else None,
         )
         roles = tuple(dict.fromkeys(role.strip() for role in self.specialist_roles if role.strip()))
-        allowed = {"financial-report", "stock", "context", "synthesis"}
+        allowed = set(ALLOWED_RESEARCH_SPECIALIST_ROLES)
         if set(roles) - allowed:
             raise ValueError("research decision contains unsupported specialist roles")
         if self.mode == AgentDecisionMode.RESEARCH:
@@ -57,6 +61,8 @@ class AgentDecision:
                 raise ValueError("research decision requires company_query")
             if not roles:
                 raise ValueError("research decision requires specialist_roles")
+            if "synthesis" not in roles:
+                raise ValueError("research decision requires synthesis specialist")
         object.__setattr__(self, "specialist_roles", roles)
         object.__setattr__(self, "reasoning_summary", self.reasoning_summary.strip())
 
@@ -228,6 +234,19 @@ class StructuredAgentRunner:
                 code="agent_provider_unavailable",
                 message="Real research requires a configured local or hosted LLM provider.",
             )
+        prepared_payload = dict(user_payload)
+        preloaded_tool_results = await _preload_required_tool(
+            prepared_payload,
+            registry=registry,
+            context=context,
+        )
+        evidence_ids = (
+            tuple(known_evidence_ids())
+            if callable(known_evidence_ids)
+            else tuple(known_evidence_ids)
+        )
+        if evidence_ids:
+            prepared_payload["allowed_evidence_ids"] = list(evidence_ids)
         runner = ToolCallingRunner(
             provider=self._provider,
             registry=registry,
@@ -238,7 +257,7 @@ class StructuredAgentRunner:
                 ChatMessage(role=MessageRole.SYSTEM, content=contract.system_prompt),
                 ChatMessage(
                     role=MessageRole.USER,
-                    content=json.dumps(user_payload, sort_keys=True, separators=(",", ":")),
+                    content=json.dumps(prepared_payload, sort_keys=True, separators=(",", ":")),
                 ),
             ),
             model=self._model,
@@ -251,7 +270,9 @@ class StructuredAgentRunner:
             },
         )
         successful_tools = tuple(
-            result for result in loop.tool_results if result.status == ToolResultStatus.SUCCEEDED
+            result
+            for result in (*preloaded_tool_results, *loop.tool_results)
+            if result.status == ToolResultStatus.SUCCEEDED
         )
         if not successful_tools:
             raise AgentRuntimeError(
@@ -264,17 +285,14 @@ class StructuredAgentRunner:
                 message="Specialist tool loop did not produce a final response.",
             )
 
-        evidence_ids = (
-            tuple(known_evidence_ids())
-            if callable(known_evidence_ids)
-            else tuple(known_evidence_ids)
-        )
+        if callable(known_evidence_ids):
+            evidence_ids = tuple(known_evidence_ids())
         try:
             payload = _structured_payload(
                 loop.final_response.structured_output,
                 loop.final_response.message.content,
             )
-            errors = _output_errors(contract, payload, evidence_ids)
+            errors = _safe_output_errors(contract, payload, evidence_ids)
         except AgentRuntimeError as exc:
             payload = {}
             errors = (exc.message,)
@@ -289,7 +307,9 @@ class StructuredAgentRunner:
                             role=MessageRole.USER,
                             content=(
                                 "Repair the prior JSON output. Return only schema-valid JSON. "
-                                f"Validation errors: {'; '.join(errors)}"
+                                f"Validation errors: {'; '.join(errors)}. "
+                                "Use only these allowed evidence_ids: "
+                                f"{json.dumps(evidence_ids)}"
                             ),
                         ),
                     ),
@@ -304,8 +324,12 @@ class StructuredAgentRunner:
                     },
                 )
             )
-            payload = _structured_payload(repair.structured_output, repair.message.content)
-            errors = _output_errors(contract, payload, evidence_ids)
+            try:
+                payload = _structured_payload(repair.structured_output, repair.message.content)
+                errors = _safe_output_errors(contract, payload, evidence_ids)
+            except AgentRuntimeError as exc:
+                payload = {}
+                errors = (exc.message,)
             final_response = repair
         else:
             final_response = loop.final_response
@@ -318,9 +342,41 @@ class StructuredAgentRunner:
             output=payload,
             provider=final_response.provider,
             model=final_response.model,
-            tool_results=loop.tool_results,
+            tool_results=(*preloaded_tool_results, *loop.tool_results),
             repaired=repaired,
         )
+
+
+async def _preload_required_tool(
+    user_payload: dict[str, object],
+    *,
+    registry: ToolRegistry,
+    context: ToolContext,
+) -> tuple[ToolResult, ...]:
+    required_tool = user_payload.get("required_tool")
+    if required_tool is None:
+        return ()
+    if not isinstance(required_tool, str) or not required_tool.strip():
+        raise AgentRuntimeError(
+            code="agent_tool_invalid",
+            message="Required specialist tool name is invalid.",
+        )
+    tool_name = required_tool.strip()
+    result = await registry.execute(
+        ToolCall(
+            id=f"preload:{tool_name}",
+            name=tool_name,
+            arguments={},
+        ),
+        context,
+    )
+    if result.status != ToolResultStatus.SUCCEEDED:
+        raise AgentRuntimeError(
+            code="agent_tool_failed",
+            message="Required specialist data tool failed.",
+        )
+    user_payload["required_tool_result"] = result.to_dict()
+    return (result,)
 
 
 def _output_errors(
@@ -335,6 +391,17 @@ def _output_errors(
     if unknown:
         errors.append(f"unknown evidence_ids: {', '.join(unknown)}")
     return tuple(errors)
+
+
+def _safe_output_errors(
+    contract: PromptContract,
+    payload: Mapping[str, Any],
+    known_evidence_ids: Iterable[str],
+) -> tuple[str, ...]:
+    try:
+        return _output_errors(contract, payload, known_evidence_ids)
+    except TypeError, ValueError:
+        return ("Agent output contains values with invalid schema types.",)
 
 
 def _evidence_ids(value: object) -> tuple[str, ...]:

@@ -6,9 +6,9 @@ from financial_research_agent.a2a.delegations import SQLiteA2ADelegationStore
 from financial_research_agent.a2a.dispatcher import A2AResearchStepDispatcher
 from financial_research_agent.a2a.specialists import SpecialistExecutionService
 from financial_research_agent.a2a.store import SQLiteA2ATaskStore
+from financial_research_agent.agents import AgentRuntimeResolver
 from financial_research_agent.context_analysis import NewsMacroSectorAgent
 from financial_research_agent.filings import create_default_filing_provider
-from financial_research_agent.llm.registry import create_default_provider_registry
 from financial_research_agent.market_data import create_default_market_data_provider
 from financial_research_agent.orchestration import (
     AgentEndpoint,
@@ -41,8 +41,9 @@ def create_default_a2a_runtime(
     market_provider = create_default_market_data_provider(settings)
     statement_provider = create_default_financial_statement_provider(settings)
     filing_provider = create_default_filing_provider(settings)
-    provider_registry = create_default_provider_registry(settings.provider)
-    chat_provider = provider_registry.chat_provider(settings.provider.llm_provider)
+    agent_runtime = AgentRuntimeResolver(
+        settings=lambda: persistence.runtime_settings.settings(settings),
+    )
     financial_report_agent = FinancialReportAnalysisAgent(
         statement_store=persistence.financial_statements,
         filing_store=persistence.filings,
@@ -64,8 +65,7 @@ def create_default_a2a_runtime(
         filing_provider=filing_provider,
         filing_store=persistence.filings,
         run_store=persistence.orchestrator_runs,
-        chat_provider=chat_provider,
-        chat_model=settings.provider.llm_model,
+        agent_runtime=agent_runtime,
     )
     return A2AResearchRuntime(
         task_store=SQLiteA2ATaskStore(persistence.database, owner=role.value),

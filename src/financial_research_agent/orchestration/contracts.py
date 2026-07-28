@@ -13,6 +13,14 @@ NO_ORCHESTRATOR_RECOMMENDATION_NOTICE = (
     "does not provide buy, sell, hold, price-target, or personalized investment advice."
 )
 
+ALLOWED_RESEARCH_SPECIALIST_ROLES = (
+    "financial-report",
+    "stock",
+    "context",
+    "synthesis",
+)
+DEFAULT_RESEARCH_SPECIALIST_ROLES = ALLOWED_RESEARCH_SPECIALIST_ROLES
+
 
 class OrchestratorExecutionPolicy(StrEnum):
     SEQUENTIAL_LOCAL_SAFE = "sequential_local_safe"
@@ -118,12 +126,15 @@ class OrchestratorResearchInput:
     refresh: bool = True
     company_search_limit: int = 3
     fiscal_years: int = 3
-    filing_forms: tuple[str, ...] = ("10-K", "10-Q")
+    filing_forms: tuple[str, ...] = ("10-K", "10-Q", "20-F", "6-K")
     filing_limit: int = 1
     filing_form_limits: Mapping[str, int] = field(default_factory=dict)
     market_outputsize: str = "compact"
     benchmark_symbol: str | None = None
     context_source_items: tuple[ContextSourceItem, ...] = ()
+    specialist_roles: tuple[str, ...] = DEFAULT_RESEARCH_SPECIALIST_ROLES
+    agent_provider: str | None = None
+    agent_model: str | None = None
     scenario_id: str | None = None
     scenario_version: str | None = None
 
@@ -158,6 +169,15 @@ class OrchestratorResearchInput:
             "context_source_items",
             _context_source_item_tuple(self.context_source_items),
         )
+        object.__setattr__(
+            self,
+            "specialist_roles",
+            _specialist_role_tuple(self.specialist_roles),
+        )
+        object.__setattr__(self, "agent_provider", _optional_text(self.agent_provider))
+        object.__setattr__(self, "agent_model", _optional_text(self.agent_model))
+        if (self.agent_provider is None) != (self.agent_model is None):
+            raise ValueError("agent_provider and agent_model must be provided together")
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +277,9 @@ class OrchestratedResearchRun:
     updated_at: datetime
     execution_policy: OrchestratorExecutionPolicy
     plan: tuple[OrchestratorPlanStep, ...]
+    specialist_roles: tuple[str, ...] = DEFAULT_RESEARCH_SPECIALIST_ROLES
+    agent_provider: str | None = None
+    agent_model: str | None = None
     handoffs: tuple[AgentHandoff, ...] = ()
     selected_company: Mapping[str, object] | None = None
     selected_security: Mapping[str, object] | None = None
@@ -281,6 +304,15 @@ class OrchestratedResearchRun:
             OrchestratorExecutionPolicy(self.execution_policy),
         )
         object.__setattr__(self, "plan", _plan_step_tuple(self.plan))
+        object.__setattr__(
+            self,
+            "specialist_roles",
+            _specialist_role_tuple(self.specialist_roles),
+        )
+        object.__setattr__(self, "agent_provider", _optional_text(self.agent_provider))
+        object.__setattr__(self, "agent_model", _optional_text(self.agent_model))
+        if (self.agent_provider is None) != (self.agent_model is None):
+            raise ValueError("agent_provider and agent_model must be provided together")
         object.__setattr__(self, "handoffs", _handoff_tuple(self.handoffs))
         object.__setattr__(
             self,
@@ -314,6 +346,9 @@ class OrchestratedResearchRun:
             "updated_at": self.updated_at.isoformat(),
             "execution_policy": self.execution_policy.value,
             "plan": [step.to_dict() for step in self.plan],
+            "specialist_roles": list(self.specialist_roles),
+            "agent_provider": self.agent_provider,
+            "agent_model": self.agent_model,
             "handoffs": [handoff.to_dict() for handoff in self.handoffs],
             "selected_company": (
                 dict(self.selected_company) if self.selected_company is not None else None
@@ -330,8 +365,11 @@ class OrchestratedResearchRun:
         }
 
 
-def default_orchestrator_plan() -> tuple[OrchestratorPlanStep, ...]:
-    return (
+def default_orchestrator_plan(
+    specialist_roles: Iterable[str] = DEFAULT_RESEARCH_SPECIALIST_ROLES,
+) -> tuple[OrchestratorPlanStep, ...]:
+    roles = set(_specialist_role_tuple(specialist_roles))
+    steps = (
         OrchestratorPlanStep(
             id="resolve_company",
             kind=OrchestratorStepKind.COMPANY_RESOLUTION,
@@ -381,6 +419,20 @@ def default_orchestrator_plan() -> tuple[OrchestratorPlanStep, ...]:
             required=True,
         ),
     )
+    role_by_step = {
+        OrchestratorStepKind.MARKET_DATA_REFRESH: "stock",
+        OrchestratorStepKind.FINANCIAL_STATEMENT_REFRESH: "financial-report",
+        OrchestratorStepKind.FILING_REFRESH: "financial-report",
+        OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS: "financial-report",
+        OrchestratorStepKind.STOCK_PRICE_ANALYSIS: "stock",
+        OrchestratorStepKind.CONTEXT_ANALYSIS: "context",
+        OrchestratorStepKind.SYNTHESIS: "synthesis",
+    }
+    return tuple(
+        step
+        for step in steps
+        if (required_role := role_by_step.get(step.kind)) is None or required_role in roles
+    )
 
 
 def _require_text(name: str, value: str) -> str:
@@ -408,6 +460,16 @@ def _text_tuple(name: str, values: Iterable[str]) -> tuple[str, ...]:
     if isinstance(values, str):
         raise ValueError(f"{name} must be an iterable of strings, not a string")
     return tuple(_require_text(f"{name}[{index}]", value) for index, value in enumerate(values))
+
+
+def _specialist_role_tuple(values: Iterable[str]) -> tuple[str, ...]:
+    roles = tuple(dict.fromkeys(_text_tuple("specialist_roles", values)))
+    unsupported = sorted(set(roles) - set(ALLOWED_RESEARCH_SPECIALIST_ROLES))
+    if unsupported:
+        raise ValueError(f"unsupported specialist role: {unsupported[0]}")
+    if "synthesis" not in roles:
+        raise ValueError("specialist_roles must include synthesis")
+    return roles
 
 
 def _text_mapping(name: str, values: Mapping[str, str]) -> Mapping[str, str]:

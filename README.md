@@ -6,8 +6,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Financial Research Agent is a local-first Python multi-agent system for company and stock
-research. One orchestrator interprets every chat message and delegates research over A2A to four
-internal specialist services for financial reports, stock analysis, context analysis, and
+research. One orchestrator interprets every chat message and delegates only the required work over
+A2A to internal specialist services for financial reports, stock analysis, context analysis, and
 source-backed synthesis.
 
 The system combines real financial sources, local persistence, filing retrieval, evidence-backed
@@ -59,8 +59,8 @@ Implemented:
 - Alpha Vantage daily prices and deterministic market calculations.
 - SQLite persistence, local filing retrieval, citations, evidence inspection, and report exports.
 - Provider adapters for local OpenAI-compatible endpoints, OpenAI, Anthropic, Gemini, and LiteLLM.
-- One LLM orchestrator and four tool-using A2A specialist services started by default through
-  Docker Compose.
+- One LLM orchestrator selects from four tool-using A2A specialist services started by default
+  through Docker Compose.
 - Structured specialist outputs with evidence-ID validation and one bounded schema-repair attempt.
 - Offline evaluation, package verification, guarded storage operations, and local CI through Actio.
 

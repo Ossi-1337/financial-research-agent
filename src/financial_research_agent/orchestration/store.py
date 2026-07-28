@@ -101,6 +101,15 @@ def orchestrated_research_run_from_dict(payload: Any) -> OrchestratedResearchRun
         updated_at=_datetime_from_payload(payload["updated_at"]),
         execution_policy=OrchestratorExecutionPolicy(str(payload["execution_policy"])),
         plan=tuple(_plan_step_from_payload(item) for item in payload.get("plan", ())),
+        specialist_roles=tuple(
+            str(item)
+            for item in payload.get(
+                "specialist_roles",
+                ("financial-report", "stock", "context", "synthesis"),
+            )
+        ),
+        agent_provider=_optional_payload_text(payload, "agent_provider"),
+        agent_model=_optional_payload_text(payload, "agent_model"),
         handoffs=tuple(_handoff_from_payload(item) for item in payload.get("handoffs", ())),
         selected_company=_optional_mapping(payload.get("selected_company")),
         selected_security=_optional_mapping(payload.get("selected_security")),

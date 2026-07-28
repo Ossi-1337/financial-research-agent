@@ -15,7 +15,7 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.provider.llm_model == "offline-test"
     assert settings.provider.llm_base_url is None
     assert settings.provider.llm_local_runtime == "llama.cpp"
-    assert settings.provider.llm_timeout_seconds == 30.0
+    assert settings.provider.llm_timeout_seconds == 90.0
     assert settings.provider.embedding_provider == "disabled"
     assert settings.provider.openai_api_key is None
     assert settings.provider.openai_base_url == "https://api.openai.com/v1"
@@ -45,7 +45,7 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.a2a.stock_url == "http://127.0.0.1:8003"
     assert settings.a2a.context_url == "http://127.0.0.1:8004"
     assert settings.a2a.synthesis_url == "http://127.0.0.1:8005"
-    assert settings.a2a.delegation_timeout_seconds == 60.0
+    assert settings.a2a.delegation_timeout_seconds == 120.0
     assert settings.a2a.delegation_max_attempts == 2
     assert settings.background.max_concurrent_research_runs == 1
     assert settings.performance.prompt_budget_input_tokens == 16_000

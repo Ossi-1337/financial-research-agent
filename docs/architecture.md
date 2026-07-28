@@ -23,8 +23,9 @@ flowchart LR
 
 The orchestrator is the only message entrypoint. Its configured LLM returns a validated decision:
 direct answer, research, clarification, or refusal. For research, deterministic code resolves the
-company, builds the fixed specialist plan, owns progress/cancellation, and persists the canonical
-run. Client messages cannot select tools, providers, URLs, paths, or agent addresses.
+company, validates the selected specialist roles, adds only their required data steps, owns
+progress/cancellation, and persists the canonical run. Synthesis is mandatory for research.
+Client messages cannot select tools, providers, URLs, paths, or agent addresses.
 
 Specialist ownership:
 
@@ -40,6 +41,12 @@ Specialist ownership:
 Specialist handoffs always contain status, timestamps, warnings, limitations, confidence, and
 evidence IDs. Failed A2A work remains visible and produces partial or failed research. No hidden
 in-process fallback runs in the normal application topology.
+
+Provider and model are resolved from current shared runtime settings when a run starts, then
+snapshotted on that run. Every specialist resolves the snapshot through its local provider adapter,
+so a settings change affects the next run without changing provider/model midway through an active
+run. Missing credentials or required chat, tool-call, or structured-output capabilities fail
+research without provider fallback.
 
 ## Runtime
 

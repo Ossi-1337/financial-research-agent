@@ -29,6 +29,7 @@ from financial_research_agent.orchestration import (
     ResearchOrchestrator,
     default_orchestrator_plan,
 )
+from financial_research_agent.orchestration.store import orchestrated_research_run_from_dict
 
 NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
 
@@ -58,6 +59,102 @@ def test_orchestrator_requires_dispatcher() -> None:
             company_search_provider=FixtureCompanySearchProvider(),
             step_dispatcher=None,  # type: ignore[arg-type]
         )
+
+
+def test_research_input_requires_supported_roles_and_synthesis() -> None:
+    with pytest.raises(ValueError, match="must include synthesis"):
+        OrchestratorResearchInput(
+            query="Research TEST TOOL OUTPUT company",
+            specialist_roles=("stock",),
+        )
+    with pytest.raises(ValueError, match="unsupported specialist role"):
+        OrchestratorResearchInput(
+            query="Research TEST TOOL OUTPUT company",
+            specialist_roles=("stock", "unknown", "synthesis"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("roles", "expected_steps"),
+    [
+        (
+            ("stock", "synthesis"),
+            ["refresh_market_data", "stock_price_analysis", "synthesis"],
+        ),
+        (
+            ("financial-report", "synthesis"),
+            [
+                "refresh_financial_statements",
+                "refresh_filings",
+                "financial_report_analysis",
+                "synthesis",
+            ],
+        ),
+        (
+            ("context", "synthesis"),
+            ["context_analysis", "synthesis"],
+        ),
+    ],
+)
+def test_orchestrator_dispatches_only_selected_specialists_and_prerequisites(
+    roles: tuple[str, ...],
+    expected_steps: list[str],
+) -> None:
+    dispatcher = RecordingDispatcher()
+    orchestrator = ResearchOrchestrator(
+        company_search_provider=FixtureCompanySearchProvider(),
+        step_dispatcher=dispatcher,
+        now=lambda: NOW,
+    )
+
+    run = asyncio.run(
+        orchestrator.run(
+            OrchestratorResearchInput(
+                query="Research TEST TOOL OUTPUT company",
+                specialist_roles=roles,
+            )
+        )
+    )
+
+    assert run.status == OrchestratorRunStatus.COMPLETE
+    assert run.specialist_roles == roles
+    assert [request.step_id for request in dispatcher.requests] == expected_steps
+    assert [handoff.step_id for handoff in run.handoffs[1:]] == expected_steps
+    assert not any(handoff.status == OrchestratorHandoffStatus.SKIPPED for handoff in run.handoffs)
+
+
+def test_selected_roles_and_agent_runtime_round_trip_with_legacy_defaults() -> None:
+    dispatcher = RecordingDispatcher()
+    orchestrator = ResearchOrchestrator(
+        company_search_provider=FixtureCompanySearchProvider(),
+        step_dispatcher=dispatcher,
+        now=lambda: NOW,
+    )
+    run = asyncio.run(
+        orchestrator.run(
+            OrchestratorResearchInput(
+                query="Research TEST TOOL OUTPUT company",
+                refresh=False,
+                specialist_roles=("stock", "synthesis"),
+                agent_provider="scripted",
+                agent_model="scripted-model",
+            )
+        )
+    )
+
+    restored = orchestrated_research_run_from_dict(run.to_dict())
+    legacy_payload = run.to_dict()
+    legacy_payload.pop("specialist_roles")
+    legacy_payload.pop("agent_provider")
+    legacy_payload.pop("agent_model")
+    legacy = orchestrated_research_run_from_dict(legacy_payload)
+
+    assert restored.specialist_roles == ("stock", "synthesis")
+    assert restored.agent_provider == "scripted"
+    assert restored.agent_model == "scripted-model"
+    assert legacy.specialist_roles == ("financial-report", "stock", "context", "synthesis")
+    assert legacy.agent_provider is None
+    assert legacy.agent_model is None
 
 
 def test_orchestrator_uses_only_dispatcher_and_stable_specialist_order() -> None:
