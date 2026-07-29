@@ -1,9 +1,12 @@
 from .builder import build_report_evidence_index, build_report_export_document
 from .contracts import (
     MAX_SOURCE_QUOTE_CHARS,
+    REPORT_EXPORT_CONTENT_VERSION,
     REPORT_EXPORT_MANIFEST_VERSION,
     ReportEvidenceIndex,
     ReportExportArtifact,
+    ReportExportChartPoint,
+    ReportExportChartSeries,
     ReportExportDocument,
     ReportExportError,
     ReportExportErrorCode,
@@ -19,9 +22,12 @@ from .store import ReportExportStore
 
 __all__ = [
     "MAX_SOURCE_QUOTE_CHARS",
+    "REPORT_EXPORT_CONTENT_VERSION",
     "REPORT_EXPORT_MANIFEST_VERSION",
     "ReportEvidenceIndex",
     "ReportExportArtifact",
+    "ReportExportChartPoint",
+    "ReportExportChartSeries",
     "ReportExportDocument",
     "ReportExportError",
     "ReportExportErrorCode",

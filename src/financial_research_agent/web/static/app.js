@@ -18,6 +18,7 @@ const state = {
 };
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const REPORT_EXPORT_CONTENT_VERSION = 2;
 const STOCK_CHART_LAYOUT = Object.freeze({
   width: 720,
   height: 300,
@@ -231,8 +232,6 @@ function renderSynthesisReport(container, message) {
     timestamp.textContent = `Generated ${new Date(report.created_at).toLocaleString()}`;
     wrapper.append(timestamp);
   }
-  wrapper.append(renderReportExportControl(message.research_run_id));
-
   const notice = document.createElement("p");
   notice.className = "synthesis-notice";
   notice.textContent = report.no_recommendation_notice || "Not financial advice.";
@@ -269,6 +268,7 @@ function renderSynthesisReport(container, message) {
   wrapper.append(scenarioSection);
   wrapper.append(renderStockChart(message.research_run_id));
   wrapper.append(renderRunEvidencePanel(message.research_run_id));
+  wrapper.append(renderReportExportControl(message.research_run_id));
 
   container.append(wrapper);
 }
@@ -280,43 +280,41 @@ function renderReportExportControl(runId) {
     return wrapper;
   }
   const exportState = state.exportsByRunId[runId];
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "report-export-button secondary-button";
-  button.textContent = exportState?.loading ? "Exporting..." : "Export";
-  button.disabled = Boolean(exportState?.loading);
-  button.addEventListener("click", () => createReportExport(runId));
-  wrapper.append(button);
-
   if (exportState?.error) {
     const error = document.createElement("span");
     error.className = "report-export-error";
     error.textContent = exportState.error;
     wrapper.append(error);
   }
-  if (exportState?.payload) {
-    const artifacts = new Map(
-      (exportState.payload.export?.artifacts || []).map((artifact) => [
-        artifact.format,
-        artifact,
-      ])
-    );
-    for (const [format, label] of [
-      ["markdown", "Markdown"],
-      ["html", "HTML"],
-      ["pdf", "PDF"],
-    ]) {
-      const url = exportState.payload.files?.[format];
-      if (!url) {
-        continue;
-      }
+  const artifacts = new Map(
+    (exportState?.payload?.export?.artifacts || []).map((artifact) => [
+      artifact.format,
+      artifact,
+    ])
+  );
+  for (const [format, label] of [
+    ["markdown", "Markdown"],
+    ["html", "HTML"],
+    ["pdf", "PDF"],
+  ]) {
+    const url = exportState?.payload?.files?.[format];
+    if (url) {
       const link = document.createElement("a");
       link.className = "report-export-link";
       link.href = url;
       link.download = artifacts.get(format)?.filename || "";
       link.textContent = label;
       wrapper.append(link);
+      continue;
     }
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "report-export-link";
+    retry.textContent = label;
+    retry.disabled = Boolean(exportState?.loading);
+    retry.setAttribute("aria-label", `Generate and download ${label} report`);
+    retry.addEventListener("click", () => createReportExport(runId, format));
+    wrapper.append(retry);
   }
   return wrapper;
 }
@@ -1610,7 +1608,7 @@ async function loadRunTrace(runId) {
   renderMessages();
 }
 
-async function createReportExport(runId) {
+async function createReportExport(runId, requestedFormat = null) {
   state.exportsByRunId[runId] = { loading: true };
   renderMessages();
   try {
@@ -1618,12 +1616,29 @@ async function createReportExport(runId) {
       method: "POST",
     });
     state.exportsByRunId[runId] = { payload };
+    if (requestedFormat) {
+      downloadReportExport(payload, requestedFormat);
+    }
   } catch (error) {
     state.exportsByRunId[runId] = {
       error: error instanceof Error ? error.message : "Could not export report.",
     };
   }
   renderMessages();
+}
+
+function downloadReportExport(payload, format) {
+  const url = payload.files?.[format];
+  if (!url) {
+    return;
+  }
+  const artifact = (payload.export?.artifacts || []).find((item) => item.format === format);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = artifact?.filename || "";
+  document.body.append(link);
+  link.click();
+  link.remove();
 }
 
 async function loadRunArtifactsForMessages() {
@@ -1647,10 +1662,14 @@ async function loadRunArtifacts(runId) {
     state.runsByRunId[runId] = runPayload.run;
     state.evidenceByRunId[runId] = evidencePayload.evidence;
     const existing = (exportsPayload.exports || []).find(
-      (item) => item.export?.run_id === runId
+      (item) =>
+        item.export?.run_id === runId &&
+        item.export?.content_version === REPORT_EXPORT_CONTENT_VERSION
     );
-    if (existing && !state.exportsByRunId[runId]) {
+    if (existing) {
       state.exportsByRunId[runId] = { payload: existing };
+    } else if (hasSynthesisReport(runPayload.run)) {
+      await createReportExport(runId);
     }
   } catch (error) {
     state.evidenceByRunId[runId] = {
@@ -1658,6 +1677,12 @@ async function loadRunArtifacts(runId) {
       sources: [],
     };
   }
+}
+
+function hasSynthesisReport(run) {
+  return (run?.handoffs || []).some(
+    (handoff) => handoff.kind === "synthesis" && handoff.output?.report
+  );
 }
 
 input.addEventListener("input", () => {

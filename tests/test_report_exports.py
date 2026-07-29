@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pypdfium2 as pdfium
 import pytest
 from fastapi.testclient import TestClient
 
@@ -47,8 +48,18 @@ def test_export_contracts_are_immutable_and_manifest_round_trips(tmp_path: Path)
     assert {artifact.format for artifact in snapshot.artifacts} == set(ReportExportFormat)
     assert all(artifact.byte_size > 0 for artifact in snapshot.artifacts)
     assert all(len(artifact.sha256) == 64 for artifact in snapshot.artifacts)
+    assert snapshot.content_version == 2
     with pytest.raises(FrozenInstanceError):
         snapshot.export_id = "changed"
+
+
+def test_legacy_manifest_defaults_to_original_content_version(tmp_path: Path) -> None:
+    payload = _export_service(tmp_path).export(_run()).to_dict()
+    payload.pop("content_version")
+
+    snapshot = ReportExportSnapshot.from_dict(payload)
+
+    assert snapshot.content_version == 1
 
 
 def test_source_resolver_deduplicates_sources_and_marks_unknown_evidence() -> None:
@@ -68,6 +79,9 @@ def test_source_resolver_deduplicates_sources_and_marks_unknown_evidence() -> No
     assert evidence.handoff_markers["handoff_context"] == ("[S2]",)
     assert evidence.unresolved_evidence_ids == ("ev:unknown",)
     assert all(len(source.quote or "") <= MAX_SOURCE_QUOTE_CHARS for source in evidence.sources)
+    assert [series.symbol for series in document.chart_series] == ["TEST", "SPY"]
+    assert document.chart_series[0].points[0].indexed_value == 100
+    assert document.chart_series[0].points[-1].indexed_value == 110
 
 
 def test_renderers_escape_untrusted_text_and_create_unicode_pdf() -> None:
@@ -89,8 +103,24 @@ def test_renderers_escape_untrusted_text_and_create_unicode_pdf() -> None:
     assert "[S1]" in html
     assert "LLM provider/model" in markdown
     assert "not used / not used" in markdown
+    assert "Indexed Price Development" in markdown
+    assert "<svg" in markdown
+    assert "TEST: 110.0" in markdown
+    assert "Indexed Price Development" in html
+    assert "<svg" in html
+    assert "SPY: 102.0" in html
     assert pdf.startswith(b"%PDF")
     assert len(pdf) > 10_000
+    pdf_document = pdfium.PdfDocument(pdf)
+    try:
+        pdf_text = "\n".join(
+            pdf_document[index].get_textpage().get_text_range()
+            for index in range(len(pdf_document))
+        )
+    finally:
+        pdf_document.close()
+    assert "Indexed Price Development" in pdf_text
+    assert "TEST: 110.0" in pdf_text
 
 
 def test_redaction_removes_secrets_and_local_paths_from_all_artifacts(tmp_path: Path) -> None:
@@ -291,13 +321,55 @@ def _run(
             OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
             {
                 "analysis": {
+                    "chart_series": [
+                        {
+                            "symbol": "TEST",
+                            "points": [
+                                {
+                                    "priced_at": "2026-07-14",
+                                    "close": "100",
+                                    "adjusted_close": "100",
+                                },
+                                {
+                                    "priced_at": "2026-07-16",
+                                    "close": "105",
+                                    "adjusted_close": "105",
+                                },
+                                {
+                                    "priced_at": "2026-07-18",
+                                    "close": "110",
+                                    "adjusted_close": "110",
+                                },
+                            ],
+                        },
+                        {
+                            "symbol": "SPY",
+                            "points": [
+                                {
+                                    "priced_at": "2026-07-14",
+                                    "close": "500",
+                                    "adjusted_close": "500",
+                                },
+                                {
+                                    "priced_at": "2026-07-16",
+                                    "close": "507.5",
+                                    "adjusted_close": "507.5",
+                                },
+                                {
+                                    "priced_at": "2026-07-18",
+                                    "close": "510",
+                                    "adjusted_close": "510",
+                                },
+                            ],
+                        },
+                    ],
                     "primary_source": {
                         "provider": "TEST market provider",
                         "source_url": "https://example.test/market",
                         "retrieved_at": NOW.isoformat(),
                         "data_as_of": "2026-07-18",
                         "attribution": "TEST TOOL OUTPUT market data.",
-                    }
+                    },
                 }
             },
         ),

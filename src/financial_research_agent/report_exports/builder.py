@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from financial_research_agent.observability import RedactionPolicy
@@ -11,6 +12,8 @@ from financial_research_agent.orchestration import OrchestratedResearchRun, Orch
 from .contracts import (
     MAX_SOURCE_QUOTE_CHARS,
     ReportEvidenceIndex,
+    ReportExportChartPoint,
+    ReportExportChartSeries,
     ReportExportDocument,
     ReportExportPoint,
     ReportExportScenario,
@@ -114,6 +117,7 @@ def build_report_export_document(
             "This report is research only and is not financial advice.",
         ),
         sources=sources,
+        chart_series=_export_chart_series(payload),
     )
 
 
@@ -192,6 +196,53 @@ def _source_candidates(run_payload: Mapping[str, Any]) -> list[_SourceCandidate]
         elif kind == OrchestratorStepKind.STOCK_PRICE_ANALYSIS.value:
             candidates.extend(_stock_sources(analysis, handoff_id))
     return candidates
+
+
+def _export_chart_series(
+    run_payload: Mapping[str, Any],
+) -> tuple[ReportExportChartSeries, ...]:
+    raw_series: tuple[Any, ...] = ()
+    for handoff_value in _sequence(run_payload.get("handoffs")):
+        handoff = _mapping(handoff_value)
+        if handoff.get("kind") != OrchestratorStepKind.STOCK_PRICE_ANALYSIS.value:
+            continue
+        analysis = _mapping(_mapping(handoff.get("output")).get("analysis"))
+        raw_series = _sequence(analysis.get("chart_series"))
+        break
+    if not raw_series:
+        return ()
+
+    prepared: list[tuple[str, dict[date, Decimal]]] = []
+    for series_value in raw_series:
+        series = _mapping(series_value)
+        symbol = _optional_text(series.get("symbol"))
+        prices: dict[date, Decimal] = {}
+        for point_value in _sequence(series.get("points")):
+            point = _mapping(point_value)
+            priced_at = _date_value(point.get("priced_at"))
+            price = _positive_decimal(point.get("adjusted_close") or point.get("close"))
+            if priced_at is not None and price is not None:
+                prices[priced_at] = price
+        if symbol is None or not prices:
+            return ()
+        prepared.append((symbol, prices))
+
+    shared_dates = sorted(set.intersection(*(set(prices) for _, prices in prepared)))
+    if len(shared_dates) < 2:
+        return ()
+    return tuple(
+        ReportExportChartSeries(
+            symbol=symbol,
+            points=tuple(
+                ReportExportChartPoint(
+                    priced_at=priced_at,
+                    indexed_value=((prices[priced_at] / prices[shared_dates[0]]) * Decimal("100")),
+                )
+                for priced_at in shared_dates
+            ),
+        )
+        for symbol, prices in prepared
+    )
 
 
 def _financial_sources(
@@ -491,6 +542,23 @@ def _datetime(value: object) -> datetime:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value))
+
+
+def _date_value(value: object) -> date | None:
+    try:
+        return date.fromisoformat(str(value))
+    except TypeError, ValueError:
+        return None
+
+
+def _positive_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        result = Decimal(str(value))
+    except InvalidOperation, ValueError:
+        return None
+    return result if result.is_finite() and result > 0 else None
 
 
 def _float(value: object) -> float:

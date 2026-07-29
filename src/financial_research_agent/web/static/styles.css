@@ -505,21 +505,26 @@ h1 {
   gap: 8px;
 }
 
-.report-export-button {
-  min-width: 76px;
-  min-height: 34px;
-  font-size: 0.8rem;
-}
-
 .report-export-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--accent-strong);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 0.8rem;
   font-weight: 700;
+  line-height: inherit;
   text-decoration: none;
 }
 
-.report-export-link:hover {
+.report-export-link:hover:not(:disabled) {
   text-decoration: underline;
+}
+
+.report-export-link:disabled {
+  color: var(--muted);
+  cursor: wait;
 }
 
 .report-export-error {

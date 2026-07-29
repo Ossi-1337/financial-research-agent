@@ -102,6 +102,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".citation-list" in css_response.text
     assert ".evidence-snippet" in css_response.text
     assert ".synthesis-report" in css_response.text
+    assert ".report-export-link" in css_response.text
+    assert ".report-export-button" not in css_response.text
     assert ".stock-chart-axis-label" in css_response.text
     assert ".stock-chart-tooltip" in css_response.text
     assert ".stock-chart-crosshair" in css_response.text
@@ -132,6 +134,18 @@ def test_frontend_stock_chart_has_axes_and_interactive_values() -> None:
     assert "stock-chart-tooltip" in script.text
     assert '"pointermove"' in script.text
     assert 'event.key !== "ArrowLeft"' in script.text
+
+
+def test_frontend_exposes_direct_versioned_report_download_links() -> None:
+    script = _client().get("/static/app.js")
+
+    assert script.status_code == 200
+    assert '["markdown", "Markdown"]' in script.text
+    assert '["html", "HTML"]' in script.text
+    assert '["pdf", "PDF"]' in script.text
+    assert "report-export-button" not in script.text
+    assert "REPORT_EXPORT_CONTENT_VERSION = 2" in script.text
+    assert "hasSynthesisReport" in script.text
 
 
 def test_runtime_settings_endpoint_returns_redacted_provider_management_payload() -> None:

@@ -3,12 +3,14 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Self
 
 REPORT_EXPORT_MANIFEST_VERSION = 1
+REPORT_EXPORT_CONTENT_VERSION = 2
 MAX_SOURCE_QUOTE_CHARS = 280
 _SAFE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 _MARKER_PATTERN = re.compile(r"^\[S[1-9][0-9]*\]$")
@@ -186,6 +188,41 @@ class ReportExportScenario:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportExportChartPoint:
+    priced_at: date
+    indexed_value: Decimal
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.priced_at, date) or isinstance(self.priced_at, datetime):
+            raise ValueError("priced_at must be a date")
+        try:
+            value = Decimal(str(self.indexed_value))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("indexed_value must be a decimal") from exc
+        if not value.is_finite() or value <= 0:
+            raise ValueError("indexed_value must be finite and positive")
+        object.__setattr__(self, "indexed_value", value)
+
+
+@dataclass(frozen=True, slots=True)
+class ReportExportChartSeries:
+    symbol: str
+    points: tuple[ReportExportChartPoint, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "symbol", _require_text("symbol", self.symbol).upper())
+        points = tuple(self.points)
+        if len(points) < 2:
+            raise ValueError("chart series requires at least two points")
+        if any(not isinstance(point, ReportExportChartPoint) for point in points):
+            raise ValueError("points must contain ReportExportChartPoint values")
+        dates = tuple(point.priced_at for point in points)
+        if dates != tuple(sorted(set(dates))):
+            raise ValueError("chart point dates must be unique and ascending")
+        object.__setattr__(self, "points", points)
+
+
+@dataclass(frozen=True, slots=True)
 class ReportExportDocument:
     export_id: str
     run_id: str
@@ -216,6 +253,7 @@ class ReportExportDocument:
     limitations: tuple[str, ...]
     disclaimer: str
     sources: tuple[ReportSourceReference, ...]
+    chart_series: tuple[ReportExportChartSeries, ...] = ()
     generation_method: str = "deterministic"
     llm_provider: str = "not used"
     llm_model: str = "not used"
@@ -257,6 +295,7 @@ class ReportExportDocument:
         object.__setattr__(self, "warnings", _text_tuple("warnings", self.warnings))
         object.__setattr__(self, "limitations", _text_tuple("limitations", self.limitations))
         object.__setattr__(self, "sources", _source_tuple(self.sources))
+        object.__setattr__(self, "chart_series", _chart_series_tuple(self.chart_series))
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +349,7 @@ class ReportExportSnapshot:
     security_id: str | None
     artifacts: tuple[ReportExportArtifact, ...]
     schema_version: int = REPORT_EXPORT_MANIFEST_VERSION
+    content_version: int = REPORT_EXPORT_CONTENT_VERSION
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "export_id", _safe_name("export_id", self.export_id))
@@ -324,6 +364,8 @@ class ReportExportSnapshot:
         object.__setattr__(self, "artifacts", artifacts)
         if self.schema_version != REPORT_EXPORT_MANIFEST_VERSION:
             raise ValueError("unsupported report export manifest version")
+        if not 1 <= self.content_version <= REPORT_EXPORT_CONTENT_VERSION:
+            raise ValueError("unsupported report export content version")
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> Self:
@@ -344,6 +386,7 @@ class ReportExportSnapshot:
                 if isinstance(item, Mapping)
             ),
             schema_version=int(payload["schema_version"]),
+            content_version=int(payload.get("content_version", 1)),
         )
 
     def artifact(self, export_format: ReportExportFormat) -> ReportExportArtifact | None:
@@ -353,6 +396,7 @@ class ReportExportSnapshot:
     def to_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
+            "content_version": self.content_version,
             "export_id": self.export_id,
             "run_id": self.run_id,
             "report_id": self.report_id,
@@ -441,6 +485,23 @@ def _source_tuple(values: Iterable[ReportSourceReference]) -> tuple[ReportSource
     if len({source.marker for source in sources}) != len(sources):
         raise ValueError("source markers must be unique")
     return sources
+
+
+def _chart_series_tuple(
+    values: Iterable[ReportExportChartSeries],
+) -> tuple[ReportExportChartSeries, ...]:
+    series = tuple(values)
+    if any(not isinstance(item, ReportExportChartSeries) for item in series):
+        raise ValueError("chart_series must contain ReportExportChartSeries values")
+    if len({item.symbol for item in series}) != len(series):
+        raise ValueError("chart series symbols must be unique")
+    if series:
+        expected_dates = tuple(point.priced_at for point in series[0].points)
+        if any(
+            tuple(point.priced_at for point in item.points) != expected_dates for item in series[1:]
+        ):
+            raise ValueError("chart series must use aligned dates")
+    return series
 
 
 def _mapping(value: object) -> Mapping[str, Any]:

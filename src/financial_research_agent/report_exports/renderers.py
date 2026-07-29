@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import html
 import io
+import math
 import re
 from importlib.resources import files
 from threading import Lock
 
+from reportlab.graphics.shapes import Drawing, Line, PolyLine, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -20,12 +22,24 @@ from reportlab.platypus import (
     Spacer,
 )
 
-from .contracts import ReportExportDocument, ReportExportPoint, ReportExportScenario
+from .contracts import (
+    ReportExportChartSeries,
+    ReportExportDocument,
+    ReportExportPoint,
+    ReportExportScenario,
+)
 
 _FONT_LOCK = Lock()
 _REGULAR_FONT = "FRA-NotoSans"
 _BOLD_FONT = "FRA-NotoSans-Bold"
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|>])")
+_CHART_COLORS = ("#2563eb", "#b25a24", "#16836f", "#7c3aed")
+_CHART_WIDTH = 720
+_CHART_HEIGHT = 320
+_CHART_LEFT = 58
+_CHART_RIGHT = 18
+_CHART_TOP = 18
+_CHART_BOTTOM = 64
 
 
 def render_markdown(document: ReportExportDocument) -> bytes:
@@ -41,6 +55,7 @@ def render_markdown(document: ReportExportDocument) -> bytes:
         lines.extend(_markdown_points(title, points))
     lines.extend(_markdown_scenario("Upside Scenario", document.upside_scenario))
     lines.extend(_markdown_scenario("Downside Scenario", document.downside_scenario))
+    lines.extend(_markdown_chart(document.chart_series))
     lines.extend(_markdown_list("Warnings", document.warnings))
     lines.extend(_markdown_list("Limitations", document.limitations))
     lines.extend(["## Sources", ""])
@@ -84,6 +99,7 @@ def render_html(document: ReportExportDocument) -> bytes:
         body.append(_html_points(section_title, points))
     body.append(_html_scenario("Upside Scenario", document.upside_scenario))
     body.append(_html_scenario("Downside Scenario", document.downside_scenario))
+    body.append(_html_chart(document.chart_series))
     body.append(_html_list("Warnings", document.warnings))
     body.append(_html_list("Limitations", document.limitations))
     body.append("<h2>Sources</h2>")
@@ -160,6 +176,11 @@ def render_pdf(document: ReportExportDocument) -> bytes:
     ):
         story.append(Paragraph(title, styles["Heading2"]))
         story.extend(_pdf_scenario(scenario, styles))
+    if document.chart_series:
+        story.append(Paragraph("Indexed Price Development", styles["Heading2"]))
+        story.append(Paragraph(_html(_chart_note(document.chart_series)), styles["Muted"]))
+        story.append(Spacer(1, 2 * mm))
+        story.append(_pdf_chart(document.chart_series))
     _pdf_text_list(story, "Warnings", document.warnings, styles)
     _pdf_text_list(story, "Limitations", document.limitations, styles)
     story.append(PageBreak())
@@ -209,6 +230,259 @@ def _sections(
         ("Opportunities", document.opportunities),
         ("Risks", document.risks),
         ("Unknowns", document.unknowns),
+    )
+
+
+def _markdown_chart(series: tuple[ReportExportChartSeries, ...]) -> list[str]:
+    if not series:
+        return []
+    return [
+        "## Indexed Price Development",
+        "",
+        _md(_chart_note(series)),
+        "",
+        _chart_svg(series),
+        "",
+    ]
+
+
+def _html_chart(series: tuple[ReportExportChartSeries, ...]) -> str:
+    if not series:
+        return ""
+    return (
+        '<section class="price-chart"><h2>Indexed Price Development</h2>'
+        f'<p class="meta">{_html(_chart_note(series))}</p>'
+        f"{_chart_svg(series)}</section>"
+    )
+
+
+def _chart_svg(series: tuple[ReportExportChartSeries, ...]) -> str:
+    values = [float(point.indexed_value) for item in series for point in item.points]
+    axis_min, axis_max, axis_step, y_ticks = _chart_axis(min(values), max(values))
+    dates = tuple(point.priced_at for point in series[0].points)
+    plot_width = _CHART_WIDTH - _CHART_LEFT - _CHART_RIGHT
+    plot_height = _CHART_HEIGHT - _CHART_TOP - _CHART_BOTTOM
+    parts = [
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" '
+            f'viewBox="0 0 {_CHART_WIDTH} {_CHART_HEIGHT}" role="img" '
+            'aria-label="Indexed historical price chart" '
+            'style="display:block;max-width:100%;height:auto;background:#fff;'
+            'border:1px solid #dce3ed">'
+        ),
+        "<title>Indexed historical price development</title>",
+    ]
+    for value in y_ticks:
+        y = _project_y(value, axis_min, axis_max, _CHART_TOP, plot_height, invert=True)
+        parts.append(
+            f'<line x1="{_CHART_LEFT}" x2="{_CHART_WIDTH - _CHART_RIGHT}" '
+            f'y1="{y:.2f}" y2="{y:.2f}" stroke="#dce3ed" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{_CHART_LEFT - 9}" y="{y + 4:.2f}" text-anchor="end" '
+            'fill="#5b6678" font-family="Arial,sans-serif" font-size="11">'
+            f"{_html(_axis_label(value, axis_step))}</text>"
+        )
+    for index in _even_indices(len(dates), 5):
+        x = _CHART_LEFT + (index / max(len(dates) - 1, 1)) * plot_width
+        parts.append(
+            f'<line x1="{x:.2f}" x2="{x:.2f}" y1="{_CHART_TOP}" '
+            f'y2="{_CHART_HEIGHT - _CHART_BOTTOM}" stroke="#dce3ed" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{x:.2f}" y="{_CHART_HEIGHT - 40}" text-anchor="middle" '
+            'fill="#5b6678" font-family="Arial,sans-serif" font-size="11">'
+            f"{_html(_date_label(dates[index]))}</text>"
+        )
+    for series_index, item in enumerate(series):
+        projected_points = []
+        for index, point in enumerate(item.points):
+            x = _CHART_LEFT + (index / max(len(item.points) - 1, 1)) * plot_width
+            y = _project_y(
+                float(point.indexed_value),
+                axis_min,
+                axis_max,
+                _CHART_TOP,
+                plot_height,
+                invert=True,
+            )
+            projected_points.append(f"{x:.2f},{y:.2f}")
+        points = " ".join(projected_points)
+        color = _CHART_COLORS[series_index % len(_CHART_COLORS)]
+        parts.append(
+            f'<polyline points="{points}" fill="none" stroke="{color}" '
+            'stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>'
+        )
+        legend_x = _CHART_LEFT + series_index * 150
+        parts.append(
+            f'<line x1="{legend_x}" x2="{legend_x + 18}" y1="{_CHART_HEIGHT - 14}" '
+            f'y2="{_CHART_HEIGHT - 14}" stroke="{color}" stroke-width="3"/>'
+        )
+        parts.append(
+            f'<text x="{legend_x + 24}" y="{_CHART_HEIGHT - 10}" '
+            'fill="#5b6678" font-family="Arial,sans-serif" font-size="11" font-weight="700">'
+            f"{_html(item.symbol)}: {float(item.points[-1].indexed_value):.1f}</text>"
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _pdf_chart(series: tuple[ReportExportChartSeries, ...]) -> Drawing:
+    width = 170 * mm
+    height = 82 * mm
+    left = 34
+    right = 8
+    top = 10
+    bottom = 34
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+    values = [float(point.indexed_value) for item in series for point in item.points]
+    axis_min, axis_max, axis_step, y_ticks = _chart_axis(min(values), max(values))
+    dates = tuple(point.priced_at for point in series[0].points)
+    drawing = Drawing(width, height)
+    drawing.add(
+        Rect(
+            0,
+            0,
+            width,
+            height,
+            fillColor=colors.white,
+            strokeColor=colors.HexColor("#dce3ed"),
+            strokeWidth=0.6,
+        )
+    )
+    for value in y_ticks:
+        y = _project_y(value, axis_min, axis_max, bottom, plot_height)
+        drawing.add(
+            Line(
+                left,
+                y,
+                width - right,
+                y,
+                strokeColor=colors.HexColor("#dce3ed"),
+                strokeWidth=0.4,
+            )
+        )
+        drawing.add(
+            String(
+                left - 5,
+                y - 2.5,
+                _axis_label(value, axis_step),
+                textAnchor="end",
+                fontName=_REGULAR_FONT,
+                fontSize=6.5,
+                fillColor=colors.HexColor("#5b6678"),
+            )
+        )
+    for index in _even_indices(len(dates), 5):
+        x = left + (index / max(len(dates) - 1, 1)) * plot_width
+        drawing.add(
+            Line(
+                x,
+                bottom,
+                x,
+                height - top,
+                strokeColor=colors.HexColor("#dce3ed"),
+                strokeWidth=0.4,
+            )
+        )
+        drawing.add(
+            String(
+                x,
+                bottom - 12,
+                _date_label(dates[index]),
+                textAnchor="middle",
+                fontName=_REGULAR_FONT,
+                fontSize=6.5,
+                fillColor=colors.HexColor("#5b6678"),
+            )
+        )
+    for series_index, item in enumerate(series):
+        color = colors.HexColor(_CHART_COLORS[series_index % len(_CHART_COLORS)])
+        points = [
+            (
+                left + (index / max(len(item.points) - 1, 1)) * plot_width,
+                _project_y(
+                    float(point.indexed_value),
+                    axis_min,
+                    axis_max,
+                    bottom,
+                    plot_height,
+                ),
+            )
+            for index, point in enumerate(item.points)
+        ]
+        drawing.add(PolyLine(points, strokeColor=color, strokeWidth=1.5, fillColor=None))
+        legend_x = left + series_index * 95
+        drawing.add(Line(legend_x, 8, legend_x + 14, 8, strokeColor=color, strokeWidth=1.5))
+        drawing.add(
+            String(
+                legend_x + 18,
+                5.5,
+                f"{item.symbol}: {float(item.points[-1].indexed_value):.1f}",
+                fontName=_BOLD_FONT,
+                fontSize=6.5,
+                fillColor=colors.HexColor("#5b6678"),
+            )
+        )
+    return drawing
+
+
+def _chart_axis(
+    min_value: float,
+    max_value: float,
+) -> tuple[float, float, float, tuple[float, ...]]:
+    raw_range = max(max_value - min_value, 1.0)
+    padding = max(raw_range * 0.08, 0.5)
+    rough_step = (raw_range + padding * 2) / 4
+    magnitude = 10 ** math.floor(math.log10(rough_step))
+    normalized = rough_step / magnitude
+    multiplier = 1 if normalized <= 1 else 2 if normalized <= 2 else 5 if normalized <= 5 else 10
+    step = multiplier * magnitude
+    axis_min = math.floor((min_value - padding) / step) * step
+    axis_max = math.ceil((max_value + padding) / step) * step
+    tick_count = round((axis_max - axis_min) / step)
+    ticks = tuple(axis_min + index * step for index in range(tick_count + 1))
+    return axis_min, axis_max, step, ticks
+
+
+def _project_y(
+    value: float,
+    axis_min: float,
+    axis_max: float,
+    origin: float,
+    height: float,
+    *,
+    invert: bool = False,
+) -> float:
+    ratio = (value - axis_min) / max(axis_max - axis_min, 1.0)
+    return origin + ((1 - ratio) if invert else ratio) * height
+
+
+def _even_indices(length: int, count: int) -> tuple[int, ...]:
+    actual_count = min(length, count)
+    return tuple(
+        dict.fromkeys(
+            round((index / max(actual_count - 1, 1)) * (length - 1))
+            for index in range(actual_count)
+        )
+    )
+
+
+def _date_label(value: object) -> str:
+    return f"{value.strftime('%b')} {value.day}"
+
+
+def _axis_label(value: float, step: float) -> str:
+    return f"{value:.1f}" if step < 1 else f"{value:.0f}"
+
+
+def _chart_note(series: tuple[ReportExportChartSeries, ...]) -> str:
+    points = series[0].points
+    return (
+        f"Shared period: {points[0].priced_at.isoformat()} to "
+        f"{points[-1].priced_at.isoformat()}. Each series starts at 100. "
+        "Historical data is not a forecast."
     )
 
 
@@ -362,6 +636,7 @@ h2{margin-top:30px;padding-bottom:7px;border-bottom:1px solid #dce3ed;font-size:
 h3{font-size:15px}.metadata{display:grid;grid-template-columns:170px 1fr;gap:5px 14px}
 .metadata dt{font-weight:700}.metadata dd{margin:0;overflow-wrap:anywhere}.disclaimer{padding:14px;
 border-left:4px solid #2563eb;background:#eff6ff}.finding,.scenario,.source{break-inside:avoid}
+.price-chart{break-inside:avoid}.price-chart svg{width:100%;height:auto}
 .meta,.markers,footer{color:#5b6678;font-size:13px}.source dl{display:grid;
 grid-template-columns:120px 1fr;gap:4px 12px}.source dt{font-weight:700}.source dd{margin:0;
 overflow-wrap:anywhere}footer{margin-top:36px;padding-top:12px;border-top:1px solid #dce3ed}
