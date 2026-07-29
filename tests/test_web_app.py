@@ -339,7 +339,7 @@ def test_storage_integrity_endpoint_is_read_only(tmp_path) -> None:
 
     assert response.status_code == 200
     assert payload["healthy"] is True
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["counts"]["chat_sessions"] == 0
 
 
@@ -457,6 +457,34 @@ def test_high_confidence_policy_refusal_skips_provider_call(content: str) -> Non
     assert response.status_code == 200
     assert response.json()["finish_reason"] == "content_filter"
     assert provider.requests == []
+
+
+def test_blocked_orchestrator_research_decision_is_canonical_refusal() -> None:
+    provider = BlockedResearchDecisionProvider()
+    dispatcher = ResearchDispatcher()
+    registry = ProviderRegistry().register_chat_provider("capture", provider)
+    settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
+    client = _client(
+        settings=settings,
+        registry=registry,
+        research_dispatcher=dispatcher,
+    )
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    with client.stream(
+        "POST",
+        f"/api/sessions/{session_id}/messages/stream",
+        json={"content": "How is Tesla performing financially?"},
+    ) as response:
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    session = client.get(f"/api/sessions/{session_id}").json()["session"]
+
+    assert response.status_code == 200
+    assert [event["type"] for event in events] == ["delta", "completed"]
+    assert events[0]["delta"].startswith("I cannot change system instructions")
+    assert dispatcher.requests == []
+    assert session["messages"][-1]["content"] == events[0]["delta"]
 
 
 def test_greeting_and_product_help_use_fixed_responses_without_provider_call() -> None:
@@ -673,6 +701,36 @@ def test_streaming_provider_error_event_does_not_mutate_session() -> None:
                 "provider": "offline-test",
                 "model": None,
                 "retryable": True,
+            },
+        }
+    ]
+    assert retrieved["messages"] == []
+
+
+def test_streaming_agent_runtime_error_does_not_mutate_session() -> None:
+    provider = EmptyDirectResponseProvider()
+    registry = ProviderRegistry().register_chat_provider("capture", provider)
+    settings = Settings.from_env({"FRA_LLM_PROVIDER": "capture", "FRA_LLM_MODEL": "capture-model"})
+    client = _client(settings=settings, registry=registry)
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    with client.stream(
+        "POST",
+        f"/api/sessions/{session_id}/messages/stream",
+        json={"content": "Explain EBITDA."},
+    ) as response:
+        events = [json.loads(line) for line in response.iter_lines() if line]
+
+    retrieved = client.get(f"/api/sessions/{session_id}").json()["session"]
+
+    assert response.status_code == 200
+    assert events == [
+        {
+            "type": "error",
+            "status": 503,
+            "detail": {
+                "error": "conversation_policy_unavailable",
+                "message": "The provider returned an empty response.",
             },
         }
     ]
@@ -1008,6 +1066,18 @@ class DirectFailureProvider(CapturingProvider):
         raise self.error
 
 
+class EmptyDirectResponseProvider(CapturingProvider):
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        if request.response_format and request.response_format.name == "orchestrator_decision":
+            return await super().chat(request)
+        self.requests.append(request)
+        return ChatResponse(
+            message=ChatMessage(role=MessageRole.ASSISTANT, content=""),
+            provider="capture",
+            model=request.model or "capture-model",
+        )
+
+
 class UnsafeOutputProvider(CapturingProvider):
     async def chat(self, request: ChatRequest) -> ChatResponse:
         if request.response_format and request.response_format.name == "orchestrator_decision":
@@ -1064,6 +1134,26 @@ class ResearchDecisionProvider(CapturingProvider):
                 },
             )
         return await super().chat(request)
+
+
+class BlockedResearchDecisionProvider(ResearchDecisionProvider):
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        self.requests.append(request)
+        return ChatResponse(
+            message=ChatMessage(role=MessageRole.ASSISTANT, content=""),
+            provider="capture",
+            model=request.model or "capture-model",
+            structured_output={
+                "mode": "research",
+                "answer": "",
+                "scope": "financial_research",
+                "policy_reason": "prompt_injection",
+                "company_query": "Tesla",
+                "specialist_roles": ["stock", "synthesis"],
+                "risk_flags": ["prompt_injection"],
+                "reasoning_summary": "Unsafe model decision.",
+            },
+        )
 
 
 class ResearchDispatcher:

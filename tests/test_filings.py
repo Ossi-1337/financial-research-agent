@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 
 import httpx
 import pytest
+from reportlab.pdfgen.canvas import Canvas
 
 from financial_research_agent.filings import (
     FilingCompany,
@@ -139,7 +141,7 @@ def test_sec_edgar_provider_maps_rate_limit_and_malformed_payload() -> None:
     assert malformed_error.value.code == FilingErrorCode.MALFORMED_RESPONSE
 
 
-def test_sec_edgar_provider_rejects_oversized_and_pdf_documents(tmp_path) -> None:
+def test_sec_edgar_provider_rejects_oversized_and_malformed_pdf_documents(tmp_path) -> None:
     oversized = SECEDGARFilingProvider(
         raw_documents_dir=tmp_path / "raw",
         extracted_text_dir=tmp_path / "text",
@@ -167,7 +169,42 @@ def test_sec_edgar_provider_rejects_oversized_and_pdf_documents(tmp_path) -> Non
         asyncio.run(pdf.ingest_latest(FilingCompany(cik="320193")))
 
     assert oversized_error.value.code == FilingErrorCode.DOCUMENT_TOO_LARGE
-    assert pdf_error.value.code == FilingErrorCode.UNSUPPORTED_FORMAT
+    assert pdf_error.value.code == FilingErrorCode.EXTRACTION_FAILED
+
+
+def test_sec_edgar_provider_ingests_pdf_with_page_metadata(tmp_path) -> None:
+    pdf_payload = {
+        **SUBMISSIONS_FIXTURE,
+        "filings": {
+            "recent": {
+                **SUBMISSIONS_FIXTURE["filings"]["recent"],
+                "primaryDocument": ["aapl-20251231.pdf", "aapl-8k.htm"],
+            }
+        },
+    }
+    provider = SECEDGARFilingProvider(
+        raw_documents_dir=tmp_path / "raw",
+        extracted_text_dir=tmp_path / "text",
+        http_client=_sec_client(
+            submissions=pdf_payload,
+            document=_pdf_document(),
+            document_content_type="application/pdf",
+        ),
+    )
+
+    result = asyncio.run(provider.ingest_latest(FilingCompany(cik="320193")))
+    filing = result.filings[0]
+
+    assert filing.document_format == FilingDocumentFormat.PDF
+    assert filing.extraction_status is not None
+    assert filing.extraction_status.value == "complete"
+    assert filing.extraction_method is not None
+    assert filing.extraction_method.value == "pdf_native_text"
+    assert filing.page_count == 2
+    assert all(chunk.source_region is not None for chunk in result.chunks)
+    assert {chunk.source_region.page_number for chunk in result.chunks} == {1, 2}
+    assert all(chunk.metadata["extraction_method"] == "pdf_native_text" for chunk in result.chunks)
+    assert next((tmp_path / "raw").rglob("*.pdf")).read_bytes().startswith(b"%PDF")
 
 
 def test_sec_edgar_provider_rejects_malformed_content_length() -> None:
@@ -217,6 +254,7 @@ def _sec_client(
     submissions: object = SUBMISSIONS_FIXTURE,
     document: bytes = HTML_DOCUMENT,
     document_headers: dict[str, str] | None = None,
+    document_content_type: str = "text/html",
 ) -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
         if requests is not None:
@@ -226,7 +264,7 @@ def _sec_client(
         return httpx.Response(
             200,
             content=document,
-            headers={"content-type": "text/html", **(document_headers or {})},
+            headers={"content-type": document_content_type, **(document_headers or {})},
         )
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -234,3 +272,14 @@ def _sec_client(
 
 def _single_response_client(response: httpx.Response) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: response))
+
+
+def _pdf_document() -> bytes:
+    output = BytesIO()
+    canvas = Canvas(output)
+    canvas.drawString(72, 720, "Annual report revenue and operating profit evidence.")
+    canvas.showPage()
+    canvas.drawString(72, 720, "Balance sheet cash flow and liquidity evidence.")
+    canvas.showPage()
+    canvas.save()
+    return output.getvalue()

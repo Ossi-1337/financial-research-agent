@@ -388,8 +388,9 @@ class SQLiteFilingStore:
                     """
                     INSERT INTO filings(
                         id, result_id, accession_number, form_type, filing_date,
-                        local_raw_path, local_text_path, payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        local_raw_path, local_text_path, extraction_status,
+                        extraction_method, page_count, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         filing.id,
@@ -399,13 +400,25 @@ class SQLiteFilingStore:
                         filing.filing_date.isoformat(),
                         filing.local_raw_path,
                         filing.local_text_path,
+                        (
+                            filing.extraction_status.value
+                            if filing.extraction_status is not None
+                            else None
+                        ),
+                        (
+                            filing.extraction_method.value
+                            if filing.extraction_method is not None
+                            else None
+                        ),
+                        filing.page_count,
                         _json(filing.to_dict()),
                     ),
                 )
             connection.executemany(
                 """
                 INSERT INTO filing_chunks(id, filing_id, chunk_index, char_start, char_end,
-                    section_heading, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    section_heading, page_number, region_json, extraction_method,
+                    metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     (
@@ -415,6 +428,21 @@ class SQLiteFilingStore:
                         chunk.char_start,
                         chunk.char_end,
                         chunk.section_heading,
+                        (
+                            chunk.source_region.page_number
+                            if chunk.source_region is not None
+                            else None
+                        ),
+                        (
+                            _json(chunk.source_region.to_dict())
+                            if chunk.source_region is not None
+                            else None
+                        ),
+                        (
+                            chunk.extraction_method.value
+                            if chunk.extraction_method is not None
+                            else None
+                        ),
                         _json(dict(chunk.metadata)),
                     )
                     for chunk in result.chunks

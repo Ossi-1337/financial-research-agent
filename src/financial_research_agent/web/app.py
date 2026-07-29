@@ -825,6 +825,8 @@ def create_app(
                 )
             except ProviderError as exc:
                 yield _stream_error_line(exc)
+            except AgentRuntimeError as exc:
+                yield _stream_agent_error_line(exc)
 
         return StreamingResponse(
             events(),
@@ -1098,6 +1100,16 @@ def _stream_error_line(error: ProviderError) -> str:
             "type": "error",
             "status": _status_for_provider_error(error.code),
             "detail": _provider_error_detail(error),
+        }
+    )
+
+
+def _stream_agent_error_line(error: AgentRuntimeError) -> str:
+    return _stream_line(
+        {
+            "type": "error",
+            "status": 503,
+            "detail": {"error": error.code, "message": error.message},
         }
     )
 

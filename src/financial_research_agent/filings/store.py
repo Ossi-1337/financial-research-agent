@@ -7,6 +7,11 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Self
 
+from financial_research_agent.documents import (
+    DocumentExtractionMethod,
+    DocumentExtractionStatus,
+    DocumentRegion,
+)
 from financial_research_agent.filings.contracts import (
     FilingChunk,
     FilingCompany,
@@ -204,6 +209,18 @@ def _filing_from_payload(payload: Any) -> FilingDocument:
         source=_source_from_payload(payload["source"]),
         chunk_ids=tuple(str(item) for item in payload.get("chunk_ids", ())),
         warnings=tuple(str(item) for item in payload.get("warnings", ())),
+        extraction_status=(
+            DocumentExtractionStatus(str(payload["extraction_status"]))
+            if payload.get("extraction_status") is not None
+            else None
+        ),
+        extraction_method=(
+            DocumentExtractionMethod(str(payload["extraction_method"]))
+            if payload.get("extraction_method") is not None
+            else None
+        ),
+        page_count=(int(payload["page_count"]) if payload.get("page_count") is not None else None),
+        missing_text_pages=tuple(int(item) for item in payload.get("missing_text_pages", ())),
     )
 
 
@@ -222,6 +239,16 @@ def _chunk_from_payload(payload: Any) -> FilingChunk:
         accession_number=str(payload["accession_number"]),
         form_type=str(payload["form_type"]),
         metadata={str(key): str(value) for key, value in payload.get("metadata", {}).items()},
+        source_region=(
+            DocumentRegion.from_dict(payload["source_region"])
+            if isinstance(payload.get("source_region"), dict)
+            else None
+        ),
+        extraction_method=(
+            DocumentExtractionMethod(str(payload["extraction_method"]))
+            if payload.get("extraction_method") is not None
+            else None
+        ),
     )
 
 

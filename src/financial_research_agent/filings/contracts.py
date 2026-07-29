@@ -7,6 +7,12 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol
 
+from financial_research_agent.documents import (
+    DocumentExtractionMethod,
+    DocumentExtractionStatus,
+    DocumentRegion,
+)
+
 
 class FilingProviderName(StrEnum):
     SEC_EDGAR = "sec-edgar"
@@ -28,6 +34,10 @@ class FilingErrorCode(StrEnum):
     NOT_FOUND = "not_found"
     UNSUPPORTED_FORMAT = "unsupported_format"
     DOCUMENT_TOO_LARGE = "document_too_large"
+    PAGE_LIMIT_EXCEEDED = "page_limit_exceeded"
+    OCR_REQUIRED = "ocr_required"
+    ENCRYPTED_DOCUMENT = "encrypted_document"
+    EXTRACTION_TIMEOUT = "extraction_timeout"
     EXTRACTION_FAILED = "extraction_failed"
 
 
@@ -107,6 +117,10 @@ class FilingDocument:
     publication_date: date | None = None
     chunk_ids: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    extraction_status: DocumentExtractionStatus | None = None
+    extraction_method: DocumentExtractionMethod | None = None
+    page_count: int | None = None
+    missing_text_pages: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _require_text("id", self.id))
@@ -136,6 +150,28 @@ class FilingDocument:
             raise ValueError("source must be a FilingSource")
         object.__setattr__(self, "chunk_ids", _text_tuple("chunk_ids", self.chunk_ids))
         object.__setattr__(self, "warnings", _text_tuple("warnings", self.warnings))
+        if self.extraction_status is not None:
+            object.__setattr__(
+                self,
+                "extraction_status",
+                DocumentExtractionStatus(self.extraction_status),
+            )
+        if self.extraction_method is not None:
+            object.__setattr__(
+                self,
+                "extraction_method",
+                DocumentExtractionMethod(self.extraction_method),
+            )
+        if self.page_count is not None and self.page_count <= 0:
+            raise ValueError("page_count must be positive")
+        missing_text_pages = tuple(self.missing_text_pages)
+        if any(page <= 0 for page in missing_text_pages):
+            raise ValueError("missing_text_pages must contain positive page numbers")
+        if self.page_count is not None and any(
+            page > self.page_count for page in missing_text_pages
+        ):
+            raise ValueError("missing_text_pages cannot exceed page_count")
+        object.__setattr__(self, "missing_text_pages", missing_text_pages)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -157,6 +193,14 @@ class FilingDocument:
             "source": self.source.to_dict(),
             "chunk_ids": list(self.chunk_ids),
             "warnings": list(self.warnings),
+            "extraction_status": (
+                self.extraction_status.value if self.extraction_status is not None else None
+            ),
+            "extraction_method": (
+                self.extraction_method.value if self.extraction_method is not None else None
+            ),
+            "page_count": self.page_count,
+            "missing_text_pages": list(self.missing_text_pages),
         }
 
 
@@ -173,6 +217,8 @@ class FilingChunk:
     form_type: str
     section_heading: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
+    source_region: DocumentRegion | None = None
+    extraction_method: DocumentExtractionMethod | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _require_text("id", self.id))
@@ -193,6 +239,14 @@ class FilingChunk:
         object.__setattr__(self, "form_type", _require_text("form_type", self.form_type).upper())
         object.__setattr__(self, "section_heading", _optional_text(self.section_heading))
         object.__setattr__(self, "metadata", _text_mapping("metadata", self.metadata))
+        if self.source_region is not None and not isinstance(self.source_region, DocumentRegion):
+            raise ValueError("source_region must be a DocumentRegion")
+        if self.extraction_method is not None:
+            object.__setattr__(
+                self,
+                "extraction_method",
+                DocumentExtractionMethod(self.extraction_method),
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -207,6 +261,12 @@ class FilingChunk:
             "accession_number": self.accession_number,
             "form_type": self.form_type,
             "metadata": dict(self.metadata),
+            "source_region": (
+                self.source_region.to_dict() if self.source_region is not None else None
+            ),
+            "extraction_method": (
+                self.extraction_method.value if self.extraction_method is not None else None
+            ),
         }
 
 

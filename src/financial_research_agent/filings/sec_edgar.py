@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
@@ -8,6 +9,11 @@ from typing import Any
 
 import httpx
 
+from financial_research_agent.documents import (
+    DocumentExtractionError,
+    DocumentExtractionErrorCode,
+    PDFDocumentExtractor,
+)
 from financial_research_agent.filings.contracts import (
     FilingCompany,
     FilingDocument,
@@ -20,6 +26,7 @@ from financial_research_agent.filings.contracts import (
 )
 from financial_research_agent.filings.extraction import (
     build_chunks,
+    build_document_chunks,
     detect_document_format,
     extract_document_text,
 )
@@ -32,8 +39,8 @@ SEC_FILING_ATTRIBUTION = "U.S. Securities and Exchange Commission EDGAR filings"
 DEFAULT_MAX_DOCUMENT_BYTES = 8_000_000
 DEFAULT_SUPPORTED_FORMS = ("10-K", "10-Q")
 SEC_EXTRACTION_WARNING = (
-    "SEC HTML/TXT extraction uses a lightweight local parser; full filing presentation, "
-    "inline XBRL tables, and PDFs are deferred."
+    "Document extraction preserves searchable text and source metadata, but does not "
+    "reconstruct full filing presentation or inline XBRL tables."
 )
 SEC_LOCAL_CACHE_WARNING = (
     "Downloaded filing documents are stored for local research cache only; do not "
@@ -50,6 +57,11 @@ class SECEDGARFilingProvider:
         raw_documents_dir: Path | None = None,
         extracted_text_dir: Path | None = None,
         max_document_bytes: int = DEFAULT_MAX_DOCUMENT_BYTES,
+        pdf_max_document_bytes: int = 50_000_000,
+        pdf_max_pages: int = 300,
+        pdf_max_extracted_chars: int = 2_000_000,
+        pdf_extraction_timeout_seconds: float = 120.0,
+        pdf_extractor: PDFDocumentExtractor | None = None,
         user_agent: str = (
             "financial-research-agent/0.1 local-research contact@financial-research-agent.local"
         ),
@@ -65,6 +77,13 @@ class SECEDGARFilingProvider:
         self.raw_documents_dir = raw_documents_dir
         self.extracted_text_dir = extracted_text_dir
         self.max_document_bytes = max_document_bytes
+        self.pdf_extractor = pdf_extractor or PDFDocumentExtractor(
+            max_document_bytes=pdf_max_document_bytes,
+            max_pages=pdf_max_pages,
+            max_extracted_chars=pdf_max_extracted_chars,
+            timeout_seconds=pdf_extraction_timeout_seconds,
+        )
+        self.pdf_max_document_bytes = self.pdf_extractor.max_document_bytes
         self.user_agent = _require_text("user_agent", user_agent)
         self._http_client = http_client
         self._now = now or (lambda: datetime.now(UTC))
@@ -127,13 +146,34 @@ class SECEDGARFilingProvider:
         retrieved_at: datetime,
     ):
         document_url = self._document_url(company, record)
-        content, content_type = await self._get_document(document_url)
+        expected_format = detect_document_format(document_name=record.primary_document)
+        max_document_bytes = (
+            self.pdf_max_document_bytes
+            if expected_format == FilingDocumentFormat.PDF
+            else self.max_document_bytes
+        )
+        content, content_type = await self._get_document(
+            document_url,
+            max_document_bytes=max_document_bytes,
+        )
         document_format = detect_document_format(
             document_name=record.primary_document,
             content_type=content_type,
         )
-        text = extract_document_text(content, document_format)
         filing_id = f"sec:filing:{company.padded_cik}:{record.accession_number}"
+        extraction_result = None
+        if document_format == FilingDocumentFormat.PDF:
+            try:
+                extraction_result = await asyncio.to_thread(
+                    self.pdf_extractor.extract,
+                    content,
+                    content_type=content_type,
+                )
+            except DocumentExtractionError as exc:
+                raise _filing_error_from_document_error(exc) from exc
+            text = extraction_result.document.text
+        else:
+            text = extract_document_text(content, document_format)
         filing_source = FilingSource(
             provider=SEC_FILING_PROVIDER,
             provider_status=SEC_FILING_PROVIDER_STATUS,
@@ -148,12 +188,24 @@ class SECEDGARFilingProvider:
             content=content,
             text=text,
         )
-        filing_chunks = build_chunks(
-            filing_id=filing_id,
-            text=text,
-            source_url=document_url,
-            accession_number=record.accession_number,
-            form_type=record.form_type,
+        if extraction_result is None:
+            filing_chunks = build_chunks(
+                filing_id=filing_id,
+                text=text,
+                source_url=document_url,
+                accession_number=record.accession_number,
+                form_type=record.form_type,
+            )
+        else:
+            filing_chunks = build_document_chunks(
+                filing_id=filing_id,
+                document=extraction_result.document,
+                source_url=document_url,
+                accession_number=record.accession_number,
+                form_type=record.form_type,
+            )
+        extraction_warnings = (
+            extraction_result.document.warnings if extraction_result is not None else ()
         )
         filing = FilingDocument(
             id=filing_id,
@@ -171,7 +223,21 @@ class SECEDGARFilingProvider:
             local_text_path=str(text_path),
             source=filing_source,
             chunk_ids=tuple(chunk.id for chunk in filing_chunks),
-            warnings=(SEC_EXTRACTION_WARNING,),
+            warnings=(SEC_EXTRACTION_WARNING, *extraction_warnings),
+            extraction_status=(
+                extraction_result.document.status if extraction_result is not None else None
+            ),
+            extraction_method=(
+                extraction_result.document.extraction_method
+                if extraction_result is not None
+                else None
+            ),
+            page_count=(
+                len(extraction_result.document.pages) if extraction_result is not None else None
+            ),
+            missing_text_pages=(
+                extraction_result.missing_text_pages if extraction_result is not None else ()
+            ),
         )
         return filing, filing_chunks
 
@@ -193,7 +259,12 @@ class SECEDGARFilingProvider:
             )
         return payload
 
-    async def _get_document(self, url: str) -> tuple[bytes, str | None]:
+    async def _get_document(
+        self,
+        url: str,
+        *,
+        max_document_bytes: int,
+    ) -> tuple[bytes, str | None]:
         response = await self._get(url)
         content_length = response.headers.get("content-length")
         if content_length is not None:
@@ -205,14 +276,14 @@ class SECEDGARFilingProvider:
                     message="SEC filing document returned an invalid content-length header.",
                     provider=SEC_FILING_PROVIDER,
                 ) from exc
-            if declared_size > self.max_document_bytes:
+            if declared_size > max_document_bytes:
                 raise FilingError(
                     code=FilingErrorCode.DOCUMENT_TOO_LARGE,
                     message="SEC filing document exceeds configured max document size.",
                     provider=SEC_FILING_PROVIDER,
                 )
         content = response.content
-        if len(content) > self.max_document_bytes:
+        if len(content) > max_document_bytes:
             raise FilingError(
                 code=FilingErrorCode.DOCUMENT_TOO_LARGE,
                 message="SEC filing document exceeds configured max document size.",
@@ -467,3 +538,19 @@ def _require_text(name: str, value: str) -> str:
     if text == "":
         raise ValueError(f"{name} is required")
     return text
+
+
+def _filing_error_from_document_error(error: DocumentExtractionError) -> FilingError:
+    mapping = {
+        DocumentExtractionErrorCode.DOCUMENT_TOO_LARGE: FilingErrorCode.DOCUMENT_TOO_LARGE,
+        DocumentExtractionErrorCode.PAGE_LIMIT_EXCEEDED: FilingErrorCode.PAGE_LIMIT_EXCEEDED,
+        DocumentExtractionErrorCode.ENCRYPTED_DOCUMENT: FilingErrorCode.ENCRYPTED_DOCUMENT,
+        DocumentExtractionErrorCode.OCR_REQUIRED: FilingErrorCode.OCR_REQUIRED,
+        DocumentExtractionErrorCode.TIMEOUT: FilingErrorCode.EXTRACTION_TIMEOUT,
+    }
+    return FilingError(
+        code=mapping.get(error.code, FilingErrorCode.EXTRACTION_FAILED),
+        message=error.message,
+        provider=SEC_FILING_PROVIDER,
+        retryable=error.code == DocumentExtractionErrorCode.TIMEOUT,
+    )

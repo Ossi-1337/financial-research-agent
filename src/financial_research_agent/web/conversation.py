@@ -105,6 +105,8 @@ class AgentConversationService:
                 code="conversation_policy_unavailable",
                 message="The request could not be classified safely.",
             ) from exc
+        if policy.uses_fixed_response:
+            decision = _fixed_agent_decision(policy)
         return ConversationPlan(
             decision=decision,
             policy=policy,

@@ -31,6 +31,10 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.data_sources.filing_provider == "sec-edgar"
     assert settings.data_sources.filing_cache_ttl_days == 30
     assert settings.data_sources.filing_max_document_bytes == 8_000_000
+    assert settings.data_sources.pdf_max_document_bytes == 50_000_000
+    assert settings.data_sources.pdf_max_pages == 300
+    assert settings.data_sources.pdf_max_extracted_chars == 2_000_000
+    assert settings.data_sources.pdf_extraction_timeout_seconds == 120.0
     assert settings.storage.provider == "sqlite"
     assert settings.retrieval.provider == "local-vector"
     assert settings.retrieval.top_k == 5
@@ -338,12 +342,20 @@ def test_filing_settings_are_read_and_validated() -> None:
             "FRA_FILING_PROVIDER": "sec-edgar",
             "FRA_FILING_CACHE_TTL_DAYS": "14",
             "FRA_FILING_MAX_DOCUMENT_BYTES": "1000",
+            "FRA_PDF_MAX_DOCUMENT_BYTES": "2000",
+            "FRA_PDF_MAX_PAGES": "20",
+            "FRA_PDF_MAX_EXTRACTED_CHARS": "3000",
+            "FRA_PDF_EXTRACTION_TIMEOUT_SECONDS": "15.5",
         }
     )
 
     assert settings.data_sources.filing_provider == "sec-edgar"
     assert settings.data_sources.filing_cache_ttl_days == 14
     assert settings.data_sources.filing_max_document_bytes == 1000
+    assert settings.data_sources.pdf_max_document_bytes == 2000
+    assert settings.data_sources.pdf_max_pages == 20
+    assert settings.data_sources.pdf_max_extracted_chars == 3000
+    assert settings.data_sources.pdf_extraction_timeout_seconds == 15.5
 
     try:
         Settings.from_env({"FRA_FILING_CACHE_TTL_DAYS": "0"})
@@ -358,6 +370,15 @@ def test_filing_settings_are_read_and_validated() -> None:
         assert "FRA_FILING_MAX_DOCUMENT_BYTES must be positive" in str(exc)
     else:
         raise AssertionError("Expected invalid filing max bytes to be rejected")
+
+    for name in (
+        "FRA_PDF_MAX_DOCUMENT_BYTES",
+        "FRA_PDF_MAX_PAGES",
+        "FRA_PDF_MAX_EXTRACTED_CHARS",
+        "FRA_PDF_EXTRACTION_TIMEOUT_SECONDS",
+    ):
+        with pytest.raises(ValueError, match=f"{name} must be positive"):
+            Settings.from_env({name: "0"})
 
 
 def test_retrieval_settings_are_read_and_validated() -> None:

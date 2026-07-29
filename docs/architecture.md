@@ -15,7 +15,7 @@ flowchart LR
     ORC -->|A2A| CONTEXT["Context agent"]
     ORC -->|A2A| SYNTH["Synthesis agent"]
 
-    FIN --> FINTOOLS["SEC statements, filings, and filing RAG"]
+    FIN --> FINTOOLS["SEC statements, HTML/TXT/PDF filings, and filing RAG"]
     STOCK --> STOCKTOOLS["Market data and deterministic calculations"]
     CONTEXT --> CONTEXTTOOLS["Bounded company, macro, and sector sources"]
     SYNTH --> EVIDENCE["Validated handoffs, evidence, and report exports"]
@@ -97,6 +97,11 @@ SQLite stores structured entities, chat, source metadata, research runs, handoff
 delegations, background jobs, and runtime settings. The filesystem stores raw SEC documents,
 extracted text, vector indexes, caches, backups, logs, and immutable report exports.
 
+Text-based PDFs are extracted locally in a bounded PDFium worker process. Normalized chunks stay
+inside page boundaries and preserve page number plus normalized text-region coordinates for
+citations. Fully scanned PDFs return `ocr_required`; OCR, uploads, and arbitrary URL ingestion are
+not part of the runtime.
+
 `FRA_HOME` is the local trust boundary. Credentials remain environment-only. External documents
 are untrusted evidence, never instructions. The application exposes no shell or unrestricted
 filesystem tool.
@@ -156,7 +161,7 @@ These controls are defense in depth, not a guarantee against every prompt-inject
 | `orchestration` | Orchestrator contracts, plan, delegation, and canonical run |
 | `a2a` | Agent Cards, task execution, dispatcher, retry/cancellation, and specialist services |
 | `entities` | Company and security resolution |
-| `statements`, `filings`, `retrieval`, `report_analysis` | Financial-report agent data and analysis |
+| `documents`, `statements`, `filings`, `retrieval`, `report_analysis` | Normalized documents plus financial-report agent data and analysis |
 | `market_data`, `stock_analysis` | Stock agent data and analysis |
 | `context_analysis` | Context agent analysis |
 | `synthesis`, `report_exports` | Validated LLM synthesis, deterministic report mapping, and immutable exports |

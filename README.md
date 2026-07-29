@@ -71,7 +71,9 @@ different loopback address.
 Implemented:
 
 - Persistent streaming chat with `@company` references and bounded history.
-- SEC company lookup, CompanyFacts statements, and EDGAR HTML/TXT filing ingestion.
+- SEC company lookup, CompanyFacts statements, and EDGAR HTML/TXT/PDF filing ingestion.
+- Local native PDF text extraction with page-aware evidence, bounded worker isolation, quality
+  status, and explicit `ocr_required` handling for scanned reports.
 - Alpha Vantage daily prices and deterministic market calculations.
 - SQLite persistence, local filing retrieval, citations, evidence inspection, and report exports.
 - Provider adapters for local OpenAI-compatible endpoints, OpenAI, Anthropic, Gemini, and LiteLLM.
@@ -86,7 +88,7 @@ Implemented:
 Current boundaries:
 
 - No trading, broker integration, price targets, alerts, or buy/sell/hold recommendations.
-- No automatic news/macro ingestion, PDF extraction, or RAG on every chat message.
+- No automatic news/macro ingestion, OCR, arbitrary PDF upload, or RAG on every chat message.
 - No durable cross-host queue, remote database, public A2A deployment, or hosted telemetry claim.
 - Market data may be delayed or provider-limited; SEC coverage is limited to SEC filers.
 - Local LLM quality depends on the selected model, runtime, context budget, and hardware.

@@ -150,6 +150,14 @@ def retrieval_chunk_from_filing_chunk(
         metadata["company_id"] = company_id
     if legal_name is not None:
         metadata["legal_name"] = legal_name
+    if chunk.source_region is not None:
+        metadata["page_number"] = str(chunk.source_region.page_number)
+        metadata["region_left"] = str(chunk.source_region.left)
+        metadata["region_top"] = str(chunk.source_region.top)
+        metadata["region_right"] = str(chunk.source_region.right)
+        metadata["region_bottom"] = str(chunk.source_region.bottom)
+    if chunk.extraction_method is not None:
+        metadata["extraction_method"] = chunk.extraction_method.value
     return RetrievalChunk(
         id=f"retrieval:{chunk.id}",
         text=chunk.text,

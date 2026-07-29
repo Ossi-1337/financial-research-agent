@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import pytest
 
+from financial_research_agent.documents import DocumentExtractionMethod, DocumentRegion
 from financial_research_agent.filings import (
     FilingChunk,
     FilingCompany,
@@ -89,6 +90,12 @@ def test_financial_report_analysis_agent_produces_grounded_sections() -> None:
     assert len(result.citations) == len(result.evidence)
     assert all(finding.evidence_ids or finding.limitations for finding in result.findings)
     assert all(citation.source_url for citation in result.citations)
+    filing_citations = [
+        citation for citation in result.citations if citation.metadata.get("kind") == "filing_chunk"
+    ]
+    assert filing_citations
+    assert all("#page=" in citation.source_url for citation in filing_citations)
+    assert all("(p. " in (citation.section or "") for citation in filing_citations)
 
     revenue = _finding(result.findings, FinancialReportSection.REVENUE)
     assert revenue.evidence_ids
@@ -324,6 +331,14 @@ def _chunk(
         form_type=filing.form_type,
         section_heading=heading,
         metadata={"fixture": "true"},
+        source_region=DocumentRegion(
+            page_number=index + 1,
+            left=0.1,
+            top=0.1,
+            right=0.9,
+            bottom=0.9,
+        ),
+        extraction_method=DocumentExtractionMethod.PDF_NATIVE_TEXT,
     )
 
 

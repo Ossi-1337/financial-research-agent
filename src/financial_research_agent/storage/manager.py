@@ -321,7 +321,7 @@ def default_storage_dataset_specs(settings: Settings) -> tuple[StorageDatasetSpe
             relative_path="filings/raw",
             storage_format=StorageFormat.FILE_TREE,
             ttl_days=data_sources.filing_cache_ttl_days,
-            description="Locally cached SEC primary HTML/TXT documents.",
+            description="Locally cached SEC primary HTML/TXT/PDF documents.",
         ),
         StorageDatasetSpec(
             dataset=StorageDataset.FILING_EXTRACTED_TEXT,

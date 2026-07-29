@@ -87,8 +87,8 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
                 "through official EDGAR XBRL JSON APIs."
             ),
             (
-                "SEC EDGAR filing ingestion is available for HTML/TXT primary documents "
-                "with local raw and extracted-text storage."
+                "SEC EDGAR filing ingestion is available for HTML/TXT/PDF primary documents "
+                "with local raw, normalized-text, and page-aware chunk storage."
             ),
             (
                 "Local vector retrieval can index stored filing chunks when an embedding "

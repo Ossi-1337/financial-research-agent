@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from financial_research_agent.filings import FilingChunk, FilingIngestionResult
@@ -664,14 +665,23 @@ class _EvidenceBuilder:
         }
         if chunk.section_heading is not None:
             metadata["section_heading"] = chunk.section_heading
+        page_number = chunk.source_region.page_number if chunk.source_region is not None else None
+        if page_number is not None:
+            metadata["page_number"] = str(page_number)
+        if chunk.extraction_method is not None:
+            metadata["extraction_method"] = chunk.extraction_method.value
+        section_label = chunk.section_heading or section.value
+        if page_number is not None:
+            section_label = f"{section_label} (p. {page_number})"
+        source_url = _source_url_with_page(chunk.source_url, page_number)
         citation = Citation(
             id=citation_id,
             evidence_id=evidence_id,
-            source_url=chunk.source_url,
+            source_url=source_url,
             retrieved_at=retrieved_at,
             document_id=chunk.filing_id,
             chunk_id=chunk.id,
-            section=chunk.section_heading or section.value,
+            section=section_label,
             quote=quote,
             metadata=metadata,
         )
@@ -679,12 +689,12 @@ class _EvidenceBuilder:
             id=evidence_id,
             citation_id=citation_id,
             text=_shorten(" ".join(chunk.text.split()), 1_200),
-            source_url=chunk.source_url,
+            source_url=source_url,
             retrieved_at=retrieved_at,
             score=1.0,
             document_id=chunk.filing_id,
             chunk_id=chunk.id,
-            section=chunk.section_heading or section.value,
+            section=section_label,
             metadata=metadata,
         )
         self._citations.append(citation)
@@ -939,6 +949,13 @@ def _source_summary(
 
 def _evidence_ids(*points: _MetricPoint | None) -> tuple[str, ...]:
     return tuple(point.evidence_id for point in points if point is not None)
+
+
+def _source_url_with_page(source_url: str, page_number: int | None) -> str:
+    if page_number is None:
+        return source_url
+    parts = urlsplit(source_url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, f"page={page_number}"))
 
 
 def _citation_ids(*points: _MetricPoint | None) -> tuple[str, ...]:

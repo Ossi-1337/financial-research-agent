@@ -32,6 +32,10 @@ DEFAULT_FINANCIAL_STATEMENT_CACHE_TTL_DAYS = 30
 DEFAULT_FILING_PROVIDER = "sec-edgar"
 DEFAULT_FILING_CACHE_TTL_DAYS = 30
 DEFAULT_FILING_MAX_DOCUMENT_BYTES = 8_000_000
+DEFAULT_PDF_MAX_DOCUMENT_BYTES = 50_000_000
+DEFAULT_PDF_MAX_PAGES = 300
+DEFAULT_PDF_MAX_EXTRACTED_CHARS = 2_000_000
+DEFAULT_PDF_EXTRACTION_TIMEOUT_SECONDS = 120.0
 DEFAULT_STORAGE_PROVIDER = "sqlite"
 DEFAULT_RETRIEVAL_PROVIDER = "local-vector"
 DEFAULT_RETRIEVAL_TOP_K = 5
@@ -283,6 +287,10 @@ class DataSourceSettings:
     filing_provider: str = DEFAULT_FILING_PROVIDER
     filing_cache_ttl_days: int = DEFAULT_FILING_CACHE_TTL_DAYS
     filing_max_document_bytes: int = DEFAULT_FILING_MAX_DOCUMENT_BYTES
+    pdf_max_document_bytes: int = DEFAULT_PDF_MAX_DOCUMENT_BYTES
+    pdf_max_pages: int = DEFAULT_PDF_MAX_PAGES
+    pdf_max_extracted_chars: int = DEFAULT_PDF_MAX_EXTRACTED_CHARS
+    pdf_extraction_timeout_seconds: float = DEFAULT_PDF_EXTRACTION_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -311,6 +319,14 @@ class DataSourceSettings:
             raise ValueError("filing_cache_ttl_days must be positive")
         if self.filing_max_document_bytes <= 0:
             raise ValueError("filing_max_document_bytes must be positive")
+        if self.pdf_max_document_bytes <= 0:
+            raise ValueError("pdf_max_document_bytes must be positive")
+        if self.pdf_max_pages <= 0:
+            raise ValueError("pdf_max_pages must be positive")
+        if self.pdf_max_extracted_chars <= 0:
+            raise ValueError("pdf_max_extracted_chars must be positive")
+        if self.pdf_extraction_timeout_seconds <= 0:
+            raise ValueError("pdf_extraction_timeout_seconds must be positive")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -325,6 +341,10 @@ class DataSourceSettings:
             "filing_provider": self.filing_provider,
             "filing_cache_ttl_days": self.filing_cache_ttl_days,
             "filing_max_document_bytes": self.filing_max_document_bytes,
+            "pdf_max_document_bytes": self.pdf_max_document_bytes,
+            "pdf_max_pages": self.pdf_max_pages,
+            "pdf_max_extracted_chars": self.pdf_max_extracted_chars,
+            "pdf_extraction_timeout_seconds": self.pdf_extraction_timeout_seconds,
         }
 
 
@@ -632,6 +652,26 @@ class Settings:
                     env,
                     "FRA_FILING_MAX_DOCUMENT_BYTES",
                     DEFAULT_FILING_MAX_DOCUMENT_BYTES,
+                ),
+                pdf_max_document_bytes=_env_int_value(
+                    env,
+                    "FRA_PDF_MAX_DOCUMENT_BYTES",
+                    DEFAULT_PDF_MAX_DOCUMENT_BYTES,
+                ),
+                pdf_max_pages=_env_int_value(
+                    env,
+                    "FRA_PDF_MAX_PAGES",
+                    DEFAULT_PDF_MAX_PAGES,
+                ),
+                pdf_max_extracted_chars=_env_int_value(
+                    env,
+                    "FRA_PDF_MAX_EXTRACTED_CHARS",
+                    DEFAULT_PDF_MAX_EXTRACTED_CHARS,
+                ),
+                pdf_extraction_timeout_seconds=_env_float_value(
+                    env,
+                    "FRA_PDF_EXTRACTION_TIMEOUT_SECONDS",
+                    DEFAULT_PDF_EXTRACTION_TIMEOUT_SECONDS,
                 ),
             ),
             storage=StorageSettings(

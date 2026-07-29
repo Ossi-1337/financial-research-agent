@@ -14,6 +14,7 @@ from financial_research_agent.filings.contracts import (
 )
 from financial_research_agent.filings.extraction import (
     build_chunks,
+    build_document_chunks,
     detect_document_format,
     extract_document_text,
 )
@@ -31,6 +32,10 @@ def create_default_filing_provider(settings: Settings) -> FilingProvider:
         raw_documents_dir=filings_root / "raw",
         extracted_text_dir=filings_root / "text",
         max_document_bytes=settings.data_sources.filing_max_document_bytes,
+        pdf_max_document_bytes=settings.data_sources.pdf_max_document_bytes,
+        pdf_max_pages=settings.data_sources.pdf_max_pages,
+        pdf_max_extracted_chars=settings.data_sources.pdf_max_extracted_chars,
+        pdf_extraction_timeout_seconds=settings.data_sources.pdf_extraction_timeout_seconds,
         user_agent=settings.data_sources.sec_user_agent,
     )
 
@@ -49,6 +54,7 @@ __all__ = [
     "FilingStore",
     "SECEDGARFilingProvider",
     "build_chunks",
+    "build_document_chunks",
     "create_default_filing_provider",
     "detect_document_format",
     "extract_document_text",

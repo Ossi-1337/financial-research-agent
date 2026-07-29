@@ -11,6 +11,11 @@ from threading import Event
 import pytest
 
 from financial_research_agent.background import BackgroundResearchJob, BackgroundResearchStatus
+from financial_research_agent.documents import (
+    DocumentExtractionMethod,
+    DocumentExtractionStatus,
+    DocumentRegion,
+)
 from financial_research_agent.entities import (
     EntityIdentifier,
     EntityIdentifierType,
@@ -218,6 +223,16 @@ def test_filing_repository_stores_offsets_and_rehydrates_chunk_text(tmp_path: Pa
     assert loaded.chunks[0].text == "Revenue increased."
     assert loaded.chunks[0].char_start == 0
     assert loaded.chunks[0].char_end == 18
+    assert loaded.filings[0].extraction_status == DocumentExtractionStatus.COMPLETE
+    assert loaded.filings[0].page_count == 1
+    assert loaded.chunks[0].source_region == DocumentRegion(
+        page_number=1,
+        left=0.1,
+        top=0.1,
+        right=0.9,
+        bottom=0.9,
+    )
+    assert loaded.chunks[0].extraction_method == DocumentExtractionMethod.PDF_NATIVE_TEXT
 
 
 def test_complex_repository_payloads_round_trip(tmp_path: Path) -> None:
@@ -578,6 +593,9 @@ def _filing_result(tmp_path: Path) -> FilingIngestionResult:
         local_text_path=str(text_path),
         source=source,
         chunk_ids=("chunk_1",),
+        extraction_status=DocumentExtractionStatus.COMPLETE,
+        extraction_method=DocumentExtractionMethod.PDF_NATIVE_TEXT,
+        page_count=1,
     )
     chunk = FilingChunk(
         id="chunk_1",
@@ -589,5 +607,13 @@ def _filing_result(tmp_path: Path) -> FilingIngestionResult:
         source_url=source.source_url,
         accession_number=filing.accession_number,
         form_type=filing.form_type,
+        source_region=DocumentRegion(
+            page_number=1,
+            left=0.1,
+            top=0.1,
+            right=0.9,
+            bottom=0.9,
+        ),
+        extraction_method=DocumentExtractionMethod.PDF_NATIVE_TEXT,
     )
     return FilingIngestionResult(company=company, filings=(filing,), chunks=(chunk,), source=source)

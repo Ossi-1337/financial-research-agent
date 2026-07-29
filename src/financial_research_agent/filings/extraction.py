@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import replace
 from html.parser import HTMLParser
 
+from financial_research_agent.documents import NormalizedDocument
 from financial_research_agent.filings.contracts import (
     FilingChunk,
     FilingDocumentFormat,
@@ -96,7 +98,7 @@ def extract_document_text(content: bytes, document_format: FilingDocumentFormat 
     if selected_format == FilingDocumentFormat.PDF:
         raise FilingError(
             code=FilingErrorCode.UNSUPPORTED_FORMAT,
-            message="PDF filing extraction is deferred; ingest SEC HTML or TXT primary documents.",
+            message="Use PDFDocumentExtractor for PDF text and page metadata.",
             provider=FilingProviderName.SEC_EDGAR.value,
         )
     if selected_format == FilingDocumentFormat.UNSUPPORTED:
@@ -196,6 +198,48 @@ def build_chunks(
         if end >= len(text):
             break
         start = max(end - overlap, start + 1)
+    return tuple(chunks)
+
+
+def build_document_chunks(
+    *,
+    filing_id: str,
+    document: NormalizedDocument,
+    source_url: str,
+    accession_number: str,
+    form_type: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    overlap: int = DEFAULT_CHUNK_OVERLAP,
+) -> tuple[FilingChunk, ...]:
+    chunks: list[FilingChunk] = []
+    for page in document.pages:
+        page_chunks = build_chunks(
+            filing_id=filing_id,
+            text=page.text,
+            source_url=source_url,
+            accession_number=accession_number,
+            form_type=form_type,
+            chunk_size=chunk_size,
+            overlap=overlap,
+        )
+        for page_chunk in page_chunks:
+            chunk_index = len(chunks)
+            chunks.append(
+                replace(
+                    page_chunk,
+                    id=f"{filing_id}:chunk:{chunk_index}",
+                    chunk_index=chunk_index,
+                    char_start=page.char_start + page_chunk.char_start,
+                    char_end=page.char_start + page_chunk.char_end,
+                    source_region=page.regions[0] if page.regions else None,
+                    extraction_method=document.extraction_method,
+                    metadata={
+                        **dict(page_chunk.metadata),
+                        "page_number": str(page.page_number),
+                        "extraction_method": document.extraction_method.value,
+                    },
+                )
+            )
     return tuple(chunks)
 
 
