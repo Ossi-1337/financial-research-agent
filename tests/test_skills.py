@@ -25,6 +25,7 @@ def test_default_skills_are_versioned_immutable_and_role_bound() -> None:
         "filing-review",
         "source-verification",
     }
+    assert catalog.by_id("company-research").version.value == "2.0.0"
     filing = catalog.by_id("filing-review")
     assert filing.version.value == "1.0.0"
     assert filing.role == SkillRole.FINANCIAL_REPORT_ANALYST

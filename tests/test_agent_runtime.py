@@ -30,6 +30,7 @@ from financial_research_agent.llm import (
     ToolCall,
 )
 from financial_research_agent.llm.registry import ProviderRegistry
+from financial_research_agent.security import ConversationPolicyReason, ConversationScope
 from financial_research_agent.settings import Settings
 from financial_research_agent.tools import (
     ToolContext,
@@ -59,8 +60,9 @@ def test_orchestrator_accepts_each_valid_decision(mode: AgentDecisionMode) -> No
     assert tuple(skill.id for skill in decision.skills) == ("company-research",)
     assert provider.requests[0].response_format is not None
     assert provider.requests[0].metadata["agent_role"] == "orchestrator"
-    assert provider.requests[0].metadata["skills"] == "company-research@1.0.0"
+    assert provider.requests[0].metadata["skills"] == "company-research@2.0.0"
     assert "Reusable workflow skills:" in provider.requests[0].messages[0].content
+    assert decision.scope == _decision_scope(mode)
 
 
 def test_orchestrator_rejects_client_selected_specialist() -> None:
@@ -282,6 +284,7 @@ class DecisionProvider:
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
         research = self.mode == AgentDecisionMode.RESEARCH
+        refusal = self.mode == AgentDecisionMode.REFUSAL
         return ChatResponse(
             message=ChatMessage(role=MessageRole.ASSISTANT, content=""),
             provider="scripted",
@@ -289,18 +292,33 @@ class DecisionProvider:
             structured_output={
                 "mode": self.mode.value,
                 "answer": "Safe response." if not research else "",
+                "scope": _decision_scope(self.mode).value,
+                "policy_reason": (
+                    ConversationPolicyReason.OUT_OF_SCOPE.value
+                    if refusal
+                    else ConversationPolicyReason.ALLOWED.value
+                ),
                 "company_query": "TEST TOOL OUTPUT COMPANY" if research else None,
                 "specialist_roles": (
                     list(self.roles)
                     if self.roles
                     else (["financial-report", "stock", "context", "synthesis"] if research else [])
                 ),
+                "risk_flags": ([ConversationPolicyReason.OUT_OF_SCOPE.value] if refusal else []),
                 "reasoning_summary": "Concise routing summary.",
             },
         )
 
     def stream_chat(self, _request: ChatRequest):
         raise NotImplementedError
+
+
+def _decision_scope(mode: AgentDecisionMode) -> ConversationScope:
+    if mode == AgentDecisionMode.RESEARCH:
+        return ConversationScope.FINANCIAL_RESEARCH
+    if mode == AgentDecisionMode.REFUSAL:
+        return ConversationScope.OUT_OF_SCOPE
+    return ConversationScope.FINANCIAL_EDUCATION
 
 
 @dataclass

@@ -10,12 +10,14 @@ from financial_research_agent.agents.contracts import (
     PromptContract,
     PromptVersion,
 )
+from financial_research_agent.security import UNTRUSTED_CONTENT_INSTRUCTION
 
 PROMPT_VERSION = PromptVersion("1.0.0")
+ORCHESTRATOR_PROMPT_VERSION = PromptVersion("2.0.0")
 MAX_POINT_TEXT_CHARS = 200
 MAX_SUMMARY_TEXT_CHARS = 300
 
-COMMON_SAFETY_RULES = """
+COMMON_SAFETY_RULES = f"""
 Shared rules:
 - Separate facts, assumptions, analysis, and opinion in the structured output.
 - Every factual claim must cite one or more evidence_ids from supplied evidence or tool outputs.
@@ -27,6 +29,7 @@ Shared rules:
 - Keep each point concise and material. Do not repeat the same claim across output sections.
 - Leave a list empty when it has no distinct supported point instead of adding filler.
 - Use one sentence per point and respect the schema's output bounds.
+- {UNTRUSTED_CONTENT_INSTRUCTION}
 - This is financial research support, not personalized financial advice.
 """.strip()
 
@@ -35,7 +38,7 @@ def create_default_prompt_catalog() -> PromptCatalog:
     return PromptCatalog(
         (
             _contract(
-                prompt_id="agent.orchestrator.v1",
+                prompt_id="agent.orchestrator.v2",
                 role=AgentRole.ORCHESTRATOR,
                 description=(
                     "Coordinates research tasks, tool use, missing evidence, and handoff needs."
@@ -129,7 +132,7 @@ def _contract(
     return PromptContract(
         id=prompt_id,
         role=role,
-        version=PROMPT_VERSION,
+        version=(ORCHESTRATOR_PROMPT_VERSION if role == AgentRole.ORCHESTRATOR else PROMPT_VERSION),
         system_prompt=f"{role_instructions}\n\n{COMMON_SAFETY_RULES}",
         description=description,
         allowed_tools=allowed_tools,

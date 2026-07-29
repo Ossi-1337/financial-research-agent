@@ -78,6 +78,7 @@ from financial_research_agent.retrieval import (
 )
 from financial_research_agent.runtime_settings import RuntimeSettingsOverrides, RuntimeSettingsStore
 from financial_research_agent.scenarios import create_default_scenario_catalog
+from financial_research_agent.security import ConversationPolicy
 from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.statements import FinancialStatementStore
 from financial_research_agent.storage import LocalStorageManager
@@ -102,8 +103,11 @@ class MentionRequest(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=20_000)
-    mentions: tuple[MentionRequest, ...] = ()
+    content: str = Field(min_length=1, max_length=ConversationPolicy.MAX_INPUT_CHARS)
+    mentions: tuple[MentionRequest, ...] = Field(
+        default=(),
+        max_length=ConversationPolicy.MAX_MENTIONS,
+    )
 
 
 class RuntimeSettingsRequest(BaseModel):
@@ -274,10 +278,12 @@ def create_app(
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+    conversation_policy = ConversationPolicy()
     conversation = AgentConversationService(
         settings=current_settings,
         registry=current_registry,
         agent_runtime=agent_runtime,
+        policy=conversation_policy,
     )
     app.include_router(
         create_research_router(
@@ -1034,7 +1040,7 @@ def _synthesis_message_content(
 
 
 def _message_content(content: str) -> str:
-    text = content.strip()
+    text = ConversationPolicy().normalize_input(content)
     if text == "":
         raise HTTPException(status_code=422, detail={"error": "message_content_required"})
     return text

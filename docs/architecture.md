@@ -128,6 +128,26 @@ The MCP process is a loopback-only adapter to the running application API. It ca
 inspect or cancel the resulting research jobs, and retrieve completed reports. It is not used
 between agents and does not implement its own orchestration, provider calls, or data access.
 
+## Conversation Guardrails
+
+Chat UI and MCP share one conversation policy before the orchestrator. Messages are Unicode
+normalized and bounded to 4,000 characters and five resolved company references. Deterministic
+high-confidence checks reject code generation, prompt or secret extraction, permission
+escalation, personalized investment instructions, and explicit off-topic requests without a
+provider call.
+
+The existing orchestrator call classifies the remaining request as financial research, financial
+education, product help, greeting, or out of scope. Financial research enters A2A; financial
+education may receive a direct model answer; greetings, application help, and refusals use fixed
+application text. Invalid or inconsistent decisions fail closed.
+
+User text, chat history, company references, tool results, and retrieved documents are serialized
+or marked as untrusted data without instruction authority. Agent tools and A2A roles remain
+deny-by-default. Direct model responses are buffered and checked for code, prompt disclosure,
+credentials, and investment instructions before they are persisted or returned. The streaming
+endpoint therefore emits one validated content delta rather than exposing unvalidated tokens.
+These controls are defense in depth, not a guarantee against every prompt-injection technique.
+
 ## Package Ownership
 
 | Package | Responsibility |
@@ -140,6 +160,6 @@ between agents and does not implement its own orchestration, provider calls, or 
 | `market_data`, `stock_analysis` | Stock agent data and analysis |
 | `context_analysis` | Context agent analysis |
 | `synthesis`, `report_exports` | Validated LLM synthesis, deterministic report mapping, and immutable exports |
-| `llm`, `tools`, `agents`, `skills` | Provider abstraction, guarded tools, prompts, and bounded workflow skills |
+| `llm`, `tools`, `agents`, `skills`, `security` | Provider abstraction, guarded tools, prompts, bounded workflow skills, and conversation policy |
 | `mcp` | Optional local MCP adapter to the canonical application message and research APIs |
 | `persistence`, `storage` | SQLite, migrations, files, backup, restore, and cleanup |

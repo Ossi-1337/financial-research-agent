@@ -79,6 +79,8 @@ Implemented:
   through Docker Compose.
 - Structured specialist outputs with evidence-ID validation and one bounded schema-repair attempt.
 - Versioned runtime skills and an optional MCP interface to the canonical orchestrator flow.
+- Finance-only conversation policy with deterministic refusals for code generation, off-topic
+  requests, prompt extraction, permission escalation, and personalized investment advice.
 - Offline evaluation, package verification, guarded storage operations, and local CI through Actio.
 
 Current boundaries:
@@ -89,10 +91,13 @@ Current boundaries:
 - Market data may be delayed or provider-limited; SEC coverage is limited to SEC filers.
 - Local LLM quality depends on the selected model, runtime, context budget, and hardware.
 - Context analysis accepts approved source-linked inputs; automatic news ingestion is not present.
+- Direct model answers are limited to financial education and are buffered for output validation;
+  greetings and application help use fixed local responses.
 
 Only the web UI is published to the host. Specialist ports stay inside the Compose network.
 Credentials remain environment-only, external documents are treated as untrusted evidence, and
-runtime state is stored under `FRA_HOME`.
+runtime state is stored under `FRA_HOME`. These controls reduce prompt-injection risk but do not
+guarantee that every adversarial prompt can be detected.
 
 See [Architecture](docs/architecture.md) for system boundaries, data ownership, persistence, and
 the A2A research flow.
