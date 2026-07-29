@@ -17,6 +17,16 @@ const state = {
   modelOptionsRequestId: 0,
 };
 
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const STOCK_CHART_LAYOUT = Object.freeze({
+  width: 720,
+  height: 300,
+  left: 58,
+  right: 18,
+  top: 18,
+  bottom: 44,
+});
+
 const form = document.querySelector("#chat-form");
 const input = document.querySelector("#message-input");
 const mentionMenu = document.querySelector("#mention-menu");
@@ -558,10 +568,16 @@ function renderStockChart(runId) {
   const title = document.createElement("h3");
   title.textContent = "Indexed Price Development";
   const note = document.createElement("small");
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 720 260");
+  const stage = document.createElement("div");
+  stage.className = "stock-chart-stage";
+  const svg = createSvgElement("svg");
+  svg.setAttribute(
+    "viewBox",
+    `0 0 ${STOCK_CHART_LAYOUT.width} ${STOCK_CHART_LAYOUT.height}`,
+  );
   svg.setAttribute("role", "img");
   svg.setAttribute("aria-label", "Indexed historical price chart");
+  svg.setAttribute("tabindex", "0");
   const normalized = normalizeAlignedChartSeries(series);
   if (!normalized.length) {
     wrapper.hidden = true;
@@ -571,14 +587,21 @@ function renderStockChart(runId) {
     `Shared period: ${normalized[0].dates[0]} to ${normalized[0].dates.at(-1)}. ` +
     "Each series starts at 100. Historical data is not a forecast.";
   const values = normalized.flatMap((item) => item.values);
-  const minValue = Math.min(...values);
-  const maxValue = Math.max(...values);
+  const axis = chartAxis(Math.min(...values), Math.max(...values));
+  renderChartAxes(svg, normalized[0].dates, axis);
   normalized.forEach((item, index) => {
-    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    const polyline = createSvgElement("polyline");
     polyline.setAttribute("class", `stock-chart-line series-${index}`);
-    polyline.setAttribute("points", chartPoints(item.values, minValue, maxValue));
+    polyline.setAttribute("points", chartPoints(item.values, axis.min, axis.max));
     svg.append(polyline);
   });
+  const tooltip = document.createElement("div");
+  tooltip.className = "stock-chart-tooltip";
+  tooltip.hidden = true;
+  tooltip.setAttribute("role", "status");
+  tooltip.setAttribute("aria-live", "polite");
+  attachChartInteraction(svg, tooltip, normalized, axis);
+  stage.append(svg, tooltip);
   const legend = document.createElement("div");
   legend.className = "stock-chart-legend";
   normalized.forEach((item, index) => {
@@ -587,7 +610,7 @@ function renderStockChart(runId) {
     label.textContent = `${item.symbol}: ${item.values.at(-1).toFixed(1)}`;
     legend.append(label);
   });
-  wrapper.append(title, note, svg, legend);
+  wrapper.append(title, note, stage, legend);
   return wrapper;
 }
 
@@ -624,16 +647,195 @@ function normalizeAlignedChartSeries(seriesList) {
 }
 
 function chartPoints(values, minValue, maxValue) {
-  const width = 680;
-  const height = 210;
-  const range = Math.max(maxValue - minValue, 1);
   return values
     .map((value, index) => {
-      const x = 20 + (index / Math.max(values.length - 1, 1)) * width;
-      const y = 20 + ((maxValue - value) / range) * height;
+      const x = chartX(index, values.length);
+      const y = chartY(value, minValue, maxValue);
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(" ");
+}
+
+function chartAxis(minValue, maxValue) {
+  const rawRange = Math.max(maxValue - minValue, 1);
+  const padding = Math.max(rawRange * 0.08, 0.5);
+  const step = niceChartStep(rawRange + padding * 2, 4);
+  const min = Math.floor((minValue - padding) / step) * step;
+  const max = Math.ceil((maxValue + padding) / step) * step;
+  const ticks = [];
+  for (let value = min; value <= max + step / 2; value += step) {
+    ticks.push(Number(value.toFixed(8)));
+  }
+  return { min, max, step, ticks };
+}
+
+function niceChartStep(range, targetIntervals) {
+  const roughStep = range / targetIntervals;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+  const multiplier = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return multiplier * magnitude;
+}
+
+function renderChartAxes(svg, dates, axis) {
+  const grid = createSvgElement("g");
+  grid.setAttribute("class", "stock-chart-grid");
+  for (const value of axis.ticks) {
+    const y = chartY(value, axis.min, axis.max);
+    const line = createSvgElement("line");
+    line.setAttribute("x1", STOCK_CHART_LAYOUT.left);
+    line.setAttribute("x2", STOCK_CHART_LAYOUT.width - STOCK_CHART_LAYOUT.right);
+    line.setAttribute("y1", y);
+    line.setAttribute("y2", y);
+    const label = createSvgElement("text");
+    label.setAttribute("class", "stock-chart-axis-label");
+    label.setAttribute("x", STOCK_CHART_LAYOUT.left - 9);
+    label.setAttribute("y", y + 4);
+    label.setAttribute("text-anchor", "end");
+    label.textContent = formatAxisValue(value, axis.step);
+    grid.append(line, label);
+  }
+  for (const index of evenlySpacedIndices(dates.length, 5)) {
+    const x = chartX(index, dates.length);
+    const line = createSvgElement("line");
+    line.setAttribute("x1", x);
+    line.setAttribute("x2", x);
+    line.setAttribute("y1", STOCK_CHART_LAYOUT.top);
+    line.setAttribute("y2", STOCK_CHART_LAYOUT.height - STOCK_CHART_LAYOUT.bottom);
+    const label = createSvgElement("text");
+    label.setAttribute("class", "stock-chart-axis-label");
+    label.setAttribute("x", x);
+    label.setAttribute("y", STOCK_CHART_LAYOUT.height - 15);
+    label.setAttribute("text-anchor", "middle");
+    label.textContent = formatChartDate(dates[index]);
+    grid.append(line, label);
+  }
+  svg.append(grid);
+}
+
+function attachChartInteraction(svg, tooltip, series, axis) {
+  const crosshair = createSvgElement("line");
+  crosshair.setAttribute("class", "stock-chart-crosshair");
+  crosshair.setAttribute("visibility", "hidden");
+  const markers = series.map((_, index) => {
+    const marker = createSvgElement("circle");
+    marker.setAttribute("class", `stock-chart-marker series-${index}`);
+    marker.setAttribute("r", "5");
+    marker.setAttribute("visibility", "hidden");
+    return marker;
+  });
+  const overlay = createSvgElement("rect");
+  overlay.setAttribute("class", "stock-chart-overlay");
+  overlay.setAttribute("x", STOCK_CHART_LAYOUT.left);
+  overlay.setAttribute("y", STOCK_CHART_LAYOUT.top);
+  overlay.setAttribute(
+    "width",
+    STOCK_CHART_LAYOUT.width - STOCK_CHART_LAYOUT.left - STOCK_CHART_LAYOUT.right,
+  );
+  overlay.setAttribute(
+    "height",
+    STOCK_CHART_LAYOUT.height - STOCK_CHART_LAYOUT.top - STOCK_CHART_LAYOUT.bottom,
+  );
+  svg.append(crosshair, ...markers, overlay);
+
+  let activeIndex = series[0].dates.length - 1;
+  const showPoint = (index) => {
+    activeIndex = Math.max(0, Math.min(index, series[0].dates.length - 1));
+    const x = chartX(activeIndex, series[0].dates.length);
+    crosshair.setAttribute("x1", x);
+    crosshair.setAttribute("x2", x);
+    crosshair.setAttribute("y1", STOCK_CHART_LAYOUT.top);
+    crosshair.setAttribute("y2", STOCK_CHART_LAYOUT.height - STOCK_CHART_LAYOUT.bottom);
+    crosshair.setAttribute("visibility", "visible");
+    markers.forEach((marker, markerIndex) => {
+      marker.setAttribute("cx", x);
+      marker.setAttribute("cy", chartY(series[markerIndex].values[activeIndex], axis.min, axis.max));
+      marker.setAttribute("visibility", "visible");
+    });
+    renderChartTooltip(tooltip, series, activeIndex);
+    tooltip.style.left = `${(x / STOCK_CHART_LAYOUT.width) * 100}%`;
+    tooltip.classList.toggle("align-right", x > STOCK_CHART_LAYOUT.width * 0.5);
+    tooltip.hidden = false;
+  };
+  const hidePoint = () => {
+    crosshair.setAttribute("visibility", "hidden");
+    markers.forEach((marker) => {
+      marker.setAttribute("visibility", "hidden");
+    });
+    tooltip.hidden = true;
+  };
+  overlay.addEventListener("pointermove", (event) => {
+    const bounds = svg.getBoundingClientRect();
+    const svgX = ((event.clientX - bounds.left) / bounds.width) * STOCK_CHART_LAYOUT.width;
+    const plotWidth = STOCK_CHART_LAYOUT.width - STOCK_CHART_LAYOUT.left - STOCK_CHART_LAYOUT.right;
+    const ratio = (svgX - STOCK_CHART_LAYOUT.left) / plotWidth;
+    showPoint(Math.round(ratio * (series[0].dates.length - 1)));
+  });
+  overlay.addEventListener("pointerleave", hidePoint);
+  svg.addEventListener("focus", () => showPoint(activeIndex));
+  svg.addEventListener("blur", hidePoint);
+  svg.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+    event.preventDefault();
+    showPoint(activeIndex + (event.key === "ArrowLeft" ? -1 : 1));
+  });
+}
+
+function renderChartTooltip(tooltip, series, index) {
+  const date = document.createElement("strong");
+  date.textContent = series[0].dates[index];
+  const values = series.map((item, seriesIndex) => {
+    const row = document.createElement("span");
+    row.className = "stock-chart-tooltip-value";
+    const swatch = document.createElement("i");
+    swatch.className = `series-${seriesIndex}`;
+    const text = document.createElement("span");
+    text.textContent = `${item.symbol}: ${item.values[index].toFixed(2)}`;
+    row.append(swatch, text);
+    return row;
+  });
+  tooltip.replaceChildren(date, ...values);
+}
+
+function chartX(index, count) {
+  const plotWidth = STOCK_CHART_LAYOUT.width - STOCK_CHART_LAYOUT.left - STOCK_CHART_LAYOUT.right;
+  return STOCK_CHART_LAYOUT.left + (index / Math.max(count - 1, 1)) * plotWidth;
+}
+
+function chartY(value, minValue, maxValue) {
+  const plotHeight = STOCK_CHART_LAYOUT.height - STOCK_CHART_LAYOUT.top - STOCK_CHART_LAYOUT.bottom;
+  const range = Math.max(maxValue - minValue, 1);
+  return STOCK_CHART_LAYOUT.top + ((maxValue - value) / range) * plotHeight;
+}
+
+function evenlySpacedIndices(length, count) {
+  const indices = new Set();
+  for (let index = 0; index < Math.min(length, count); index += 1) {
+    indices.add(Math.round((index / Math.max(Math.min(length, count) - 1, 1)) * (length - 1)));
+  }
+  return [...indices];
+}
+
+function formatChartDate(value) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function formatAxisValue(value, step) {
+  return value.toFixed(step < 1 ? 1 : 0);
+}
+
+function createSvgElement(name) {
+  return document.createElementNS(SVG_NAMESPACE, name);
 }
 
 function sourceElementId(runId, marker) {

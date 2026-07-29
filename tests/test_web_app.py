@@ -102,6 +102,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".citation-list" in css_response.text
     assert ".evidence-snippet" in css_response.text
     assert ".synthesis-report" in css_response.text
+    assert ".stock-chart-axis-label" in css_response.text
+    assert ".stock-chart-tooltip" in css_response.text
+    assert ".stock-chart-crosshair" in css_response.text
     assert ".trace-timeline" in css_response.text
     assert ".settings-panel" in css_response.text
     assert "max-width: calc(100% - 98px)" in css_response.text
@@ -117,6 +120,18 @@ def test_frontend_has_one_message_entrypoint_without_slash_routing() -> None:
     assert "/api/chat/route" not in script.text
     assert 'startsWith("/scenario")' not in script.text
     assert 'startsWith("/research")' not in script.text
+
+
+def test_frontend_stock_chart_has_axes_and_interactive_values() -> None:
+    script = _client().get("/static/app.js")
+
+    assert script.status_code == 200
+    assert "renderChartAxes" in script.text
+    assert "attachChartInteraction" in script.text
+    assert "stock-chart-axis-label" in script.text
+    assert "stock-chart-tooltip" in script.text
+    assert '"pointermove"' in script.text
+    assert 'event.key !== "ArrowLeft"' in script.text
 
 
 def test_runtime_settings_endpoint_returns_redacted_provider_management_payload() -> None:

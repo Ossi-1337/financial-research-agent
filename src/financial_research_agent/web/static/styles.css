@@ -588,11 +588,36 @@ h1 {
   border-top: 1px solid var(--border);
 }
 
+.stock-chart-stage {
+  position: relative;
+  min-width: 0;
+  overflow: clip;
+}
+
 .stock-chart svg {
+  display: block;
   width: 100%;
   height: auto;
   border: 1px solid var(--border);
   background: var(--surface);
+  cursor: crosshair;
+}
+
+.stock-chart svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.stock-chart-grid line {
+  stroke: color-mix(in srgb, var(--border) 72%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.stock-chart-axis-label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .stock-chart-line {
@@ -606,6 +631,75 @@ h1 {
 
 .stock-chart-line.series-1 {
   stroke: #b25a24;
+}
+
+.stock-chart-overlay {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.stock-chart-crosshair {
+  stroke: var(--muted);
+  stroke-dasharray: 4 4;
+  stroke-width: 1;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.stock-chart-marker {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 3;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.stock-chart-marker.series-1 {
+  stroke: #b25a24;
+}
+
+.stock-chart-tooltip {
+  position: absolute;
+  top: 10px;
+  z-index: 2;
+  display: grid;
+  min-width: 150px;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 4px 14px rgb(23 32 42 / 14%);
+  color: var(--text);
+  font-size: 0.76rem;
+  pointer-events: none;
+  transform: translateX(10px);
+}
+
+.stock-chart-tooltip[hidden] {
+  display: none;
+}
+
+.stock-chart-tooltip.align-right {
+  transform: translateX(calc(-100% - 10px));
+}
+
+.stock-chart-tooltip-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stock-chart-tooltip-value i {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.stock-chart-tooltip-value i.series-1 {
+  background: #b25a24;
 }
 
 .stock-chart-legend {
