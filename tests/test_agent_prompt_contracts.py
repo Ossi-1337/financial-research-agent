@@ -111,6 +111,8 @@ def test_default_output_schemas_require_research_sections() -> None:
         assert "evidence_ids" in schema["properties"]["risks"]["items"]["required"]
         assert "evidence_ids" in schema["properties"]["scenarios"]["items"]["required"]
         assert "claim" in schema["properties"]["refusal_notes"]["items"]["required"]
+        assert schema["properties"]["findings"]["maxItems"] == 3
+        assert schema["properties"]["reasoning_summary"]["maxLength"] == 300
 
 
 def test_agent_output_schema_accepts_labeled_tool_result_fixture_output() -> None:

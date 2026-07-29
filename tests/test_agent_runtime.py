@@ -141,8 +141,38 @@ def test_structured_agent_preloads_required_tool_for_local_model() -> None:
     payload = json.loads(provider.requests[0].messages[-1].content)
 
     assert payload["required_tool_result"]["data"]["evidence_ids"] == [EVIDENCE_ID]
+    assert provider.requests[0].tools == ()
     assert result.tool_results[0].tool_name == "load_evidence"
     assert len(provider.requests) == 1
+
+
+def test_structured_agent_applies_output_budget_to_initial_and_repair_calls() -> None:
+    provider = ScriptedAgentProvider(
+        (
+            ChatResponse(
+                message=ChatMessage(role=MessageRole.ASSISTANT, content="{bad json"),
+                provider="scripted",
+                model="scripted-model",
+            ),
+            _agent_response(_valid_output()),
+        )
+    )
+
+    result = asyncio.run(
+        StructuredAgentRunner(provider, max_output_tokens=777).run(
+            contract=_contract(),
+            user_payload={
+                "query": "TEST TOOL OUTPUT",
+                "required_tool": "load_evidence",
+            },
+            registry=_registry(),
+            context=_context(),
+            known_evidence_ids=(EVIDENCE_ID,),
+        )
+    )
+
+    assert result.repaired is True
+    assert [request.max_output_tokens for request in provider.requests] == [777, 777]
 
 
 def test_structured_agent_repairs_malformed_output_once() -> None:

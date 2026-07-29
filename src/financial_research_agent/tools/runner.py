@@ -46,6 +46,7 @@ class ToolCallingRunner:
         model: str | None = None,
         context: ToolContext | None = None,
         response_format: ResponseFormat | None = None,
+        max_output_tokens: int | None = None,
         metadata: dict[str, str] | None = None,
     ) -> ToolLoopResult:
         tool_context = context or ToolContext()
@@ -63,6 +64,8 @@ class ToolCallingRunner:
                     model=model,
                     tools=tools,
                     response_format=response_format or ResponseFormat(),
+                    temperature=0,
+                    max_output_tokens=max_output_tokens,
                     metadata=metadata or {},
                 )
             )

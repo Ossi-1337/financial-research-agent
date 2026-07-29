@@ -12,6 +12,8 @@ from financial_research_agent.agents.contracts import (
 )
 
 PROMPT_VERSION = PromptVersion("1.0.0")
+MAX_POINT_TEXT_CHARS = 200
+MAX_SUMMARY_TEXT_CHARS = 300
 
 COMMON_SAFETY_RULES = """
 Shared rules:
@@ -22,6 +24,9 @@ Shared rules:
   sources, or citations.
 - Do not provide buy, sell, or hold recommendations by default.
 - Do not persist or reveal hidden chain-of-thought; provide concise reasoning_summary only.
+- Keep each point concise and material. Do not repeat the same claim across output sections.
+- Leave a list empty when it has no distinct supported point instead of adding filler.
+- Use one sentence per point and respect the schema's output bounds.
 - This is financial research support, not personalized financial advice.
 """.strip()
 
@@ -141,17 +146,17 @@ def _agent_output_schema(role: AgentRole) -> Mapping[str, Any]:
         "type": "object",
         "properties": {
             "agent_role": {"type": "string", "enum": [role.value]},
-            "facts": {"type": "array", "items": _evidence_statement_schema()},
-            "assumptions": {"type": "array", "items": _assumption_schema()},
-            "analysis": {"type": "array", "items": _evidence_statement_schema()},
-            "opinion": {"type": "array", "items": _evidence_statement_schema()},
-            "findings": {"type": "array", "items": _finding_schema()},
+            "facts": _bounded_array(_evidence_statement_schema(), 3),
+            "assumptions": _bounded_array(_assumption_schema(), 1),
+            "analysis": _bounded_array(_evidence_statement_schema(), 2),
+            "opinion": _bounded_array(_evidence_statement_schema(), 1),
+            "findings": _bounded_array(_finding_schema(), 3),
             "uncertainty": _uncertainty_schema(),
-            "risks": {"type": "array", "items": _risk_schema()},
-            "scenarios": {"type": "array", "items": _scenario_schema()},
-            "follow_up_questions": {"type": "array", "items": {"type": "string"}},
-            "refusal_notes": {"type": "array", "items": _refusal_schema()},
-            "reasoning_summary": {"type": "string"},
+            "risks": _bounded_array(_risk_schema(), 3),
+            "scenarios": _bounded_array(_scenario_schema(), 2),
+            "follow_up_questions": _bounded_array(_text_schema(), 2),
+            "refusal_notes": _bounded_array(_refusal_schema(), 2),
+            "reasoning_summary": _text_schema(MAX_SUMMARY_TEXT_CHARS),
         },
         "required": [
             "agent_role",
@@ -175,7 +180,7 @@ def _evidence_statement_schema() -> Mapping[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "statement": {"type": "string"},
+            "statement": _text_schema(),
             "evidence_ids": _evidence_ids_schema(),
             "confidence": _confidence_schema(),
         },
@@ -188,7 +193,7 @@ def _finding_schema() -> Mapping[str, Any]:
     schema = dict(_evidence_statement_schema())
     schema["properties"] = {
         **schema["properties"],
-        "category": {"type": "string"},
+        "category": _text_schema(80),
     }
     schema["required"] = ["category", "statement", "evidence_ids", "confidence"]
     return schema
@@ -198,8 +203,8 @@ def _assumption_schema() -> Mapping[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "statement": {"type": "string"},
-            "basis": {"type": "string"},
+            "statement": _text_schema(),
+            "basis": _text_schema(),
             "confidence": _confidence_schema(),
         },
         "required": ["statement", "basis", "confidence"],
@@ -211,8 +216,8 @@ def _uncertainty_schema() -> Mapping[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "missing_evidence": {"type": "array", "items": {"type": "string"}},
-            "limitations": {"type": "array", "items": {"type": "string"}},
+            "missing_evidence": _bounded_array(_text_schema(), 3),
+            "limitations": _bounded_array(_text_schema(), 3),
             "confidence": _confidence_schema(),
         },
         "required": ["missing_evidence", "limitations", "confidence"],
@@ -224,8 +229,8 @@ def _risk_schema() -> Mapping[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "title": {"type": "string"},
-            "description": {"type": "string"},
+            "title": _text_schema(80),
+            "description": _text_schema(),
             "severity": {"type": "string", "enum": ["low", "medium", "high", "unknown"]},
             "evidence_ids": _evidence_ids_schema(),
         },
@@ -238,8 +243,8 @@ def _scenario_schema() -> Mapping[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "name": {"type": "string"},
-            "description": {"type": "string"},
+            "name": _text_schema(80),
+            "description": _text_schema(),
             "evidence_ids": _evidence_ids_schema(),
         },
         "required": ["name", "description", "evidence_ids"],
@@ -251,8 +256,8 @@ def _refusal_schema() -> Mapping[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "claim": {"type": "string"},
-            "reason": {"type": "string"},
+            "claim": _text_schema(),
+            "reason": _text_schema(),
         },
         "required": ["claim", "reason"],
         "additionalProperties": False,
@@ -264,4 +269,17 @@ def _confidence_schema() -> Mapping[str, Any]:
 
 
 def _evidence_ids_schema() -> Mapping[str, Any]:
-    return {"type": "array", "items": {"type": "string"}, "minItems": 1}
+    return {
+        "type": "array",
+        "items": _text_schema(240),
+        "minItems": 1,
+        "maxItems": 2,
+    }
+
+
+def _bounded_array(item_schema: Mapping[str, Any], max_items: int) -> Mapping[str, Any]:
+    return {"type": "array", "items": item_schema, "maxItems": max_items}
+
+
+def _text_schema(max_length: int = MAX_POINT_TEXT_CHARS) -> Mapping[str, Any]:
+    return {"type": "string", "maxLength": max_length}

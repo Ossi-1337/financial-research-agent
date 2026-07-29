@@ -194,6 +194,42 @@ def test_orchestrator_uses_only_dispatcher_and_stable_specialist_order() -> None
     ]
 
 
+def test_orchestrator_runs_independent_specialists_concurrently_in_stable_order() -> None:
+    dispatcher = ConcurrentRecordingDispatcher()
+    orchestrator = ResearchOrchestrator(
+        company_search_provider=FixtureCompanySearchProvider(),
+        step_dispatcher=dispatcher,
+        now=lambda: NOW,
+    )
+
+    run = asyncio.run(
+        orchestrator.run(
+            OrchestratorResearchInput(
+                query="Research TEST TOOL OUTPUT company",
+                refresh=False,
+            )
+        )
+    )
+
+    assert dispatcher.max_active_specialists == 3
+    assert [handoff.step_id for handoff in run.handoffs[-4:]] == [
+        "financial_report_analysis",
+        "stock_price_analysis",
+        "context_analysis",
+        "synthesis",
+    ]
+    assert all(
+        step.can_run_parallel
+        for step in run.plan
+        if step.kind
+        in {
+            OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
+            OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
+            OrchestratorStepKind.CONTEXT_ANALYSIS,
+        }
+    )
+
+
 def test_specialist_failure_produces_partial_report_without_local_fallback() -> None:
     dispatcher = RecordingDispatcher(failed_step="stock_price_analysis")
     orchestrator = ResearchOrchestrator(
@@ -311,3 +347,21 @@ class RecordingDispatcher:
                 error_message="Specialist unavailable." if failed else None,
             )
         )
+
+
+class ConcurrentRecordingDispatcher(RecordingDispatcher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_specialists = 0
+        self.max_active_specialists = 0
+
+    async def dispatch(self, request: DelegationRequest, *, run=None) -> DelegationResult:
+        if request.expected_kind != OrchestratorStepKind.SYNTHESIS:
+            self.active_specialists += 1
+            self.max_active_specialists = max(
+                self.max_active_specialists,
+                self.active_specialists,
+            )
+            await asyncio.sleep(0.01)
+            self.active_specialists -= 1
+        return await super().dispatch(request, run=run)

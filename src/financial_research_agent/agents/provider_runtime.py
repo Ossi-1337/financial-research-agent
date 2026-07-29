@@ -19,6 +19,7 @@ _RESEARCH_CAPABILITIES = (
 class AgentRuntimeSelection:
     provider: ChatProvider
     model: str
+    max_output_tokens: int
 
     @property
     def provider_name(self) -> str:
@@ -76,7 +77,11 @@ class AgentRuntimeResolver:
                 code="agent_provider_unavailable",
                 message="Configured agent provider is unavailable.",
             ) from exc
-        selection = AgentRuntimeSelection(provider=provider, model=model)
+        selection = AgentRuntimeSelection(
+            provider=provider,
+            model=model,
+            max_output_tokens=current.performance.agent_max_output_tokens,
+        )
         if require_research:
             self.validate_research(selection, settings=current)
         return selection

@@ -51,6 +51,7 @@ DEFAULT_A2A_DELEGATION_MAX_ATTEMPTS = 2
 DEFAULT_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS = 1
 DEFAULT_PROMPT_BUDGET_INPUT_TOKENS = 16_000
 DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS = 1_024
+DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 2_048
 DEFAULT_EMBEDDING_CACHE_ENABLED = True
 DEFAULT_ALLOW_REMOTE_BIND = False
 EXPLICIT_MODEL_PROVIDERS = frozenset({"anthropic", "gemini", "litellm", "openai"})
@@ -444,6 +445,7 @@ class BackgroundSettings:
 class PerformanceSettings:
     prompt_budget_input_tokens: int = DEFAULT_PROMPT_BUDGET_INPUT_TOKENS
     prompt_budget_output_tokens: int = DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS
+    agent_max_output_tokens: int = DEFAULT_AGENT_MAX_OUTPUT_TOKENS
     embedding_cache_enabled: bool = DEFAULT_EMBEDDING_CACHE_ENABLED
 
     def __post_init__(self) -> None:
@@ -451,11 +453,14 @@ class PerformanceSettings:
             raise ValueError("prompt_budget_input_tokens must be positive")
         if self.prompt_budget_output_tokens <= 0:
             raise ValueError("prompt_budget_output_tokens must be positive")
+        if self.agent_max_output_tokens <= 0:
+            raise ValueError("agent_max_output_tokens must be positive")
 
     def to_dict(self) -> dict[str, object]:
         return {
             "prompt_budget_input_tokens": self.prompt_budget_input_tokens,
             "prompt_budget_output_tokens": self.prompt_budget_output_tokens,
+            "agent_max_output_tokens": self.agent_max_output_tokens,
             "embedding_cache_enabled": self.embedding_cache_enabled,
         }
 
@@ -719,6 +724,11 @@ class Settings:
                     env,
                     "FRA_PROMPT_BUDGET_OUTPUT_TOKENS",
                     DEFAULT_PROMPT_BUDGET_OUTPUT_TOKENS,
+                ),
+                agent_max_output_tokens=_env_int_value(
+                    env,
+                    "FRA_AGENT_MAX_OUTPUT_TOKENS",
+                    DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
                 ),
                 embedding_cache_enabled=_env_bool_value(
                     env,

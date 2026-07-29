@@ -80,6 +80,19 @@ def _validate_schema(schema: object, *, path: str) -> list[str]:
         not isinstance(min_items, int) or isinstance(min_items, bool) or min_items < 0
     ):
         errors.append(f"{path}.minItems must be a non-negative integer")
+    max_items = schema.get("maxItems")
+    if max_items is not None and (
+        not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 0
+    ):
+        errors.append(f"{path}.maxItems must be a non-negative integer")
+    if isinstance(min_items, int) and isinstance(max_items, int) and max_items < min_items:
+        errors.append(f"{path}.maxItems must be greater than or equal to minItems")
+
+    max_length = schema.get("maxLength")
+    if max_length is not None and (
+        not isinstance(max_length, int) or isinstance(max_length, bool) or max_length < 0
+    ):
+        errors.append(f"{path}.maxLength must be a non-negative integer")
 
     return errors
 
@@ -106,6 +119,14 @@ def _validate_value(schema: Mapping[str, Any], value: object, *, path: str) -> l
         errors.extend(_validate_object(schema, value, path=path))
     elif "array" in allowed_types:
         errors.extend(_validate_array(schema, value, path=path))
+    elif "string" in allowed_types and isinstance(value, str):
+        max_length = schema.get("maxLength")
+        if (
+            isinstance(max_length, int)
+            and not isinstance(max_length, bool)
+            and len(value) > max_length
+        ):
+            errors.append(f"{path} must contain at most {max_length} characters")
     return errors
 
 
@@ -144,6 +165,9 @@ def _validate_array(schema: Mapping[str, Any], value: object, *, path: str) -> l
     min_items = schema.get("minItems")
     if isinstance(min_items, int) and not isinstance(min_items, bool) and len(value) < min_items:
         return [f"{path} must contain at least {min_items} items"]
+    max_items = schema.get("maxItems")
+    if isinstance(max_items, int) and not isinstance(max_items, bool) and len(value) > max_items:
+        return [f"{path} must contain at most {max_items} items"]
     item_schema = schema.get("items")
     if not isinstance(item_schema, Mapping):
         return []

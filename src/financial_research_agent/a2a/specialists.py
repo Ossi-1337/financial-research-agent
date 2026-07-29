@@ -144,7 +144,11 @@ class SpecialistExecutionService:
             )
         else:
             runtime = self.agent_runtime.resolve(require_research=True)
-        return StructuredAgentRunner(runtime.provider, model=runtime.model)
+        return StructuredAgentRunner(
+            runtime.provider,
+            model=runtime.model,
+            max_output_tokens=runtime.max_output_tokens,
+        )
 
     async def _refresh_market_data(self, request: DelegationRequest) -> AgentHandoff:
         started_at = _aware_now(self._now())

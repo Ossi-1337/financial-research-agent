@@ -102,6 +102,32 @@ def test_tool_argument_validation_supports_nested_subset() -> None:
     assert any("extra is not allowed" in error for error in errors)
 
 
+def test_tool_argument_validation_enforces_string_and_array_bounds() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string", "maxLength": 4},
+            "items": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 2,
+            },
+        },
+        "required": ["label", "items"],
+        "additionalProperties": False,
+    }
+
+    assert validate_tool_arguments(schema, {"label": "test", "items": ["a", "b"]}) == ()
+    errors = validate_tool_arguments(
+        schema,
+        {"label": "too long", "items": ["a", "b", "c"]},
+    )
+
+    assert any("at most 4 characters" in error for error in errors)
+    assert any("at most 2 items" in error for error in errors)
+
+
 def test_registry_rejects_duplicates_and_executes_with_call_metadata() -> None:
     spec = ToolSpec(
         name="echo",

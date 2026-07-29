@@ -252,11 +252,15 @@ class StructuredAgentRunner:
         *,
         model: str | None = None,
         max_tool_rounds: int = 3,
+        max_output_tokens: int | None = None,
         skill_catalog: SkillCatalog | None = None,
     ) -> None:
+        if max_output_tokens is not None and max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be positive")
         self._provider = provider
         self._model = model
         self._max_tool_rounds = max_tool_rounds
+        self._max_output_tokens = max_output_tokens
         self._skill_catalog = skill_catalog or create_default_skill_catalog()
 
     async def run(
@@ -278,6 +282,10 @@ class StructuredAgentRunner:
             prepared_payload,
             registry=registry,
             context=context,
+        )
+        execution_context = _context_without_preloaded_tool(
+            context,
+            prepared_payload.get("required_tool") if preloaded_tool_results else None,
         )
         evidence_ids = (
             tuple(known_evidence_ids())
@@ -316,8 +324,9 @@ class StructuredAgentRunner:
                 ),
             ),
             model=self._model,
-            context=context,
+            context=execution_context,
             response_format=contract.response_format(),
+            max_output_tokens=self._max_output_tokens,
             metadata=metadata,
         )
         successful_tools = tuple(
@@ -367,6 +376,7 @@ class StructuredAgentRunner:
                     model=self._model,
                     response_format=contract.response_format(),
                     temperature=0,
+                    max_output_tokens=self._max_output_tokens,
                     metadata={
                         "agent_role": contract.role.value,
                         "prompt_id": contract.id,
@@ -430,6 +440,23 @@ async def _preload_required_tool(
         )
     user_payload["required_tool_result"] = result.to_dict()
     return (result,)
+
+
+def _context_without_preloaded_tool(
+    context: ToolContext,
+    required_tool: object,
+) -> ToolContext:
+    if not isinstance(required_tool, str):
+        return context
+    tool_name = required_tool.strip()
+    if not tool_name:
+        return context
+    return ToolContext(
+        allowed_permissions=context.allowed_permissions,
+        allowed_tools=tuple(name for name in context.allowed_tools if name != tool_name),
+        local_evidence=context.local_evidence,
+        metadata=context.metadata,
+    )
 
 
 def _output_errors(

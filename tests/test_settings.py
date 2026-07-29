@@ -50,6 +50,7 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.background.max_concurrent_research_runs == 1
     assert settings.performance.prompt_budget_input_tokens == 16_000
     assert settings.performance.prompt_budget_output_tokens == 1_024
+    assert settings.performance.agent_max_output_tokens == 2_048
     assert settings.performance.embedding_cache_enabled is True
     assert settings.security.allow_remote_bind is False
 
@@ -127,6 +128,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_BACKGROUND_MAX_CONCURRENT_RESEARCH_RUNS": "2",
             "FRA_PROMPT_BUDGET_INPUT_TOKENS": "12000",
             "FRA_PROMPT_BUDGET_OUTPUT_TOKENS": "800",
+            "FRA_AGENT_MAX_OUTPUT_TOKENS": "1400",
             "FRA_EMBEDDING_CACHE_ENABLED": "false",
             "FRA_ALLOW_REMOTE_BIND": "true",
         }
@@ -195,6 +197,7 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.background.max_concurrent_research_runs == 2
     assert settings.performance.prompt_budget_input_tokens == 12_000
     assert settings.performance.prompt_budget_output_tokens == 800
+    assert settings.performance.agent_max_output_tokens == 1_400
     assert settings.performance.embedding_cache_enabled is False
     assert settings.security.allow_remote_bind is True
 

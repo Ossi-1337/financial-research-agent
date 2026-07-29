@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -293,7 +294,9 @@ class ResearchOrchestrator:
                     ),
                 )
             )
-        results = [await self._step_dispatcher.dispatch(item, run=run) for item in delegations]
+        results = await asyncio.gather(
+            *(self._step_dispatcher.dispatch(item, run=run) for item in delegations)
+        )
         return tuple(result.handoff for result in results)
 
     async def _dispatch_specialists(
@@ -354,7 +357,9 @@ class ResearchOrchestrator:
                     },
                 )
             )
-        results = [await self._step_dispatcher.dispatch(item, run=run) for item in delegations]
+        results = await asyncio.gather(
+            *(self._step_dispatcher.dispatch(item, run=run) for item in delegations)
+        )
         return tuple(result.handoff for result in results)
 
     async def _dispatch_synthesis(self, run: OrchestratedResearchRun) -> AgentHandoff:

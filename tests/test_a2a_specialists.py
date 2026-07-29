@@ -162,12 +162,12 @@ def test_financial_tool_exposes_analysis_evidence_ids_to_agent_validation() -> N
         )
     )
 
-    tool_message = next(
-        message for message in provider.requests[1].messages if message.role == MessageRole.TOOL
-    )
-    tool_payload = json.loads(tool_message.content)
+    agent_payload = json.loads(provider.requests[0].messages[-1].content)
+    tool_payload = agent_payload["required_tool_result"]
 
     assert tool_payload["data"]["evidence_ids"] == [EVIDENCE_ID]
+    assert provider.requests[0].tools == ()
+    assert provider.requests[0].max_output_tokens == 2048
     assert handoff.status == OrchestratorHandoffStatus.PARTIAL
     assert handoff.evidence_ids == (EVIDENCE_ID,)
     assert handoff.execution is not None
@@ -216,7 +216,7 @@ def test_specialist_uses_run_provider_snapshot_after_runtime_setting_changes() -
 
     handoff = asyncio.run(service.execute(_financial_request()))
 
-    assert len(initial.requests) == 2
+    assert len(initial.requests) == 1
     assert updated.requests == []
     assert handoff.execution is not None
     assert handoff.execution.provider == "initial"
@@ -282,7 +282,7 @@ class CapturingSpecialistProvider:
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
-        if len(self.requests) == 1:
+        if request.tools:
             tool_call = ToolCall(
                 id="tool-call:financial:1",
                 name="load_financial_report_evidence",
