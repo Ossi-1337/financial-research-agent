@@ -66,6 +66,7 @@ def test_root_html_and_static_asset_are_served() -> None:
 
     root_response = client.get("/")
     css_response = client.get("/static/styles.css")
+    script_response = client.get("/static/app.js")
 
     assert root_response.status_code == 200
     assert "<h1>Financial Research Agent</h1>" not in root_response.text
@@ -94,6 +95,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="selected-company"' not in root_response.text
     assert css_response.status_code == 200
     assert "text/css" in css_response.headers["content-type"]
+    assert script_response.status_code == 200
+    assert "application/javascript" in script_response.headers["content-type"]
     assert ".mention-menu[hidden]" in css_response.text
     assert "display: none" in css_response.text
     assert "--accent: #2563eb" in css_response.text
@@ -116,7 +119,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".stock-chart-axis-label" in css_response.text
     assert ".stock-chart-tooltip" in css_response.text
     assert ".stock-chart-crosshair" in css_response.text
-    assert ".trace-timeline" in css_response.text
+    assert ".trace-timeline" not in css_response.text
+    assert 'meta.textContent = "user"' not in script_response.text
+    assert "renderTraceControl" not in script_response.text
     assert ".settings-panel" in css_response.text
     assert "height: min(820px, calc(100vh - 32px))" in css_response.text
     assert "grid-template-rows: minmax(0, 1fr) auto" in css_response.text

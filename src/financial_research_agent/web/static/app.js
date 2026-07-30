@@ -9,7 +9,6 @@ const state = {
   suggestionRequestId: 0,
   abortController: null,
   activeBackgroundJobId: null,
-  tracesByRunId: {},
   exportsByRunId: {},
   evidenceByRunId: {},
   runsByRunId: {},
@@ -318,90 +317,6 @@ function renderReportExportControl(runId) {
     wrapper.append(retry);
   }
   return wrapper;
-}
-
-function renderTraceControl(container, message) {
-  const runId = message.research_run_id || "";
-  if (!runId.startsWith("orchestrator_run_")) {
-    return;
-  }
-  const wrapper = document.createElement("article");
-  wrapper.className = "trace-card";
-
-  const header = document.createElement("header");
-  header.className = "trace-card-header";
-
-  const title = document.createElement("h2");
-  title.textContent = "Run Trace";
-
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "trace-button secondary-button";
-  button.textContent = state.tracesByRunId[runId]?.trace ? "Refresh" : "Inspect";
-  button.addEventListener("click", () => loadRunTrace(runId));
-
-  header.append(title, button);
-  wrapper.append(header);
-
-  const stateForRun = state.tracesByRunId[runId];
-  if (stateForRun?.loading) {
-    const loading = document.createElement("p");
-    loading.className = "trace-muted";
-    loading.textContent = "Loading trace...";
-    wrapper.append(loading);
-  } else if (stateForRun?.error) {
-    const error = document.createElement("p");
-    error.className = "trace-error";
-    error.textContent = stateForRun.error;
-    wrapper.append(error);
-  } else if (stateForRun?.trace) {
-    wrapper.append(renderTraceTimeline(stateForRun.trace));
-  }
-
-  container.append(wrapper);
-}
-
-function renderTraceTimeline(trace) {
-  const timeline = document.createElement("ol");
-  timeline.className = "trace-timeline";
-  for (const event of trace.events || []) {
-    const item = document.createElement("li");
-    item.className = `trace-event ${event.status}`;
-
-    const title = document.createElement("div");
-    title.className = "trace-event-title";
-    title.textContent = `${event.sequence}. ${event.title}`;
-
-    const meta = document.createElement("small");
-    meta.className = "trace-muted";
-    meta.textContent = `${event.kind} / ${event.status} / ${event.duration_ms}ms`;
-
-    item.append(title, meta);
-    if (event.error_message) {
-      const error = document.createElement("p");
-      error.className = "trace-error";
-      error.textContent = event.error_message;
-      item.append(error);
-    }
-    const details = [];
-    if (event.evidence_ids?.length) {
-      details.push(`evidence: ${event.evidence_ids.length}`);
-    }
-    if (event.warnings?.length) {
-      details.push(`warnings: ${event.warnings.length}`);
-    }
-    if (event.limitations?.length) {
-      details.push(`limitations: ${event.limitations.length}`);
-    }
-    if (details.length) {
-      const summary = document.createElement("p");
-      summary.className = "trace-muted";
-      summary.textContent = details.join(" / ");
-      item.append(summary);
-    }
-    timeline.append(item);
-  }
-  return timeline;
 }
 
 function renderSynthesisSection(titleText, points, runId) {
@@ -864,16 +779,9 @@ function renderMessages() {
     content.className = "message-content";
     renderMessageContent(content, message);
 
-    if (message.role === "user") {
-      const meta = document.createElement("div");
-      meta.className = "message-meta";
-      meta.textContent = "user";
-      item.append(meta);
-    }
     item.append(content);
     renderMessageCitations(item, message);
     renderSynthesisReport(item, message);
-    renderTraceControl(item, message);
     messageList.append(item);
   }
   const hasStreamingMessage = state.messages.some((message) => message.streaming);
@@ -1607,20 +1515,6 @@ function backgroundJobText(job) {
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function loadRunTrace(runId) {
-  state.tracesByRunId[runId] = { loading: true };
-  renderMessages();
-  try {
-    const payload = await requestJson(`/api/orchestrator/runs/${runId}/trace`);
-    state.tracesByRunId[runId] = { trace: payload.trace };
-  } catch (error) {
-    state.tracesByRunId[runId] = {
-      error: error instanceof Error ? error.message : "Could not load trace.",
-    };
-  }
-  renderMessages();
 }
 
 async function createReportExport(runId, requestedFormat = null) {
