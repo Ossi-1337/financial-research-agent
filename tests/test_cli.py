@@ -197,7 +197,7 @@ def test_sqlite_storage_check_backup_and_cleanup_commands(
     assert main(["storage-check", "--full", "--pretty"]) == 0
     check = json.loads(capsys.readouterr().out)
     assert check["healthy"] is True
-    assert check["schema_version"] == 4
+    assert check["schema_version"] == 5
 
     assert main(["storage-backup", "--pretty"]) == 0
     backup = json.loads(capsys.readouterr().out)

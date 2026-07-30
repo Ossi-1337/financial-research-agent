@@ -19,7 +19,7 @@ from financial_research_agent.persistence.contracts import (
 )
 
 DATABASE_FILENAME = "financial_research_agent.sqlite3"
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 BUSY_TIMEOUT_MS = 5_000
 COUNTED_TABLES = (
     "companies",

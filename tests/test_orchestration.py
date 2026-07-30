@@ -142,6 +142,7 @@ def test_selected_roles_and_agent_runtime_round_trip_with_legacy_defaults() -> N
                 specialist_roles=("stock", "synthesis"),
                 agent_provider="scripted",
                 agent_model="scripted-model",
+                retrieval_query="latest revenue and risk evidence",
             )
         )
     )
@@ -151,14 +152,23 @@ def test_selected_roles_and_agent_runtime_round_trip_with_legacy_defaults() -> N
     legacy_payload.pop("specialist_roles")
     legacy_payload.pop("agent_provider")
     legacy_payload.pop("agent_model")
+    legacy_payload["retrieval_mode"] = "required"
+    legacy_payload.pop("retrieval_query")
+    legacy_payload.pop("evidence_required")
+    legacy_payload.pop("retrieval_methods")
+    legacy_payload.pop("retrieval_evidence_ids")
+    legacy_payload.pop("retrieval_duration_ms")
+    legacy_payload.pop("retrieval_no_result_reason")
     legacy = orchestrated_research_run_from_dict(legacy_payload)
 
     assert restored.specialist_roles == ("stock", "synthesis")
     assert restored.agent_provider == "scripted"
     assert restored.agent_model == "scripted-model"
+    assert restored.retrieval_query == "latest revenue and risk evidence"
     assert legacy.specialist_roles == ("financial-report", "stock", "context", "synthesis")
     assert legacy.agent_provider is None
     assert legacy.agent_model is None
+    assert "retrieval_mode" not in legacy.to_dict()
 
 
 def test_orchestrator_uses_only_dispatcher_and_stable_specialist_order() -> None:

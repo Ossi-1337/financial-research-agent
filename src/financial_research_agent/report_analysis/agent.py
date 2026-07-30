@@ -55,6 +55,9 @@ ACCOUNTING_KEYWORDS = (
 )
 
 QUESTION_TEXT: Mapping[FinancialReportSection, str] = {
+    FinancialReportSection.QUERY_EVIDENCE: (
+        "What company-scoped filing evidence addresses the current research question?"
+    ),
     FinancialReportSection.REVENUE: (
         "What do stored statements show about revenue and prior-period change?"
     ),
@@ -135,6 +138,8 @@ class FinancialReportAnalysisAgent:
     def analyze(
         self,
         company: FinancialReportAnalysisCompany,
+        *,
+        retrieval_query: str | None = None,
     ) -> FinancialReportAnalysisResult:
         created_at = _aware_now(self._now())
         limitations: list[str] = []
@@ -158,6 +163,17 @@ class FinancialReportAnalysisAgent:
 
         evidence_builder = _EvidenceBuilder()
         findings = (
+            *(
+                (
+                    self._query_evidence_finding(
+                        filing_result=filing_result,
+                        retrieval_query=retrieval_query,
+                        evidence_builder=evidence_builder,
+                    ),
+                )
+                if retrieval_query and retrieval_query.strip()
+                else ()
+            ),
             self._revenue_finding(statement_result, evidence_builder),
             self._margins_finding(statement_result, evidence_builder),
             self._cash_flow_finding(statement_result, evidence_builder),
@@ -204,6 +220,60 @@ class FinancialReportAnalysisAgent:
             warnings=tuple(dict.fromkeys(warnings)),
             source_summary=_source_summary(statement_result, filing_result),
             no_recommendation_notice=NO_RECOMMENDATION_NOTICE,
+        )
+
+    def _query_evidence_finding(
+        self,
+        *,
+        filing_result: FilingIngestionResult | None,
+        retrieval_query: str,
+        evidence_builder: _EvidenceBuilder,
+    ) -> FinancialReportFinding:
+        matches = retrieve_filing_chunks(
+            filing_result,
+            _retrieval_terms(retrieval_query),
+            limit=5,
+            vector_reranker=self._filing_vector_reranker,
+        )
+        if not matches:
+            return _limited_finding(
+                FinancialReportSection.QUERY_EVIDENCE,
+                "Question-Specific Filing Evidence",
+                "No company-scoped filing chunks matched the bounded retrieval query.",
+            )
+        remaining_chars = 4_000
+        points: list[_EvidencePoint] = []
+        included_methods: list[str] = []
+        for match in matches:
+            max_chars = min(900, remaining_chars)
+            if max_chars <= 0:
+                break
+            points.append(
+                evidence_builder.add_chunk(
+                    match.chunk,
+                    FinancialReportSection.QUERY_EVIDENCE,
+                    retrieved_at=filing_result.source.retrieved_at,
+                    retrieval_method=match.method.value,
+                    retrieval_score=match.score,
+                    max_chars=max_chars,
+                )
+            )
+            included_methods.append(match.method.value)
+            remaining_chars -= min(len(" ".join(match.chunk.text.split())), max_chars)
+        return FinancialReportFinding(
+            id="finding:query_evidence",
+            section=FinancialReportSection.QUERY_EVIDENCE,
+            title="Question-Specific Filing Evidence",
+            summary=(
+                f"Retrieved {len(points)} company-scoped filing chunks for the research question."
+            ),
+            confidence=ConfidenceLabel.MEDIUM,
+            evidence_ids=tuple(point.evidence_id for point in points),
+            citation_ids=tuple(point.citation_id for point in points),
+            limitations=(
+                f"Question-specific filing evidence used {included_methods[0]} ranking and "
+                "bounded source snippets.",
+            ),
         )
 
     def _stored_statements(
@@ -651,7 +721,10 @@ class _EvidenceBuilder:
         retrieved_at: datetime,
         retrieval_method: str,
         retrieval_score: float,
+        max_chars: int = 900,
     ) -> _EvidencePoint:
+        if max_chars <= 0 or max_chars > 900:
+            raise ValueError("max_chars must be between 1 and 900")
         citation_id = self._next_citation_id()
         evidence_id = f"filing:{chunk.id}:{section.value}"
         quote = _shorten(" ".join(chunk.text.split()), 500)
@@ -688,7 +761,7 @@ class _EvidenceBuilder:
         evidence = EvidenceSnippet(
             id=evidence_id,
             citation_id=citation_id,
-            text=_shorten(" ".join(chunk.text.split()), 1_200),
+            text=_shorten(" ".join(chunk.text.split()), max_chars),
             source_url=source_url,
             retrieved_at=retrieved_at,
             score=1.0,
@@ -974,6 +1047,32 @@ def _format_decimal(value: Decimal) -> str:
     if value == value.to_integral():
         return format(value.quantize(Decimal("1")), "f")
     return format(value.normalize(), "f").rstrip("0").rstrip(".")
+
+
+def _retrieval_terms(query: str) -> tuple[str, ...]:
+    stopwords = {
+        "about",
+        "company",
+        "financial",
+        "financially",
+        "how",
+        "performing",
+        "please",
+        "tell",
+        "the",
+        "this",
+        "what",
+        "with",
+    }
+    normalized = "".join(character if character.isalnum() else " " for character in query)
+    terms = tuple(
+        dict.fromkeys(
+            word.casefold()
+            for word in normalized.split()
+            if len(word) >= 3 and word.casefold() not in stopwords
+        )
+    )
+    return terms or ("risk", "revenue", "cash")
 
 
 def _shorten(text: str, limit: int) -> str:

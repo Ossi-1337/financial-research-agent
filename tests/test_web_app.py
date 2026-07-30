@@ -76,6 +76,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="settings-panel"' in root_response.text
     assert 'id="settings-agent-runtime-status"' in root_response.text
     assert 'id="settings-button"' in root_response.text
+    assert 'id="retrieval-mode-control"' not in root_response.text
+    assert "Sources required" not in root_response.text
     assert '<option value="anthropic">anthropic</option>' in root_response.text
     assert '<option value="gemini">gemini</option>' in root_response.text
     assert '<option value="litellm">litellm</option>' in root_response.text
@@ -98,6 +100,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "width: 100%" in css_response.text
     assert "border-top: 1px solid var(--border)" in css_response.text
     assert ".context-panel[hidden]" in css_response.text
+    assert ".retrieval-mode-control" not in css_response.text
     assert ".context-source-link" in css_response.text
     assert ".citation-list" in css_response.text
     assert ".evidence-snippet" in css_response.text
@@ -111,6 +114,15 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".settings-panel" in css_response.text
     assert "max-width: calc(100% - 98px)" in css_response.text
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
+
+
+def test_session_api_does_not_expose_retrieval_strategy() -> None:
+    client = _client()
+    session_id = client.post("/api/sessions").json()["session"]["id"]
+
+    session = client.get(f"/api/sessions/{session_id}").json()["session"]
+
+    assert "retrieval_mode" not in session
 
 
 def test_frontend_has_one_message_entrypoint_without_slash_routing() -> None:
@@ -368,7 +380,7 @@ def test_storage_integrity_endpoint_is_read_only(tmp_path) -> None:
 
     assert response.status_code == 200
     assert payload["healthy"] is True
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert payload["counts"]["chat_sessions"] == 0
 
 

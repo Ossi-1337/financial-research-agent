@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from dataclasses import FrozenInstanceError
@@ -77,6 +78,30 @@ def test_mcp_client_sends_direct_message_through_application() -> None:
         ("POST", "/api/sessions"),
         ("POST", "/api/sessions/session_test/messages/stream"),
     ]
+
+
+def test_mcp_client_uses_canonical_automatic_grounding_endpoint() -> None:
+    request_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=(
+                '{"type":"completed","assistant_message":{"role":"assistant",'
+                '"content":"Grounded"},"provider":"local-openai","model":"test-model"}\n'
+            ),
+        )
+
+    result = asyncio.run(
+        _client(handler).send_message(
+            content="Research Tesla",
+            session_id="session_existing",
+        )
+    )
+
+    assert result.status == McpResultStatus.SUCCEEDED
+    assert request_payloads == [{"content": "Research Tesla", "mentions": []}]
 
 
 def test_mcp_client_returns_research_job_from_canonical_message_flow() -> None:

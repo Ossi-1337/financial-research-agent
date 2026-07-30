@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from time import perf_counter_ns
 from uuid import uuid4
 
 from financial_research_agent.agents import (
@@ -154,7 +155,6 @@ class SpecialistExecutionService:
         started_at = _aware_now(self._now())
         if request.role != AgentRole.STOCK:
             raise ValueError("market data refresh requires stock specialist")
-        provider = _required_dependency(self.market_data_provider, "market_data_provider")
         store = _required_dependency(self.market_data_store, "market_data_store")
         security = MarketSecurity(
             symbol=_text(request.payload, "ticker"),
@@ -165,30 +165,58 @@ class SpecialistExecutionService:
         )
         outputsize = _text(request.payload, "outputsize")
         benchmark_symbol = _optional_text(request.payload.get("benchmark_symbol"))
+        stored = store.get_history(symbol=security.symbol, now=started_at)
+        primary_cache_reused = _is_fresh_cached(stored, store=store, now=started_at)
         try:
-            history = await provider.fetch_daily_prices(security, outputsize=outputsize)
-            stored = store.save_history(history)
+            if not primary_cache_reused:
+                provider = _required_dependency(
+                    self.market_data_provider,
+                    "market_data_provider",
+                )
+                history = await provider.fetch_daily_prices(security, outputsize=outputsize)
+                stored = store.save_history(history)
         except MarketDataError as exc:
             return _provider_failure(request, started_at, self._now(), exc.code.value, exc.message)
+        if stored is None:
+            raise RuntimeError("market data refresh produced no stored result")
 
         output: dict[str, object] = {"history": stored.to_dict()}
         warnings = list(stored.warnings)
+        if primary_cache_reused:
+            warnings.append("Fresh cached market data reused according to configured TTL.")
         limitations: list[str] = []
         status = OrchestratorHandoffStatus.SUCCEEDED
         error_code = None
         error_message = None
         if benchmark_symbol is not None and benchmark_symbol != security.symbol:
             try:
-                benchmark = await provider.fetch_daily_prices(
-                    MarketSecurity(
-                        symbol=benchmark_symbol,
-                        security_id=f"benchmark:{benchmark_symbol}",
-                    ),
-                    outputsize=outputsize,
+                stored_benchmark = store.get_history(symbol=benchmark_symbol, now=started_at)
+                benchmark_cache_reused = _is_fresh_cached(
+                    stored_benchmark,
+                    store=store,
+                    now=started_at,
                 )
-                stored_benchmark = store.save_history(benchmark)
+                if not benchmark_cache_reused:
+                    provider = _required_dependency(
+                        self.market_data_provider,
+                        "market_data_provider",
+                    )
+                    benchmark = await provider.fetch_daily_prices(
+                        MarketSecurity(
+                            symbol=benchmark_symbol,
+                            security_id=f"benchmark:{benchmark_symbol}",
+                        ),
+                        outputsize=outputsize,
+                    )
+                    stored_benchmark = store.save_history(benchmark)
+                if stored_benchmark is None:
+                    raise RuntimeError("benchmark refresh produced no stored result")
                 output["benchmark_history"] = stored_benchmark.to_dict()
                 warnings.extend(stored_benchmark.warnings)
+                if benchmark_cache_reused:
+                    warnings.append(
+                        "Fresh cached benchmark data reused according to configured TTL."
+                    )
             except MarketDataError as exc:
                 status = OrchestratorHandoffStatus.PARTIAL
                 error_code = exc.code.value
@@ -228,10 +256,6 @@ class SpecialistExecutionService:
                 started_at,
                 "No CIK was available from company resolution.",
             )
-        provider = _required_dependency(
-            self.financial_statement_provider,
-            "financial_statement_provider",
-        )
         store = _required_dependency(
             self.financial_statement_store,
             "financial_statement_store",
@@ -242,11 +266,23 @@ class SpecialistExecutionService:
             company_id=_optional_text(request.payload.get("company_id")),
             legal_name=_optional_text(request.payload.get("legal_name")),
         )
+        stored = store.get_result(cik=cik, now=started_at)
+        cache_reused = _is_fresh_cached(stored, store=store, now=started_at)
         try:
-            result = await provider.fetch_statements(company, fiscal_years=fiscal_years)
-            stored = store.save_result(result)
+            if not cache_reused:
+                provider = _required_dependency(
+                    self.financial_statement_provider,
+                    "financial_statement_provider",
+                )
+                result = await provider.fetch_statements(company, fiscal_years=fiscal_years)
+                stored = store.save_result(result)
         except FinancialStatementError as exc:
             return _provider_failure(request, started_at, self._now(), exc.code.value, exc.message)
+        if stored is None:
+            raise RuntimeError("financial statement refresh produced no stored result")
+        warnings = list(stored.warnings)
+        if cache_reused:
+            warnings.append("Fresh cached financial statements reused according to configured TTL.")
         return _handoff(
             request=request,
             status=OrchestratorHandoffStatus.SUCCEEDED,
@@ -254,7 +290,7 @@ class SpecialistExecutionService:
             completed_at=_aware_now(self._now()),
             input_summary={"cik": cik, "fiscal_years": str(fiscal_years)},
             output={"statements": stored.to_dict()},
-            warnings=stored.warnings,
+            warnings=tuple(dict.fromkeys(warnings)),
             confidence=HandoffConfidence.HIGH,
         )
 
@@ -269,7 +305,6 @@ class SpecialistExecutionService:
                 started_at,
                 "No CIK was available from company resolution.",
             )
-        provider = _required_dependency(self.filing_provider, "filing_provider")
         store = _required_dependency(self.filing_store, "filing_store")
         forms = _text_tuple(request.payload, "forms")
         limit = _positive_int(request.payload, "limit")
@@ -279,17 +314,27 @@ class SpecialistExecutionService:
             company_id=_optional_text(request.payload.get("company_id")),
             legal_name=_optional_text(request.payload.get("legal_name")),
         )
+        stored = store.get_result(cik=cik, now=started_at)
+        cache_reused = _is_fresh_cached(stored, store=store, now=started_at)
+        partial_errors: tuple[str, ...] = ()
         try:
-            result, partial_errors = await _ingest_filings(
-                provider,
-                company,
-                forms=forms,
-                limit=limit,
-                form_limits=form_limits,
-            )
-            stored = store.save_result(result)
+            if not cache_reused:
+                provider = _required_dependency(self.filing_provider, "filing_provider")
+                result, partial_errors = await _ingest_filings(
+                    provider,
+                    company,
+                    forms=forms,
+                    limit=limit,
+                    form_limits=form_limits,
+                )
+                stored = store.save_result(result)
         except FilingError as exc:
             return _provider_failure(request, started_at, self._now(), exc.code.value, exc.message)
+        if stored is None:
+            raise RuntimeError("filing refresh produced no stored result")
+        warnings = list(stored.warnings)
+        if cache_reused:
+            warnings.append("Fresh cached filings reused according to configured TTL.")
         return _handoff(
             request=request,
             status=(
@@ -305,7 +350,7 @@ class SpecialistExecutionService:
                 "limit": str(limit),
             },
             output={"filings": stored.to_dict()},
-            warnings=stored.warnings,
+            warnings=tuple(dict.fromkeys(warnings)),
             limitations=partial_errors,
             confidence=HandoffConfidence.HIGH,
         )
@@ -318,19 +363,36 @@ class SpecialistExecutionService:
             _context: ToolContext,
             _arguments: Mapping[str, object],
         ) -> ToolResult:
+            retrieval_started = perf_counter_ns()
+            retrieval_query = _optional_text(request.payload.get("retrieval_query"))
+            analysis_kwargs = (
+                {"retrieval_query": retrieval_query} if retrieval_query is not None else {}
+            )
             result = self.financial_report_agent.analyze(
                 FinancialReportAnalysisCompany(
                     cik=_text(request.payload, "cik"),
                     company_id=_optional_text(request.payload.get("company_id")),
                     legal_name=_optional_text(request.payload.get("legal_name")),
-                )
+                ),
+                **analysis_kwargs,
             )
             result_holder["analysis"] = result
-            evidence_ids = tuple(snippet.id for snippet in result.evidence)
+            result_holder["retrieval_duration_ms"] = _elapsed_ms(retrieval_started)
+            bounded_analysis = _bounded_financial_analysis(result.to_dict())
+            evidence_ids = tuple(
+                str(item["id"]) for item in _mapping_list(bounded_analysis.get("evidence", ()))
+            )
+            result_holder["prompt_evidence_ids"] = evidence_ids
+            retrieval_methods = _evidence_retrieval_methods(result.to_dict())
+            result_holder["retrieval_methods"] = retrieval_methods
             return ToolResult.succeeded(
                 tool_call_id="load_financial_report_evidence",
                 tool_name="load_financial_report_evidence",
-                data={"analysis": result.to_dict(), "evidence_ids": list(evidence_ids)},
+                data={
+                    "analysis": bounded_analysis,
+                    "evidence_ids": list(evidence_ids),
+                    "retrieval_methods": list(retrieval_methods),
+                },
                 source="local_financial_evidence",
                 warnings=result.warnings,
             )
@@ -359,8 +421,9 @@ class SpecialistExecutionService:
                     ToolPermission.FINANCIAL_DATA,
                 ),
                 known_evidence_ids=lambda: tuple(
-                    snippet.id for snippet in getattr(result_holder.get("analysis"), "evidence", ())
+                    str(item) for item in result_holder.get("prompt_evidence_ids", ())
                 ),
+                require_evidence=_payload_bool(request.payload, "evidence_required"),
             )
             result = result_holder.get("analysis")
             if result is None:
@@ -377,7 +440,12 @@ class SpecialistExecutionService:
             started_at=started_at,
             completed_at=_aware_now(self._now()),
             input_summary={"cik": _text(request.payload, "cik")},
-            output={"analysis": result.to_dict(), "agent_output": dict(agent.output)},
+            output={
+                "analysis": result.to_dict(),
+                "agent_output": dict(agent.output),
+                "retrieval_methods": list(result_holder.get("retrieval_methods", ())),
+                "retrieval_duration_ms": int(result_holder.get("retrieval_duration_ms", 0)),
+            },
             evidence_ids=tuple(snippet.id for snippet in result.evidence),
             warnings=result.warnings,
             limitations=result.limitations,
@@ -394,6 +462,7 @@ class SpecialistExecutionService:
             _context: ToolContext,
             _arguments: Mapping[str, object],
         ) -> ToolResult:
+            retrieval_started = perf_counter_ns()
             result = self.stock_price_agent.analyze(
                 StockPriceAnalysisSecurity(
                     symbol=symbol,
@@ -405,6 +474,7 @@ class SpecialistExecutionService:
                 benchmark_symbol=_optional_text(request.payload.get("benchmark_symbol")),
             )
             result_holder["analysis"] = result
+            result_holder["retrieval_duration_ms"] = _elapsed_ms(retrieval_started)
             return ToolResult.succeeded(
                 tool_call_id="load_stock_market_evidence",
                 tool_name="load_stock_market_evidence",
@@ -438,6 +508,7 @@ class SpecialistExecutionService:
                     if result_holder.get("analysis") is not None
                     else ()
                 ),
+                require_evidence=_payload_bool(request.payload, "evidence_required"),
             )
             result = result_holder.get("analysis")
             if result is None:
@@ -455,7 +526,12 @@ class SpecialistExecutionService:
             started_at=started_at,
             completed_at=_aware_now(self._now()),
             input_summary={"symbol": symbol},
-            output={"analysis": result.to_dict(), "agent_output": dict(agent.output)},
+            output={
+                "analysis": result.to_dict(),
+                "agent_output": dict(agent.output),
+                "retrieval_methods": ["market_data"],
+                "retrieval_duration_ms": int(result_holder.get("retrieval_duration_ms", 0)),
+            },
             evidence_ids=known_evidence,
             warnings=result.warnings,
             limitations=result.limitations,
@@ -482,12 +558,14 @@ class SpecialistExecutionService:
             _context: ToolContext,
             _arguments: Mapping[str, object],
         ) -> ToolResult:
+            retrieval_started = perf_counter_ns()
             result = self.context_agent.analyze(
                 query=_text(request.payload, "query"),
                 source_items=source_items,
                 company_symbols=symbols,
             )
             result_holder["analysis"] = result
+            result_holder["retrieval_duration_ms"] = _elapsed_ms(retrieval_started)
             return ToolResult.succeeded(
                 tool_call_id="load_context_evidence",
                 tool_name="load_context_evidence",
@@ -519,6 +597,7 @@ class SpecialistExecutionService:
                 registry=registry,
                 context=_tool_context("load_context_evidence", ToolPermission.CONTEXT_DATA),
                 known_evidence_ids=known_evidence,
+                require_evidence=_payload_bool(request.payload, "evidence_required"),
             )
             result = result_holder.get("analysis")
             if result is None:
@@ -536,7 +615,12 @@ class SpecialistExecutionService:
             started_at=started_at,
             completed_at=_aware_now(self._now()),
             input_summary={"source_item_count": str(len(source_items))},
-            output={"analysis": result.to_dict(), "agent_output": dict(agent.output)},
+            output={
+                "analysis": result.to_dict(),
+                "agent_output": dict(agent.output),
+                "retrieval_methods": ["approved_context"],
+                "retrieval_duration_ms": int(result_holder.get("retrieval_duration_ms", 0)),
+            },
             evidence_ids=tuple(dict.fromkeys(evidence_ids)),
             warnings=result.warnings,
             limitations=result.limitations,
@@ -601,6 +685,7 @@ class SpecialistExecutionService:
                 registry=registry,
                 context=_tool_context("load_specialist_handoffs", ToolPermission.HANDOFF_READ),
                 known_evidence_ids=known_evidence,
+                require_evidence=run.evidence_required,
             )
             report = self.synthesis_agent.synthesize_agent_output(
                 query=run.query,
@@ -935,6 +1020,94 @@ def _optional_text(value: object) -> str | None:
     if not isinstance(value, str):
         raise ValueError("optional text value must be a string")
     return value.strip() or None
+
+
+def _payload_bool(payload: Mapping[str, object], name: str) -> bool:
+    value = payload.get(name, False)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
+
+
+def _is_fresh_cached(
+    value: object | None,
+    *,
+    store: object,
+    now: datetime,
+) -> bool:
+    if value is None:
+        return False
+    source = getattr(value, "source", None)
+    retrieved_at = getattr(source, "retrieved_at", None)
+    stale_after = getattr(store, "stale_after", None)
+    return (
+        isinstance(retrieved_at, datetime)
+        and stale_after is not None
+        and retrieved_at + stale_after > now
+    )
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    return max(0, (perf_counter_ns() - started_ns) // 1_000_000)
+
+
+def _evidence_retrieval_methods(analysis: Mapping[str, object]) -> tuple[str, ...]:
+    methods: list[str] = []
+    for item in _mapping_list(analysis.get("evidence", ())):
+        metadata = item.get("metadata", {})
+        if not isinstance(metadata, Mapping):
+            continue
+        value = metadata.get("retrieval_method")
+        if isinstance(value, str) and value.strip():
+            methods.append(value.strip())
+    if not methods and analysis.get("evidence"):
+        methods.append("statement_evidence")
+    return tuple(dict.fromkeys(methods))
+
+
+def _bounded_financial_analysis(analysis: Mapping[str, object]) -> dict[str, object]:
+    payload = dict(analysis)
+    evidence = _mapping_list(analysis.get("evidence", ()))
+    findings = _mapping_list(analysis.get("findings", ()))
+    ordered_ids = tuple(
+        dict.fromkeys(
+            (
+                *(
+                    str(evidence_id)
+                    for finding in findings
+                    for evidence_id in _list(finding.get("evidence_ids", ()))
+                ),
+                *(str(item.get("id")) for item in evidence if item.get("id") is not None),
+            )
+        )
+    )
+    evidence_by_id = {str(item.get("id")): item for item in evidence}
+    selected: list[dict[str, object]] = []
+    total_chars = 0
+    for evidence_id in ordered_ids:
+        item = evidence_by_id.get(evidence_id)
+        if item is None or len(selected) >= 5 or total_chars >= 4_000:
+            continue
+        text = str(item.get("text", "")).strip()
+        remaining = min(900, 4_000 - total_chars)
+        if len(text) <= remaining:
+            bounded = text
+        elif remaining <= 3:
+            bounded = text[:remaining]
+        else:
+            bounded = text[: remaining - 3].rstrip() + "..."
+        selected.append({**dict(item), "text": bounded})
+        total_chars += len(bounded)
+    citation_ids = {
+        str(item.get("citation_id")) for item in selected if item.get("citation_id") is not None
+    }
+    payload["evidence"] = selected
+    payload["citations"] = [
+        dict(item)
+        for item in _mapping_list(analysis.get("citations", ()))
+        if str(item.get("id")) in citation_ids
+    ]
+    return payload
 
 
 def _list(value: object) -> list[object]:

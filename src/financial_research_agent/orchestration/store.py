@@ -113,6 +113,21 @@ def orchestrated_research_run_from_dict(payload: Any) -> OrchestratedResearchRun
         orchestrator_skill_references=tuple(
             str(item) for item in payload.get("orchestrator_skill_references", ())
         ),
+        retrieval_query=_optional_payload_text(payload, "retrieval_query"),
+        evidence_required=bool(payload.get("evidence_required", True)),
+        retrieval_methods=tuple(str(item) for item in payload.get("retrieval_methods", ())),
+        retrieval_evidence_ids=tuple(
+            str(item) for item in payload.get("retrieval_evidence_ids", ())
+        ),
+        retrieval_duration_ms=(
+            int(payload["retrieval_duration_ms"])
+            if payload.get("retrieval_duration_ms") is not None
+            else None
+        ),
+        retrieval_no_result_reason=_optional_payload_text(
+            payload,
+            "retrieval_no_result_reason",
+        ),
         handoffs=tuple(_handoff_from_payload(item) for item in payload.get("handoffs", ())),
         selected_company=_optional_mapping(payload.get("selected_company")),
         selected_security=_optional_mapping(payload.get("selected_security")),

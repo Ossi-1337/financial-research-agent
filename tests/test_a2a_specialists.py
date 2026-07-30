@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from financial_research_agent.a2a.specialists import (
     SpecialistExecutionService,
@@ -22,6 +23,14 @@ from financial_research_agent.llm import (
     ToolCall,
 )
 from financial_research_agent.llm.registry import ProviderRegistry
+from financial_research_agent.market_data import (
+    HistoricalPriceBar,
+    HistoricalPriceResult,
+    MarketDataSource,
+    MarketDataStore,
+    MarketSecurity,
+    calculate_price_metrics,
+)
 from financial_research_agent.orchestration import (
     AgentHandoff,
     AgentRole,
@@ -94,6 +103,66 @@ def test_context_specialist_skips_when_no_approved_sources_exist() -> None:
 
     assert handoff.status == OrchestratorHandoffStatus.SKIPPED
     assert handoff.limitations == ("No approved context sources were available.",)
+
+
+def test_market_refresh_reuses_fresh_cache_in_auto_mode() -> None:
+    security = MarketSecurity(symbol="NVO", security_id="security:nvo")
+    bars = (
+        HistoricalPriceBar(
+            security=security,
+            priced_at=date(2026, 7, 27),
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("100"),
+            volume=1000,
+        ),
+    )
+    store = MarketDataStore(stale_after=timedelta(days=1))
+    store.save_history(
+        HistoricalPriceResult(
+            security=security,
+            bars=bars,
+            source=MarketDataSource(
+                provider="alpha-vantage",
+                provider_status="TEST TOOL OUTPUT",
+                source_url="https://example.invalid/market",
+                retrieved_at=NOW,
+                attribution="TEST TOOL OUTPUT",
+                data_as_of=date(2026, 7, 27),
+            ),
+            metrics=calculate_price_metrics(bars),
+        )
+    )
+    settings = Settings.from_env({})
+    service = SpecialistExecutionService(
+        financial_report_agent=object(),  # type: ignore[arg-type]
+        stock_price_agent=object(),  # type: ignore[arg-type]
+        context_agent=object(),  # type: ignore[arg-type]
+        market_data_store=store,
+        agent_runtime=AgentRuntimeResolver(settings=lambda: settings),
+        now=lambda: NOW,
+    )
+
+    handoff = asyncio.run(
+        service.execute(
+            DelegationRequest(
+                role=AgentRole.STOCK,
+                run_id="run:test",
+                step_id="refresh_market_data",
+                correlation_id="run:test",
+                expected_kind=OrchestratorStepKind.MARKET_DATA_REFRESH,
+                payload={
+                    "security_id": security.security_id,
+                    "ticker": security.symbol,
+                    "outputsize": "compact",
+                },
+            )
+        )
+    )
+
+    assert handoff.status == OrchestratorHandoffStatus.SUCCEEDED
+    assert "Fresh cached market data reused" in handoff.warnings[-1]
 
 
 def test_synthesis_handoff_payload_excludes_duplicate_internal_analysis() -> None:

@@ -45,6 +45,21 @@ def test_filing_retrieval_returns_no_unmatched_or_missing_chunks() -> None:
     assert retrieve_filing_chunks(_filing_result(), ("not-present",), limit=3) == ()
 
 
+def test_filing_retrieval_falls_back_to_lexical_when_vector_reranking_fails() -> None:
+    def failed_reranker(_chunks, _query):
+        raise RuntimeError("TEST TOOL OUTPUT embedding unavailable")
+
+    matches = retrieve_filing_chunks(
+        _filing_result(),
+        ("risk", "liquidity"),
+        limit=2,
+        vector_reranker=failed_reranker,
+    )
+
+    assert [match.chunk.id for match in matches] == ["chunk:risk", "chunk:liquidity"]
+    assert all(match.method == FilingRetrievalMethod.LEXICAL for match in matches)
+
+
 def _filing_result() -> FilingIngestionResult:
     company = FilingCompany(
         cik="0000000001",

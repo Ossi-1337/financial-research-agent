@@ -143,6 +143,8 @@ class OrchestratorResearchInput:
     agent_provider: str | None = None
     agent_model: str | None = None
     orchestrator_skill_references: tuple[str, ...] = ()
+    retrieval_query: str | None = None
+    evidence_required: bool | None = None
     scenario_id: str | None = None
     scenario_version: str | None = None
 
@@ -192,6 +194,16 @@ class OrchestratorResearchInput:
                 self.orchestrator_skill_references,
             ),
         )
+        retrieval_query = _optional_text(self.retrieval_query)
+        if retrieval_query is None:
+            retrieval_query = self.query
+        if retrieval_query is not None and len(retrieval_query) > 500:
+            raise ValueError("retrieval_query must be at most 500 characters")
+        object.__setattr__(self, "retrieval_query", retrieval_query)
+        evidence_required = True if self.evidence_required is None else self.evidence_required
+        if not isinstance(evidence_required, bool):
+            raise ValueError("evidence_required must be a boolean")
+        object.__setattr__(self, "evidence_required", evidence_required)
         if (self.agent_provider is None) != (self.agent_model is None):
             raise ValueError("agent_provider and agent_model must be provided together")
 
@@ -297,6 +309,12 @@ class OrchestratedResearchRun:
     agent_provider: str | None = None
     agent_model: str | None = None
     orchestrator_skill_references: tuple[str, ...] = ()
+    retrieval_query: str | None = None
+    evidence_required: bool = True
+    retrieval_methods: tuple[str, ...] = ()
+    retrieval_evidence_ids: tuple[str, ...] = ()
+    retrieval_duration_ms: int | None = None
+    retrieval_no_result_reason: str | None = None
     handoffs: tuple[AgentHandoff, ...] = ()
     selected_company: Mapping[str, object] | None = None
     selected_security: Mapping[str, object] | None = None
@@ -338,6 +356,28 @@ class OrchestratedResearchRun:
         )
         if (self.agent_provider is None) != (self.agent_model is None):
             raise ValueError("agent_provider and agent_model must be provided together")
+        object.__setattr__(self, "retrieval_query", _optional_text(self.retrieval_query))
+        if self.retrieval_query is not None and len(self.retrieval_query) > 500:
+            raise ValueError("retrieval_query must be at most 500 characters")
+        if not isinstance(self.evidence_required, bool):
+            raise ValueError("evidence_required must be a boolean")
+        object.__setattr__(
+            self,
+            "retrieval_methods",
+            _text_tuple("retrieval_methods", self.retrieval_methods),
+        )
+        object.__setattr__(
+            self,
+            "retrieval_evidence_ids",
+            _text_tuple("retrieval_evidence_ids", self.retrieval_evidence_ids),
+        )
+        if self.retrieval_duration_ms is not None and self.retrieval_duration_ms < 0:
+            raise ValueError("retrieval_duration_ms must be non-negative")
+        object.__setattr__(
+            self,
+            "retrieval_no_result_reason",
+            _optional_text(self.retrieval_no_result_reason),
+        )
         object.__setattr__(self, "handoffs", _handoff_tuple(self.handoffs))
         object.__setattr__(
             self,
@@ -375,6 +415,12 @@ class OrchestratedResearchRun:
             "agent_provider": self.agent_provider,
             "agent_model": self.agent_model,
             "orchestrator_skill_references": list(self.orchestrator_skill_references),
+            "retrieval_query": self.retrieval_query,
+            "evidence_required": self.evidence_required,
+            "retrieval_methods": list(self.retrieval_methods),
+            "retrieval_evidence_ids": list(self.retrieval_evidence_ids),
+            "retrieval_duration_ms": self.retrieval_duration_ms,
+            "retrieval_no_result_reason": self.retrieval_no_result_reason,
             "handoffs": [handoff.to_dict() for handoff in self.handoffs],
             "selected_company": (
                 dict(self.selected_company) if self.selected_company is not None else None

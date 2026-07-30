@@ -31,6 +31,8 @@ _ALLOWED_PAYLOAD_KEYS = {
         "forms",
         "limit",
         "form_limits",
+        "retrieval_query",
+        "evidence_required",
     },
     AgentRole.STOCK: {
         "security_id",
@@ -40,8 +42,14 @@ _ALLOWED_PAYLOAD_KEYS = {
         "currency",
         "benchmark_symbol",
         "outputsize",
+        "evidence_required",
     },
-    AgentRole.CONTEXT: {"query", "company_symbols", "source_items"},
+    AgentRole.CONTEXT: {
+        "query",
+        "company_symbols",
+        "source_items",
+        "evidence_required",
+    },
     AgentRole.SYNTHESIS: {"handoff_ids"},
 }
 

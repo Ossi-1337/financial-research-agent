@@ -1,6 +1,7 @@
 """Local vector retrieval and RAG foundation contracts."""
 
 from financial_research_agent.retrieval.contracts import (
+    ChatRetrievalMetadata,
     IndexedChunk,
     RetrievalChunk,
     RetrievalError,
@@ -26,6 +27,7 @@ from financial_research_agent.retrieval.pipeline import (
 
 __all__ = [
     "LOCAL_VECTOR_INDEX_VERSION",
+    "ChatRetrievalMetadata",
     "IndexedChunk",
     "LocalVectorIndex",
     "RetrievalChunk",

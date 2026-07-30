@@ -31,6 +31,64 @@ class RetrievalErrorCode(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ChatRetrievalMetadata:
+    query: str | None = None
+    specialist_roles: tuple[str, ...] = ()
+    methods: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+    duration_ms: int | None = None
+    no_result_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "query", _optional_text(self.query))
+        object.__setattr__(
+            self,
+            "specialist_roles",
+            _bounded_text_tuple("specialist_roles", self.specialist_roles, maximum=4),
+        )
+        object.__setattr__(
+            self,
+            "methods",
+            _bounded_text_tuple("methods", self.methods, maximum=8),
+        )
+        object.__setattr__(
+            self,
+            "evidence_ids",
+            _bounded_text_tuple("evidence_ids", self.evidence_ids, maximum=100),
+        )
+        if self.duration_ms is not None and self.duration_ms < 0:
+            raise ValueError("duration_ms must be non-negative")
+        object.__setattr__(self, "no_result_reason", _optional_text(self.no_result_reason))
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> ChatRetrievalMetadata:
+        return cls(
+            query=_optional_payload_text(payload, "query"),
+            specialist_roles=tuple(
+                str(item) for item in _sequence_payload_default(payload, "specialist_roles")
+            ),
+            methods=tuple(str(item) for item in _sequence_payload_default(payload, "methods")),
+            evidence_ids=tuple(
+                str(item) for item in _sequence_payload_default(payload, "evidence_ids")
+            ),
+            duration_ms=(
+                int(payload["duration_ms"]) if payload.get("duration_ms") is not None else None
+            ),
+            no_result_reason=_optional_payload_text(payload, "no_result_reason"),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "query": self.query,
+            "specialist_roles": list(self.specialist_roles),
+            "methods": list(self.methods),
+            "evidence_ids": list(self.evidence_ids),
+            "duration_ms": self.duration_ms,
+            "no_result_reason": self.no_result_reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RetrievalChunk:
     id: str
     text: str
@@ -323,6 +381,13 @@ def _sequence_payload(payload: Mapping[str, Any], key: str) -> Sequence[Any]:
     return value
 
 
+def _sequence_payload_default(payload: Mapping[str, Any], key: str) -> Sequence[Any]:
+    value = payload.get(key, ())
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{key} must be a sequence")
+    return value
+
+
 def _mapping_payload(payload: Mapping[str, Any], key: str) -> Iterable[tuple[Any, Any]]:
     value = payload.get(key, {})
     if not isinstance(value, Mapping):
@@ -368,6 +433,18 @@ def _text_tuple(name: str, values: Iterable[str]) -> tuple[str, ...]:
     if isinstance(values, str):
         raise ValueError(f"{name} must be an iterable of strings, not a string")
     return tuple(_require_text(f"{name}[{index}]", value) for index, value in enumerate(values))
+
+
+def _bounded_text_tuple(
+    name: str,
+    values: Iterable[str],
+    *,
+    maximum: int,
+) -> tuple[str, ...]:
+    result = tuple(dict.fromkeys(_text_tuple(name, values)))
+    if len(result) > maximum:
+        raise ValueError(f"{name} must contain at most {maximum} values")
+    return result
 
 
 def _float_tuple(name: str, values: Iterable[float]) -> tuple[float, ...]:

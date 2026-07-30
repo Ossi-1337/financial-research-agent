@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from financial_research_agent.llm import ChatMessage, MessageRole
 from financial_research_agent.reports import Citation, EvidenceSnippet
+from financial_research_agent.retrieval import ChatRetrievalMetadata
 from financial_research_agent.settings import Settings
 
 SESSION_STORE_VERSION = 1
@@ -74,6 +75,7 @@ class ChatSessionMessage:
     citations: tuple[Citation, ...] = ()
     evidence_snippets: tuple[EvidenceSnippet, ...] = ()
     synthesis_report: Mapping[str, object] | None = None
+    retrieval: ChatRetrievalMetadata | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "role", MessageRole(self.role))
@@ -96,6 +98,11 @@ class ChatSessionMessage:
             "synthesis_report",
             _optional_object_mapping(self.synthesis_report),
         )
+        if self.retrieval is not None and not isinstance(
+            self.retrieval,
+            ChatRetrievalMetadata,
+        ):
+            raise ValueError("retrieval must be ChatRetrievalMetadata")
         object.__setattr__(self, "created_at", _aware_datetime("created_at", self.created_at))
 
     @classmethod
@@ -121,6 +128,11 @@ class ChatSessionMessage:
                 for item in _payload_list(payload, "evidence_snippets")
             ),
             synthesis_report=_payload_optional_mapping(payload, "synthesis_report"),
+            retrieval=(
+                ChatRetrievalMetadata.from_dict(_payload_mapping(payload["retrieval"], "retrieval"))
+                if payload.get("retrieval") is not None
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -138,6 +150,7 @@ class ChatSessionMessage:
             "synthesis_report": (
                 dict(self.synthesis_report) if self.synthesis_report is not None else None
             ),
+            "retrieval": self.retrieval.to_dict() if self.retrieval is not None else None,
         }
 
     def to_provider_message(self) -> ChatMessage:
@@ -294,6 +307,7 @@ class ChatSessionStore:
         citations: tuple[Citation, ...] = (),
         evidence_snippets: tuple[EvidenceSnippet, ...] = (),
         synthesis_report: Mapping[str, object] | None = None,
+        retrieval_metadata: ChatRetrievalMetadata | None = None,
     ) -> ChatSession:
         with self._lock:
             session = self._sessions[_require_text("session_id", session_id)]
@@ -307,6 +321,7 @@ class ChatSessionStore:
                     created_at=created_at,
                     research_run_id=research_run_id,
                     mentions=mentions,
+                    retrieval=retrieval_metadata,
                 ),
                 ChatSessionMessage(
                     id=_new_id("message"),
@@ -319,6 +334,7 @@ class ChatSessionStore:
                     citations=citations,
                     evidence_snippets=evidence_snippets,
                     synthesis_report=synthesis_report,
+                    retrieval=retrieval_metadata,
                 ),
             )
             updated = ChatSession(

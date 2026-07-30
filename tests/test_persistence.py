@@ -53,6 +53,7 @@ from financial_research_agent.persistence import (
     create_persistence,
 )
 from financial_research_agent.reports import CitedResearchRun, CitedResearchRunStatus
+from financial_research_agent.retrieval import ChatRetrievalMetadata
 from financial_research_agent.runtime_settings import RuntimeSettingsOverrides
 from financial_research_agent.settings import Settings
 from financial_research_agent.web.sessions import ChatSessionStore
@@ -96,6 +97,12 @@ def test_chat_repository_round_trip_ordering_and_concurrent_access(tmp_path: Pat
         assistant_content="Answer",
         provider="offline-test",
         model="offline-test",
+        retrieval_metadata=ChatRetrievalMetadata(
+            query="Question",
+            specialist_roles=("stock", "synthesis"),
+            methods=("market_data",),
+            evidence_ids=("market:fixture:1",),
+        ),
     )
 
     assert store.count() == 12
@@ -104,6 +111,7 @@ def test_chat_repository_round_trip_ordering_and_concurrent_access(tmp_path: Pat
         "Question",
         "Answer",
     ]
+    assert store.get(updated.id).messages[-1].retrieval.evidence_ids == ("market:fixture:1",)
     assert store.delete(updated.id) is True
     assert store.get(updated.id) is None
 

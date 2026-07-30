@@ -60,12 +60,16 @@ class McpApplicationClient:
                 except ValueError:
                     return _malformed("send_message")
 
+            message_payload = {
+                "content": message,
+                "mentions": [],
+            }
             response = await self._request(
                 client,
                 "POST",
                 f"/api/sessions/{resolved_session_id}/messages/stream",
                 capability_id="send_message",
-                json_payload={"content": message, "mentions": []},
+                json_payload=message_payload,
                 ndjson=True,
             )
         if isinstance(response, McpResultEnvelope):

@@ -8,6 +8,7 @@ import pytest
 
 from financial_research_agent.llm import MessageRole
 from financial_research_agent.reports import Citation, EvidenceSnippet
+from financial_research_agent.retrieval import ChatRetrievalMetadata
 from financial_research_agent.web.sessions import ChatMention, ChatSessionStore, summarize_messages
 
 
@@ -57,6 +58,13 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
             "sections": {"current_situation": []},
             "scenarios": {},
         },
+        retrieval_metadata=ChatRetrievalMetadata(
+            query="What about Novo Nordisk?",
+            specialist_roles=("financial-report", "synthesis"),
+            methods=("lexical",),
+            evidence_ids=("evidence:1",),
+            duration_ms=12,
+        ),
     )
     reloaded = ChatSessionStore(storage_path=storage_path, recent_turns=2, summary_max_chars=200)
     loaded = reloaded.get(session.id)
@@ -73,6 +81,8 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
     assert loaded.messages[1].citations[0].marker == "[C1]"
     assert loaded.messages[1].evidence_snippets[0].citation_id == "C1"
     assert loaded.messages[1].synthesis_report["id"] == "synthesis_report_1"
+    assert loaded.messages[1].retrieval is not None
+    assert loaded.messages[1].retrieval.methods == ("lexical",)
 
 
 def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> None:
@@ -87,6 +97,7 @@ def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> No
                         "created_at": "2026-07-04T12:00:00+00:00",
                         "updated_at": "2026-07-04T12:00:00+00:00",
                         "summary": None,
+                        "retrieval_mode": "required",
                         "messages": [
                             {
                                 "id": "message_old",
@@ -113,6 +124,8 @@ def test_session_store_loads_old_messages_without_mentions(tmp_path: Path) -> No
     assert session.messages[0].citations == ()
     assert session.messages[0].evidence_snippets == ()
     assert session.messages[0].synthesis_report is None
+    assert session.messages[0].retrieval is None
+    assert "retrieval_mode" not in session.to_dict()
 
 
 def test_session_list_sorts_by_updated_at_and_clear_removes_persisted_sessions(

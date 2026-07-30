@@ -42,6 +42,15 @@ Specialist handoffs always contain status, timestamps, warnings, limitations, co
 evidence IDs. Failed A2A work remains visible and produces partial or failed research. No hidden
 in-process fallback runs in the normal application topology.
 
+The orchestrator decides whether a message needs source-grounded research. Greetings, product help,
+and general financial education do not start retrieval. Current company research selects the
+relevant specialists, reuses fresh local data according to cache policy, refreshes missing or stale
+data through the owning specialist, and fails closed when material claims lack valid evidence.
+Filing retrieval is company/CIK scoped, lexical by default, and may use optional vector reranking.
+Prompts receive at most five filing snippets, 900 characters per snippet, and 4,000 evidence
+characters total. Statement, market, and approved context evidence stays owned by its specialist.
+Synthesis receives only validated handoffs and known evidence IDs.
+
 Provider and model are resolved from current shared runtime settings when a run starts, then
 snapshotted on that run. Every specialist resolves the snapshot through its local provider adapter,
 so a settings change affects the next run without changing provider/model midway through an active
@@ -112,7 +121,7 @@ filesystem tool.
 | --- | --- |
 | A2A | Mandatory orchestrator-to-specialist delegation, task state, progress, retry, and cancellation |
 | Tools | Deterministic, allowlisted data access and calculations owned by each agent |
-| RAG | Stored filing evidence retrieval owned by the financial-report agent |
+| RAG | Automatic specialist-owned grounding for relevant company research; filing search remains financial-report-owned |
 | Skills | Versioned workflow instructions composed into role prompts without granting permissions |
 | MCP | Optional local interface to the canonical application conversation and research flow |
 

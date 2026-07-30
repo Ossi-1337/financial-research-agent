@@ -23,6 +23,7 @@ from financial_research_agent.llm import (
     TokenUsage,
 )
 from financial_research_agent.retrieval import (
+    ChatRetrievalMetadata,
     IndexedChunk,
     LocalVectorIndex,
     RetrievalChunk,
@@ -34,6 +35,24 @@ from financial_research_agent.retrieval import (
     retrieval_chunk_from_filing_chunk,
     search_index,
 )
+
+
+def test_chat_retrieval_metadata_is_version_safe() -> None:
+    metadata = ChatRetrievalMetadata(
+        query="latest filing risk evidence",
+        specialist_roles=("financial-report", "synthesis"),
+        methods=("lexical",),
+        evidence_ids=("filing:chunk:1",),
+        duration_ms=9,
+    )
+
+    restored = ChatRetrievalMetadata.from_dict(metadata.to_dict())
+
+    assert restored == metadata
+    with pytest.raises(FrozenInstanceError):
+        metadata.query = "changed"  # type: ignore[misc]
+    with pytest.raises(ValueError, match="duration_ms"):
+        ChatRetrievalMetadata(duration_ms=-1)
 
 
 def test_retrieval_contracts_are_immutable_and_validate_inputs() -> None:

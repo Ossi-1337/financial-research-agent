@@ -43,15 +43,11 @@ def retrieve_filing_chunks(
     if not candidates:
         return ()
     if vector_reranker is None:
-        return tuple(
-            FilingChunkMatch(
-                chunk=chunk,
-                score=score,
-                method=FilingRetrievalMethod.LEXICAL,
-            )
-            for score, chunk in lexical[:limit]
-        )
-    vector_scores = vector_reranker(candidates, " ".join(terms))
+        return _lexical_matches(lexical, limit)
+    try:
+        vector_scores = vector_reranker(candidates, " ".join(terms))
+    except Exception:
+        return _lexical_matches(lexical, limit)
     reranked = sorted(
         (
             (float(vector_scores.get(chunk.id, 0.0)), lexical_score, chunk)
@@ -67,4 +63,18 @@ def retrieve_filing_chunks(
             method=FilingRetrievalMethod.VECTOR_RERANKED,
         )
         for vector_score, _lexical_score, chunk in reranked[:limit]
+    )
+
+
+def _lexical_matches(
+    lexical: list[tuple[float, FilingChunk]],
+    limit: int,
+) -> tuple[FilingChunkMatch, ...]:
+    return tuple(
+        FilingChunkMatch(
+            chunk=chunk,
+            score=score,
+            method=FilingRetrievalMethod.LEXICAL,
+        )
+        for score, chunk in lexical[:limit]
     )

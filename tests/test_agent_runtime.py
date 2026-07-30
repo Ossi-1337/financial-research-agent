@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from financial_research_agent.agents import (
+    AgentDecision,
     AgentDecisionMode,
     AgentDecisionService,
     AgentOutputSchema,
@@ -61,8 +62,39 @@ def test_orchestrator_accepts_each_valid_decision(mode: AgentDecisionMode) -> No
     assert provider.requests[0].response_format is not None
     assert provider.requests[0].metadata["agent_role"] == "orchestrator"
     assert provider.requests[0].metadata["skills"] == "company-research@2.0.0"
+    assert provider.requests[0].metadata["prompt_version"] == "2.1.0"
     assert "Reusable workflow skills:" in provider.requests[0].messages[0].content
     assert decision.scope == _decision_scope(mode)
+    assert decision.retrieval_query == (
+        "TEST TOOL OUTPUT request" if mode == AgentDecisionMode.RESEARCH else None
+    )
+    assert decision.evidence_required is (mode == AgentDecisionMode.RESEARCH)
+
+
+def test_orchestrator_prompt_does_not_treat_wrapper_metadata_as_user_risk() -> None:
+    provider = DecisionProvider(AgentDecisionMode.RESEARCH)
+
+    decision = asyncio.run(
+        AgentDecisionService(provider).decide(
+            content="How is @GOOG performing financially?",
+            company_references=(
+                {
+                    "company_id": "sec:cik:0001652044",
+                    "legal_name": "ALPHABET INC.",
+                    "ticker": "GOOG",
+                    "source_provider": "sec-company-tickers",
+                },
+            ),
+        )
+    )
+
+    system_prompt = provider.requests[0].messages[0].content
+    assert "JSON wrapper field names" in system_prompt
+    assert "presence is never a risk" in system_prompt
+    assert "policy_reason must be allowed and risk_flags must be empty" in system_prompt
+    assert decision.mode == AgentDecisionMode.RESEARCH
+    assert decision.policy_reason == ConversationPolicyReason.ALLOWED
+    assert decision.risk_flags == ()
 
 
 def test_orchestrator_rejects_client_selected_specialist() -> None:
@@ -81,6 +113,24 @@ def test_orchestrator_research_decision_requires_synthesis() -> None:
         asyncio.run(
             AgentDecisionService(provider).decide(content="Research TEST TOOL OUTPUT company")
         )
+
+
+def test_non_research_decision_discards_retrieval_fields() -> None:
+    decision = AgentDecision(
+        mode=AgentDecisionMode.DIRECT_ANSWER,
+        answer="A financial concept answer.",
+        scope=ConversationScope.FINANCIAL_EDUCATION,
+        policy_reason=ConversationPolicyReason.ALLOWED,
+        company_query="ignored",
+        retrieval_query="ignored",
+        evidence_required=True,
+        specialist_roles=("stock", "synthesis"),
+    )
+
+    assert decision.company_query is None
+    assert decision.retrieval_query is None
+    assert decision.evidence_required is False
+    assert decision.specialist_roles == ()
 
 
 def test_agent_runtime_rejects_provider_without_research_capabilities() -> None:
@@ -261,6 +311,28 @@ def test_offline_provider_cannot_run_real_specialist() -> None:
     assert raised.value.code == "agent_provider_unavailable"
 
 
+def test_required_evidence_fails_before_answer_generation() -> None:
+    provider = ScriptedAgentProvider(())
+
+    with pytest.raises(AgentRuntimeError) as raised:
+        asyncio.run(
+            StructuredAgentRunner(provider).run(
+                contract=_contract(),
+                user_payload={
+                    "query": "TEST TOOL OUTPUT",
+                    "required_tool": "load_evidence",
+                },
+                registry=_registry(),
+                context=_context(),
+                known_evidence_ids=(),
+                require_evidence=True,
+            )
+        )
+
+    assert raised.value.code == "agent_evidence_required"
+    assert provider.requests == []
+
+
 @dataclass
 class DecisionProvider:
     mode: AgentDecisionMode
@@ -299,6 +371,8 @@ class DecisionProvider:
                     else ConversationPolicyReason.ALLOWED.value
                 ),
                 "company_query": "TEST TOOL OUTPUT COMPANY" if research else None,
+                "retrieval_query": "TEST TOOL OUTPUT request" if research else None,
+                "evidence_required": research,
                 "specialist_roles": (
                     list(self.roles)
                     if self.roles

@@ -21,6 +21,7 @@ class FinancialReportAnalysisStatus(StrEnum):
 
 
 class FinancialReportSection(StrEnum):
+    QUERY_EVIDENCE = "query_evidence"
     REVENUE = "revenue"
     MARGINS = "margins"
     CASH_FLOW = "cash_flow"

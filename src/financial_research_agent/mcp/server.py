@@ -35,9 +35,17 @@ def create_mcp_server(
     )
 
     @server.tool(name="send_message")
-    async def send_message(content: str, session_id: str | None = None) -> dict[str, Any]:
+    async def send_message(
+        content: str,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
         """Send a message through the canonical application and orchestrator flow."""
-        return (await application.send_message(content=content, session_id=session_id)).to_dict()
+        return (
+            await application.send_message(
+                content=content,
+                session_id=session_id,
+            )
+        ).to_dict()
 
     @server.tool(name="get_research_status")
     async def get_research_status(job_id: str) -> dict[str, Any]:

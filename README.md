@@ -63,8 +63,9 @@ python -m financial_research_agent mcp-serve
 MCP exposes `send_message`, `get_research_status`, `get_research_result`, and `cancel_research`.
 `send_message` enters the canonical application conversation service, which decides whether to
 answer directly or delegate research over A2A. MCP is not used between agents and does not provide
-a parallel research implementation. Set `FRA_MCP_APP_BASE_URL` only when the local app uses a
-different loopback address.
+a parallel research implementation. The orchestrator automatically decides when source-grounded
+research is required. Set `FRA_MCP_APP_BASE_URL` only when the local app uses a different loopback
+address.
 
 ## Project Status
 
@@ -76,6 +77,8 @@ Implemented:
   status, and explicit `ocr_required` handling for scanned reports.
 - Alpha Vantage daily prices and deterministic market calculations.
 - SQLite persistence, local filing retrieval, citations, evidence inspection, and report exports.
+- Automatic source grounding for company research, selected by the orchestrator and executed by
+  the relevant A2A specialists.
 - Provider adapters for local OpenAI-compatible endpoints, OpenAI, Anthropic, Gemini, and LiteLLM.
 - One LLM orchestrator selects from four tool-using A2A specialist services started by default
   through Docker Compose.
@@ -88,7 +91,8 @@ Implemented:
 Current boundaries:
 
 - No trading, broker integration, price targets, alerts, or buy/sell/hold recommendations.
-- No automatic news/macro ingestion, OCR, arbitrary PDF upload, or RAG on every chat message.
+- No automatic news/macro ingestion, OCR, arbitrary PDF upload, or retrieval for greetings,
+  product help, and general financial education.
 - No durable cross-host queue, remote database, public A2A deployment, or hosted telemetry claim.
 - Market data may be delayed or provider-limited; SEC coverage is limited to SEC filers.
 - Local LLM quality depends on the selected model, runtime, context budget, and hardware.

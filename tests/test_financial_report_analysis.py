@@ -83,8 +83,12 @@ def test_financial_report_analysis_agent_produces_grounded_sections() -> None:
     )
 
     assert result.status == FinancialReportAnalysisStatus.PARTIAL
-    assert {finding.section for finding in result.findings} == set(FinancialReportSection)
-    assert {question.section for question in result.questions} == set(FinancialReportSection)
+    assert {finding.section for finding in result.findings} == (
+        set(FinancialReportSection) - {FinancialReportSection.QUERY_EVIDENCE}
+    )
+    assert {question.section for question in result.questions} == (
+        set(FinancialReportSection) - {FinancialReportSection.QUERY_EVIDENCE}
+    )
     assert result.source_summary["statement_count"] == "5"
     assert result.source_summary["filing_chunk_count"] == "3"
     assert len(result.citations) == len(result.evidence)
@@ -107,6 +111,35 @@ def test_financial_report_analysis_agent_produces_grounded_sections() -> None:
     assert risks.evidence_ids
     assert risks.citation_ids
     assert "lexical ranking" in " ".join(risks.limitations)
+
+
+def test_financial_report_analysis_bounds_question_specific_filing_evidence() -> None:
+    statement_store = FinancialStatementStore()
+    filing_store = FilingStore()
+    statement_store.save_result(_statement_result())
+    filing_store.save_result(_filing_result())
+    agent = FinancialReportAnalysisAgent(
+        statement_store=statement_store,
+        filing_store=filing_store,
+        statement_provider="sec-companyfacts",
+        filing_provider="sec-edgar",
+        now=lambda: NOW,
+    )
+
+    result = agent.analyze(
+        FinancialReportAnalysisCompany(cik="0000320193"),
+        retrieval_query="What risks and liquidity evidence are in the latest filing?",
+    )
+    query_finding = _finding(result.findings, FinancialReportSection.QUERY_EVIDENCE)
+    query_evidence = tuple(
+        snippet for snippet in result.evidence if snippet.id in query_finding.evidence_ids
+    )
+
+    assert query_finding.evidence_ids
+    assert len(query_evidence) <= 5
+    assert all(len(snippet.text) <= 900 for snippet in query_evidence)
+    assert sum(len(snippet.text) for snippet in query_evidence) <= 4_000
+    assert {snippet.metadata["retrieval_method"] for snippet in query_evidence} == {"lexical"}
 
 
 def test_financial_report_analysis_agent_reports_no_data_without_inventing_findings() -> None:

@@ -19,6 +19,7 @@ from financial_research_agent.orchestration.contracts import OrchestratedResearc
 from financial_research_agent.orchestration.store import orchestrated_research_run_from_dict
 from financial_research_agent.persistence.database import SQLiteDatabase
 from financial_research_agent.reports import CitedResearchRun
+from financial_research_agent.retrieval import ChatRetrievalMetadata
 from financial_research_agent.runtime_settings import RuntimeSettingsOverrides
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements.contracts import FinancialStatementResult
@@ -114,6 +115,7 @@ class SQLiteChatSessionStore:
         citations=(),
         evidence_snippets=(),
         synthesis_report=None,
+        retrieval_metadata: ChatRetrievalMetadata | None = None,
     ) -> ChatSession:
         with self.database.transaction():
             session = self.get(session_id)
@@ -129,6 +131,7 @@ class SQLiteChatSessionStore:
                     created_at=now,
                     research_run_id=research_run_id,
                     mentions=mentions,
+                    retrieval=retrieval_metadata,
                 ),
                 ChatSessionMessage(
                     id=f"message_{uuid4().hex}",
@@ -141,6 +144,7 @@ class SQLiteChatSessionStore:
                     citations=tuple(citations),
                     evidence_snippets=tuple(evidence_snippets),
                     synthesis_report=synthesis_report,
+                    retrieval=retrieval_metadata,
                 ),
             )
             recent_count = self.recent_turns * 2
@@ -161,9 +165,15 @@ class SQLiteChatSessionStore:
                 INSERT INTO chat_sessions(id, created_at, updated_at, summary)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    updated_at=excluded.updated_at, summary=excluded.summary
+                    updated_at=excluded.updated_at,
+                    summary=excluded.summary
                 """,
-                (session.id, _iso(session.created_at), _iso(session.updated_at), session.summary),
+                (
+                    session.id,
+                    _iso(session.created_at),
+                    _iso(session.updated_at),
+                    session.summary,
+                ),
             )
             connection.execute("DELETE FROM chat_messages WHERE session_id = ?", (session.id,))
             connection.executemany(

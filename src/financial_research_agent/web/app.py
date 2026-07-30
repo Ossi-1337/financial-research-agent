@@ -74,6 +74,7 @@ from financial_research_agent.reports import (
     CitedResearchRunStore,
 )
 from financial_research_agent.retrieval import (
+    ChatRetrievalMetadata,
     LocalVectorIndex,
 )
 from financial_research_agent.runtime_settings import RuntimeSettingsOverrides, RuntimeSettingsStore
@@ -579,6 +580,8 @@ def create_app(
                         orchestrator_skill_references=tuple(
                             f"{skill.id}@{skill.version.value}" for skill in plan.decision.skills
                         ),
+                        retrieval_query=plan.decision.retrieval_query,
+                        evidence_required=plan.decision.evidence_required,
                     )
                 )
                 report = synthesis_report_from_run(run)
@@ -592,6 +595,7 @@ def create_app(
                     research_run_id=run.id,
                     mentions=mentions,
                     synthesis_report=report,
+                    retrieval_metadata=_retrieval_metadata_from_run(run),
                 )
                 return {
                     "session": updated_session.to_dict(),
@@ -686,6 +690,7 @@ def create_app(
                     research_run_id=run.id,
                     mentions=mentions,
                     synthesis_report=report,
+                    retrieval_metadata=_retrieval_metadata_from_run(run),
                 )
                 return run
 
@@ -699,6 +704,8 @@ def create_app(
                     orchestrator_skill_references=tuple(
                         f"{skill.id}@{skill.version.value}" for skill in plan.decision.skills
                     ),
+                    retrieval_query=plan.decision.retrieval_query,
+                    evidence_required=plan.decision.evidence_required,
                 ),
                 run=run_and_append,
                 metadata={"session_id": session_id},
@@ -1039,6 +1046,17 @@ def _synthesis_message_content(
     if isinstance(notice, str) and notice.strip():
         parts.append(notice)
     return "\n\n".join(parts) if parts else "Synthesis report generated."
+
+
+def _retrieval_metadata_from_run(run: OrchestratedResearchRun) -> ChatRetrievalMetadata:
+    return ChatRetrievalMetadata(
+        query=run.retrieval_query,
+        specialist_roles=run.specialist_roles,
+        methods=run.retrieval_methods,
+        evidence_ids=run.retrieval_evidence_ids,
+        duration_ms=run.retrieval_duration_ms,
+        no_result_reason=run.retrieval_no_result_reason,
+    )
 
 
 def _message_content(content: str) -> str:

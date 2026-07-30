@@ -77,6 +77,8 @@ class ResearchOrchestrator:
             agent_provider=agent_provider,
             agent_model=agent_model,
             orchestrator_skill_references=request.orchestrator_skill_references,
+            retrieval_query=request.retrieval_query,
+            evidence_required=bool(request.evidence_required),
             warnings=(
                 "Research uses the canonical A2A specialist topology.",
                 f"Selected specialists: {', '.join(request.specialist_roles)}.",
@@ -128,6 +130,9 @@ class ResearchOrchestrator:
         synthesis = await self._dispatch_synthesis(run)
         run = self._append_handoff(run, synthesis, progress_observer)
         final_status = _final_status(run.handoffs)
+        retrieval_methods, retrieval_evidence_ids, retrieval_duration_ms = _retrieval_metadata(
+            run.handoffs
+        )
         return self._save(
             replace(
                 run,
@@ -137,6 +142,14 @@ class ResearchOrchestrator:
                     dict.fromkeys(
                         limitation for handoff in run.handoffs for limitation in handoff.limitations
                     )
+                ),
+                retrieval_methods=retrieval_methods,
+                retrieval_evidence_ids=retrieval_evidence_ids,
+                retrieval_duration_ms=retrieval_duration_ms,
+                retrieval_no_result_reason=(
+                    None
+                    if retrieval_evidence_ids
+                    else "No valid source evidence was produced by selected specialists."
                 ),
                 updated_at=_aware_now(self._now()),
             ),
@@ -321,6 +334,8 @@ class ResearchOrchestrator:
                         "company_id": candidate.company.id,
                         "legal_name": candidate.company.legal_name,
                         "cik": cik or "",
+                        "retrieval_query": request.retrieval_query or request.query,
+                        "evidence_required": bool(request.evidence_required),
                     },
                 )
             )
@@ -339,6 +354,7 @@ class ResearchOrchestrator:
                         "exchange_name": security.exchange_name,
                         "currency": security.currency,
                         "benchmark_symbol": request.benchmark_symbol,
+                        "evidence_required": bool(request.evidence_required),
                     },
                 )
             )
@@ -354,6 +370,7 @@ class ResearchOrchestrator:
                         "query": request.query,
                         "company_symbols": [security.ticker],
                         "source_items": [item.to_dict() for item in request.context_source_items],
+                        "evidence_required": bool(request.evidence_required),
                     },
                 )
             )
@@ -433,6 +450,36 @@ def _final_status(handoffs: tuple[AgentHandoff, ...]) -> OrchestratorRunStatus:
 def _synthesis_summary(handoff: AgentHandoff) -> str | None:
     value = handoff.output.get("summary")
     return str(value).strip() if value is not None and str(value).strip() else None
+
+
+def _retrieval_metadata(
+    handoffs: tuple[AgentHandoff, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+    specialist_kinds = {
+        OrchestratorStepKind.FINANCIAL_REPORT_ANALYSIS,
+        OrchestratorStepKind.STOCK_PRICE_ANALYSIS,
+        OrchestratorStepKind.CONTEXT_ANALYSIS,
+    }
+    evidence_ids = tuple(
+        dict.fromkeys(
+            evidence_id
+            for handoff in handoffs
+            if handoff.kind in specialist_kinds
+            for evidence_id in handoff.evidence_ids
+        )
+    )
+    methods: list[str] = []
+    duration_ms = 0
+    for handoff in handoffs:
+        if handoff.kind not in specialist_kinds:
+            continue
+        duration_value = handoff.output.get("retrieval_duration_ms")
+        if isinstance(duration_value, int) and duration_value >= 0:
+            duration_ms += duration_value
+        method_values = handoff.output.get("retrieval_methods", ())
+        if isinstance(method_values, list | tuple):
+            methods.extend(str(item) for item in method_values if str(item).strip())
+    return tuple(dict.fromkeys(methods)), evidence_ids, duration_ms
 
 
 def _candidate_identifier(

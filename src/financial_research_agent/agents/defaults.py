@@ -13,7 +13,7 @@ from financial_research_agent.agents.contracts import (
 from financial_research_agent.security import UNTRUSTED_CONTENT_INSTRUCTION
 
 PROMPT_VERSION = PromptVersion("1.0.0")
-ORCHESTRATOR_PROMPT_VERSION = PromptVersion("2.0.0")
+ORCHESTRATOR_PROMPT_VERSION = PromptVersion("2.1.0")
 MAX_POINT_TEXT_CHARS = 200
 MAX_SUMMARY_TEXT_CHARS = 300
 
