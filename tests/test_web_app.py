@@ -77,6 +77,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="context-panel"' in root_response.text
     assert 'id="context-source-list"' in root_response.text
     assert 'id="settings-panel"' in root_response.text
+    assert 'class="settings-scroll"' in root_response.text
     assert 'id="settings-agent-runtime-status"' in root_response.text
     assert 'id="settings-button"' in root_response.text
     assert 'id="settings-session-label"' in root_response.text
@@ -117,6 +118,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".stock-chart-crosshair" in css_response.text
     assert ".trace-timeline" in css_response.text
     assert ".settings-panel" in css_response.text
+    assert "height: min(820px, calc(100vh - 32px))" in css_response.text
+    assert "grid-template-rows: minmax(0, 1fr) auto" in css_response.text
+    assert "scrollbar-gutter: stable" in css_response.text
     assert ".composer-model-select" in css_response.text
     assert "max-width: min(360px, calc(100% - 48px))" in css_response.text
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Financial Research Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=43" />
+    <link rel="stylesheet" href="/static/styles.css?v=45" />
   </head>
   <body>
     <main class="app-shell">
@@ -81,95 +81,97 @@
           </header>
           <div id="settings-error" class="error-banner" role="alert" hidden></div>
           <form id="settings-form" class="settings-form">
-            <section class="settings-app-info" aria-label="Application information">
-              <h3>Application</h3>
-              <dl>
-                <div>
-                  <dt>Current session</dt>
-                  <dd id="settings-session-label">No active session</dd>
-                </div>
-              </dl>
-            </section>
-            <fieldset>
-              <legend>LLM provider</legend>
-              <label>
-                Provider
-                <select id="settings-llm-provider" name="llm_provider">
-                  <option value="offline-test">offline-test</option>
-                  <option value="local-openai">local-openai</option>
-                  <option value="openai">openai</option>
-                  <option value="anthropic">anthropic</option>
-                  <option value="gemini">gemini</option>
-                  <option value="litellm">litellm</option>
-                </select>
-              </label>
-              <label>
-                Model
-                <select id="settings-llm-model" name="llm_model">
-                  <option value="">Check provider to load models</option>
-                </select>
-              </label>
-              <label>
-                Base URL
-                <input id="settings-llm-base-url" name="llm_base_url" type="url" />
-              </label>
-              <label>
-                Local runtime
-                <select id="settings-local-runtime" name="llm_local_runtime">
-                  <option value="llama.cpp">llama.cpp</option>
-                  <option value="ollama">ollama</option>
-                  <option value="generic-openai">generic-openai</option>
-                </select>
-              </label>
-              <label>
-                Timeout seconds
-                <input id="settings-timeout" name="llm_timeout_seconds" type="number" min="1" max="300" step="0.5" />
-              </label>
-            </fieldset>
-            <fieldset>
-              <legend>Embeddings and retrieval</legend>
-              <label>
-                Embedding provider
-                <select id="settings-embedding-provider" name="embedding_provider">
-                  <option value="disabled">disabled</option>
-                  <option value="offline-test">offline-test</option>
-                  <option value="local-openai">local-openai</option>
-                  <option value="openai">openai</option>
-                  <option value="gemini">gemini</option>
-                  <option value="litellm">litellm</option>
-                </select>
-              </label>
-              <label>
-                Embedding model
-                <input id="settings-embedding-model" name="embedding_model" type="text" />
-              </label>
-              <label>
-                Retrieval top K
-                <input id="settings-retrieval-top-k" name="retrieval_top_k" type="number" min="1" max="50" />
-              </label>
-              <label>
-                Minimum score
-                <input id="settings-retrieval-min-score" name="retrieval_min_score" type="number" min="-1" max="1" step="0.01" />
-              </label>
-            </fieldset>
-            <fieldset>
-              <legend>Data and local resources</legend>
-              <label>
-                Market cache TTL days
-                <input id="settings-market-ttl" name="market_data_cache_ttl_days" type="number" min="1" max="365" />
-              </label>
-              <label>
-                Filing cache TTL days
-                <input id="settings-filing-ttl" name="filing_cache_ttl_days" type="number" min="1" max="365" />
-              </label>
-              <label>
-                Background research limit
-                <input id="settings-background-limit" name="background_max_concurrent_research_runs" type="number" min="1" max="8" />
-              </label>
-            </fieldset>
-            <div id="settings-agent-runtime-status" class="settings-status"></div>
-            <div id="settings-provider-status" class="settings-status"></div>
-            <div id="settings-secret-note" class="settings-secret-note"></div>
+            <div class="settings-scroll">
+              <section class="settings-app-info" aria-label="Application information">
+                <h3>Application</h3>
+                <dl>
+                  <div>
+                    <dt>Current session</dt>
+                    <dd id="settings-session-label">No active session</dd>
+                  </div>
+                </dl>
+              </section>
+              <fieldset>
+                <legend>LLM provider</legend>
+                <label>
+                  Provider
+                  <select id="settings-llm-provider" name="llm_provider">
+                    <option value="offline-test">offline-test</option>
+                    <option value="local-openai">local-openai</option>
+                    <option value="openai">openai</option>
+                    <option value="anthropic">anthropic</option>
+                    <option value="gemini">gemini</option>
+                    <option value="litellm">litellm</option>
+                  </select>
+                </label>
+                <label>
+                  Model
+                  <select id="settings-llm-model" name="llm_model">
+                    <option value="">Check provider to load models</option>
+                  </select>
+                </label>
+                <label>
+                  Base URL
+                  <input id="settings-llm-base-url" name="llm_base_url" type="url" />
+                </label>
+                <label>
+                  Local runtime
+                  <select id="settings-local-runtime" name="llm_local_runtime">
+                    <option value="llama.cpp">llama.cpp</option>
+                    <option value="ollama">ollama</option>
+                    <option value="generic-openai">generic-openai</option>
+                  </select>
+                </label>
+                <label>
+                  Timeout seconds
+                  <input id="settings-timeout" name="llm_timeout_seconds" type="number" min="1" max="300" step="0.5" />
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Embeddings and retrieval</legend>
+                <label>
+                  Embedding provider
+                  <select id="settings-embedding-provider" name="embedding_provider">
+                    <option value="disabled">disabled</option>
+                    <option value="offline-test">offline-test</option>
+                    <option value="local-openai">local-openai</option>
+                    <option value="openai">openai</option>
+                    <option value="gemini">gemini</option>
+                    <option value="litellm">litellm</option>
+                  </select>
+                </label>
+                <label>
+                  Embedding model
+                  <input id="settings-embedding-model" name="embedding_model" type="text" />
+                </label>
+                <label>
+                  Retrieval top K
+                  <input id="settings-retrieval-top-k" name="retrieval_top_k" type="number" min="1" max="50" />
+                </label>
+                <label>
+                  Minimum score
+                  <input id="settings-retrieval-min-score" name="retrieval_min_score" type="number" min="-1" max="1" step="0.01" />
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Data and local resources</legend>
+                <label>
+                  Market cache TTL days
+                  <input id="settings-market-ttl" name="market_data_cache_ttl_days" type="number" min="1" max="365" />
+                </label>
+                <label>
+                  Filing cache TTL days
+                  <input id="settings-filing-ttl" name="filing_cache_ttl_days" type="number" min="1" max="365" />
+                </label>
+                <label>
+                  Background research limit
+                  <input id="settings-background-limit" name="background_max_concurrent_research_runs" type="number" min="1" max="8" />
+                </label>
+              </fieldset>
+              <div id="settings-agent-runtime-status" class="settings-status"></div>
+              <div id="settings-provider-status" class="settings-status"></div>
+              <div id="settings-secret-note" class="settings-secret-note"></div>
+            </div>
             <div class="settings-actions">
               <button id="settings-health-button" class="secondary-button" type="button">Check provider</button>
               <button id="settings-cache-clear-button" class="secondary-button" type="button">Clear cache</button>
