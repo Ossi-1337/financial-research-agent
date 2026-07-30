@@ -37,29 +37,12 @@ body {
 
 .app-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   width: min(1180px, calc(100vw - 32px));
   height: 100vh;
   min-height: 0;
   margin: 0 auto;
   padding: 18px 0;
-  gap: 16px;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-width: 0;
-  padding: 4px 2px;
-}
-
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
 }
 
 h1 {
@@ -72,20 +55,6 @@ h1 {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 0.86rem;
-}
-
-.provider-pill {
-  flex: 0 0 auto;
-  max-width: 46vw;
-  overflow: hidden;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 0.82rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .settings-panel {
@@ -141,6 +110,47 @@ h1 {
   min-height: 0;
   padding: 16px 18px 18px;
   overflow-y: auto;
+}
+
+.settings-app-info {
+  padding: 2px 0 4px;
+}
+
+.settings-app-info h3 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.settings-app-info dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin: 0;
+}
+
+.settings-app-info dl > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.settings-app-info dt {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.settings-app-info dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-form fieldset {
@@ -216,12 +226,22 @@ h1 {
 
 .session-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   overflow: hidden;
+}
+
+.session-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.session-footer button {
+  width: 100%;
 }
 
 .session-actions {
@@ -894,7 +914,7 @@ h1 {
   overflow-y: auto;
   overflow-wrap: anywhere;
   resize: none;
-  padding: 13px 58px 48px 14px;
+  padding: 13px 14px 58px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -916,10 +936,40 @@ h1 {
   outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
-.composer-action {
+.composer-controls {
   position: absolute;
   right: 12px;
   bottom: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.composer-model-select {
+  min-width: 0;
+  max-width: min(360px, calc(100% - 48px));
+  height: 38px;
+  padding: 7px 30px 7px 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.composer-model-select:disabled {
+  background: var(--surface-muted);
+}
+
+.composer-action {
   display: inline-grid;
   place-items: center;
   width: 38px;
@@ -930,6 +980,7 @@ h1 {
   background: var(--accent);
   font-size: 1.15rem;
   line-height: 1;
+  pointer-events: auto;
 }
 
 .composer-action.busy {
@@ -1043,39 +1094,8 @@ button:disabled {
     padding: 0;
   }
 
-  .topbar {
-    flex-direction: column;
-    align-items: flex-start;
-    width: 100%;
-    max-width: 100%;
-    padding: 12px;
-  }
-
-  .topbar > div:first-child {
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .topbar .muted {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .topbar-actions {
-    width: 100%;
-    max-width: 100%;
-    justify-content: space-between;
-  }
-
-  .provider-pill {
-    flex: 1 1 auto;
-    min-width: 0;
-    max-width: calc(100% - 98px);
-  }
-
   .chat-panel {
-    min-height: calc(100vh - 276px);
+    min-height: 0;
     border-right: 0;
     border-left: 0;
     border-radius: 0;
@@ -1083,13 +1103,13 @@ button:disabled {
 
   .workspace {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 190px minmax(0, 1fr);
     width: 100%;
     max-width: 100%;
     gap: 0;
   }
 
   .session-panel {
-    max-height: 190px;
     border-right: 0;
     border-left: 0;
     border-radius: 0;
@@ -1097,6 +1117,11 @@ button:disabled {
 
   .composer {
     padding: 10px;
+  }
+
+  .composer-model-select {
+    flex: 1 1 auto;
+    max-width: none;
   }
 
   .message-list {
@@ -1108,6 +1133,10 @@ button:disabled {
   }
 
   .settings-form fieldset {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-app-info dl {
     grid-template-columns: 1fr;
   }
 

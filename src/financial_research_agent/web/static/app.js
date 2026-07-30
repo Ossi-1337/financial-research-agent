@@ -32,10 +32,9 @@ const form = document.querySelector("#chat-form");
 const input = document.querySelector("#message-input");
 const mentionMenu = document.querySelector("#mention-menu");
 const sendButton = document.querySelector("#send-button");
+const composerModelSelect = document.querySelector("#composer-model-select");
 const messageList = document.querySelector("#message-list");
 const errorBanner = document.querySelector("#error-banner");
-const providerPill = document.querySelector("#provider-pill");
-const sessionLabel = document.querySelector("#session-label");
 const sessionList = document.querySelector("#session-list");
 const contextPanel = document.querySelector("#context-panel");
 const contextSourceList = document.querySelector("#context-source-list");
@@ -46,6 +45,7 @@ const settingsPanel = document.querySelector("#settings-panel");
 const settingsCloseButton = document.querySelector("#settings-close-button");
 const settingsForm = document.querySelector("#settings-form");
 const settingsError = document.querySelector("#settings-error");
+const settingsSessionLabel = document.querySelector("#settings-session-label");
 const settingsAgentRuntimeStatus = document.querySelector("#settings-agent-runtime-status");
 const settingsProviderStatus = document.querySelector("#settings-provider-status");
 const settingsSecretNote = document.querySelector("#settings-secret-note");
@@ -57,6 +57,7 @@ function setBusy(value) {
   state.busy = value;
   input.contentEditable = value ? "false" : "true";
   newSessionButton.disabled = value;
+  composerModelSelect.disabled = value || composerModelSelect.options.length === 0;
   clearSessionsButton.disabled = value;
   sendButton.textContent = value ? "Stop" : "↑";
   sendButton.setAttribute("aria-label", value ? "Stop response" : "Send message");
@@ -1135,8 +1136,7 @@ function setField(name, value) {
   }
 }
 
-function setModelOptions(models, selectedModel, placeholder = "No models available") {
-  const field = settingsForm.elements.llm_model;
+function replaceModelOptions(field, models, selectedModel, placeholder) {
   const normalized = [...new Set(models.filter((model) => typeof model === "string" && model))];
   field.replaceChildren();
   if (normalized.length === 0) {
@@ -1146,7 +1146,7 @@ function setModelOptions(models, selectedModel, placeholder = "No models availab
     field.append(option);
     field.disabled = true;
     field.removeAttribute("title");
-    return;
+    return normalized;
   }
   for (const model of normalized) {
     const option = document.createElement("option");
@@ -1157,6 +1157,25 @@ function setModelOptions(models, selectedModel, placeholder = "No models availab
   field.disabled = false;
   field.value = normalized.includes(selectedModel) ? selectedModel : normalized[0];
   field.title = field.value;
+  return normalized;
+}
+
+function setModelOptions(
+  models,
+  selectedModel,
+  placeholder = "No models available",
+  { syncComposer = true } = {}
+) {
+  const normalized = replaceModelOptions(
+    settingsForm.elements.llm_model,
+    models,
+    selectedModel,
+    placeholder
+  );
+  if (syncComposer) {
+    replaceModelOptions(composerModelSelect, normalized, selectedModel, placeholder);
+    composerModelSelect.disabled = state.busy || normalized.length === 0;
+  }
 }
 
 function compatibleConfiguredModel(provider) {
@@ -1170,17 +1189,17 @@ function compatibleConfiguredModel(provider) {
   return configured.llm_model;
 }
 
-async function refreshProviderModels() {
+async function refreshProviderModels({ syncComposer = true } = {}) {
   const provider = settingsForm.elements.llm_provider.value;
   const configuredModel = compatibleConfiguredModel(provider);
   const requestId = ++state.modelOptionsRequestId;
   if (provider === "offline-test") {
-    setModelOptions(["offline-test"], "offline-test");
+    setModelOptions(["offline-test"], "offline-test", "No models available", { syncComposer });
     settingsProviderStatus.textContent = "offline-test health: ok / deterministic test responses";
     return;
   }
 
-  setModelOptions([], null, "Loading models...");
+  setModelOptions([], null, "Loading models...", { syncComposer });
   try {
     const payload = await requestJson(
       `/api/settings/provider-health?provider=${encodeURIComponent(provider)}`
@@ -1193,7 +1212,7 @@ async function refreshProviderModels() {
     if (configuredModel && !models.includes(configuredModel)) {
       models.push(configuredModel);
     }
-    setModelOptions(models, configuredModel);
+    setModelOptions(models, configuredModel, "No models available", { syncComposer });
     settingsProviderStatus.textContent = `${health.provider} health: ${health.status}${
       health.error ? ` / ${health.error}` : ""
     }`;
@@ -1204,7 +1223,8 @@ async function refreshProviderModels() {
     setModelOptions(
       configuredModel ? [configuredModel] : [],
       configuredModel,
-      "Provider unavailable"
+      "Provider unavailable",
+      { syncComposer }
     );
     settingsProviderStatus.textContent =
       error instanceof Error ? error.message : "Provider health check failed.";
@@ -1442,16 +1462,11 @@ function editorMentions() {
   return mentions;
 }
 
-async function loadStatus() {
-  const payload = await requestJson("/api/status");
-  providerPill.textContent = `${payload.chat.provider} / ${payload.chat.model}`;
-}
-
 async function createSession() {
   const payload = await requestJson("/api/sessions", { method: "POST" });
   state.sessionId = payload.session.id;
   state.messages = payload.session.messages;
-  sessionLabel.textContent = payload.session.id;
+  settingsSessionLabel.textContent = payload.session.id;
   await loadSessions();
   renderMessages();
 }
@@ -1472,7 +1487,7 @@ async function openSession(sessionId, allowBusy = false) {
     const payload = await requestJson(`/api/sessions/${sessionId}`);
     state.sessionId = payload.session.id;
     state.messages = payload.session.messages;
-    sessionLabel.textContent = payload.session.id;
+    settingsSessionLabel.textContent = payload.session.id;
     await loadRunArtifactsForMessages();
     await loadSessions();
     renderMessages();
@@ -1786,7 +1801,6 @@ settingsForm.addEventListener("submit", async (event) => {
     populateSettingsForm(payload);
     renderSettingsSummary(payload);
     await refreshProviderModels();
-    await loadStatus();
   } catch (error) {
     showSettingsError(error instanceof Error ? error.message : "Could not save settings.");
   }
@@ -1795,7 +1809,7 @@ settingsForm.addEventListener("submit", async (event) => {
 settingsHealthButton.addEventListener("click", async () => {
   clearSettingsError();
   try {
-    await refreshProviderModels();
+    await refreshProviderModels({ syncComposer: false });
   } catch (error) {
     showSettingsError(error instanceof Error ? error.message : "Provider health check failed.");
   }
@@ -1819,7 +1833,6 @@ settingsResetButton.addEventListener("click", async () => {
     populateSettingsForm(payload);
     renderSettingsSummary(payload);
     await refreshProviderModels();
-    await loadStatus();
   } catch (error) {
     showSettingsError(error instanceof Error ? error.message : "Could not reset settings.");
   }
@@ -1827,13 +1840,37 @@ settingsResetButton.addEventListener("click", async () => {
 
 settingsForm.elements.llm_provider.addEventListener("change", () => {
   clearSettingsError();
-  refreshProviderModels().catch((error) => {
+  refreshProviderModels({ syncComposer: false }).catch((error) => {
     showSettingsError(error instanceof Error ? error.message : "Could not load provider models.");
   });
 });
 
 settingsForm.elements.llm_model.addEventListener("change", (event) => {
   event.currentTarget.title = event.currentTarget.value;
+});
+
+composerModelSelect.addEventListener("change", async (event) => {
+  const selectedModel = event.currentTarget.value;
+  if (!selectedModel || state.busy) {
+    return;
+  }
+  clearError();
+  event.currentTarget.disabled = true;
+  try {
+    const payload = await requestJson("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ llm_model: selectedModel }),
+    });
+    state.settings = payload;
+    populateSettingsForm(payload);
+    renderSettingsSummary(payload);
+    await refreshProviderModels();
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Could not change model.");
+    await loadSettingsPanel();
+  } finally {
+    event.currentTarget.disabled = state.busy || event.currentTarget.options.length === 0;
+  }
 });
 
 form.addEventListener("submit", async (event) => {
@@ -1872,7 +1909,7 @@ form.addEventListener("submit", async (event) => {
 async function start() {
   setBusy(true);
   try {
-    await loadStatus();
+    await loadSettingsPanel();
     await loadSessions();
     if (state.sessions.length > 0) {
       await openSession(state.sessions[0].id, true);

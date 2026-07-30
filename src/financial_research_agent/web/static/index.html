@@ -4,21 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Financial Research Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=42" />
+    <link rel="stylesheet" href="/static/styles.css?v=43" />
   </head>
   <body>
     <main class="app-shell">
-      <header class="topbar">
-        <div>
-          <h1>Financial Research Agent</h1>
-          <p id="session-label" class="muted">Starting session</p>
-        </div>
-        <div class="topbar-actions">
-          <div id="provider-pill" class="provider-pill">offline-test</div>
-          <button id="settings-button" class="secondary-button" type="button">Settings</button>
-        </div>
-      </header>
-
       <div class="workspace">
         <aside class="session-panel" aria-label="Chat sessions">
           <div class="session-actions">
@@ -26,6 +15,9 @@
             <button id="clear-sessions-button" class="secondary-button" type="button">Clear</button>
           </div>
           <ol id="session-list" class="session-list"></ol>
+          <div class="session-footer">
+            <button id="settings-button" class="secondary-button" type="button">Settings</button>
+          </div>
         </aside>
 
         <section class="chat-panel" aria-label="Chat">
@@ -54,15 +46,26 @@
                 aria-label="Company mention suggestions"
                 hidden
               ></ol>
-              <button
-                id="send-button"
-                class="composer-action"
-                type="submit"
-                aria-label="Send message"
-                disabled
-              >
-                ↑
-              </button>
+              <div class="composer-controls">
+                <label class="sr-only" for="composer-model-select">Model</label>
+                <select
+                  id="composer-model-select"
+                  class="composer-model-select"
+                  aria-label="Model"
+                  disabled
+                >
+                  <option value="">Loading model...</option>
+                </select>
+                <button
+                  id="send-button"
+                  class="composer-action"
+                  type="submit"
+                  aria-label="Send message"
+                  disabled
+                >
+                  ↑
+                </button>
+              </div>
             </div>
           </form>
         </section>
@@ -78,6 +81,15 @@
           </header>
           <div id="settings-error" class="error-banner" role="alert" hidden></div>
           <form id="settings-form" class="settings-form">
+            <section class="settings-app-info" aria-label="Application information">
+              <h3>Application</h3>
+              <dl>
+                <div>
+                  <dt>Current session</dt>
+                  <dd id="settings-session-label">No active session</dd>
+                </div>
+              </dl>
+            </section>
             <fieldset>
               <legend>LLM provider</legend>
               <label>
@@ -168,6 +180,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/app.js?v=42" type="module"></script>
+    <script src="/static/app.js?v=43" type="module"></script>
   </body>
 </html>

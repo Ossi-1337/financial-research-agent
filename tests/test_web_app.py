@@ -68,14 +68,19 @@ def test_root_html_and_static_asset_are_served() -> None:
     css_response = client.get("/static/styles.css")
 
     assert root_response.status_code == 200
-    assert "Financial Research Agent" in root_response.text
+    assert "<h1>Financial Research Agent</h1>" not in root_response.text
+    assert 'class="topbar"' not in root_response.text
+    assert 'id="provider-pill"' not in root_response.text
     assert 'id="mention-menu"' in root_response.text
     assert 'id="send-button"' in root_response.text
+    assert 'id="composer-model-select"' in root_response.text
     assert 'id="context-panel"' in root_response.text
     assert 'id="context-source-list"' in root_response.text
     assert 'id="settings-panel"' in root_response.text
     assert 'id="settings-agent-runtime-status"' in root_response.text
     assert 'id="settings-button"' in root_response.text
+    assert 'id="settings-session-label"' in root_response.text
+    assert "<dt>Name</dt>" not in root_response.text
     assert 'id="retrieval-mode-control"' not in root_response.text
     assert "Sources required" not in root_response.text
     assert '<option value="anthropic">anthropic</option>' in root_response.text
@@ -112,7 +117,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".stock-chart-crosshair" in css_response.text
     assert ".trace-timeline" in css_response.text
     assert ".settings-panel" in css_response.text
-    assert "max-width: calc(100% - 98px)" in css_response.text
+    assert ".composer-model-select" in css_response.text
+    assert "max-width: min(360px, calc(100% - 48px))" in css_response.text
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
 
 
@@ -129,6 +135,9 @@ def test_frontend_has_one_message_entrypoint_without_slash_routing() -> None:
     script = _client().get("/static/app.js")
 
     assert script.status_code == 200
+    assert 'document.querySelector("#composer-model-select")' in script.text
+    assert "JSON.stringify({ llm_model: selectedModel })" in script.text
+    assert "refreshProviderModels({ syncComposer: false })" in script.text
     assert "/messages/stream" in script.text
     assert "routeChatMessage" not in script.text
     assert "/api/chat/route" not in script.text
