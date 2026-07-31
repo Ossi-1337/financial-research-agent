@@ -96,7 +96,10 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert css_response.status_code == 200
     assert "text/css" in css_response.headers["content-type"]
     assert script_response.status_code == 200
-    assert "application/javascript" in script_response.headers["content-type"]
+    assert script_response.headers["content-type"].split(";", 1)[0] in {
+        "application/javascript",
+        "text/javascript",
+    }
     assert ".mention-menu[hidden]" in css_response.text
     assert "display: none" in css_response.text
     assert "--accent: #2563eb" in css_response.text
@@ -114,7 +117,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".citation-list" in css_response.text
     assert ".evidence-snippet" in css_response.text
     assert ".synthesis-report" in css_response.text
+    assert ".report-export-actions" in css_response.text
     assert ".report-export-link" in css_response.text
+    assert ".report-export-status" in css_response.text
     assert ".report-export-button" not in css_response.text
     assert ".stock-chart-axis-label" in css_response.text
     assert ".stock-chart-tooltip" in css_response.text
@@ -174,8 +179,13 @@ def test_frontend_exposes_direct_versioned_report_download_links() -> None:
     assert '["html", "HTML"]' in script.text
     assert '["pdf", "PDF"]' in script.text
     assert "report-export-button" not in script.text
-    assert "REPORT_EXPORT_CONTENT_VERSION = 2" in script.text
-    assert "hasSynthesisReport" in script.text
+    assert 'link.setAttribute("aria-disabled"' in script.text
+    assert 'status.textContent = "Preparing files"' in script.text
+    assert "REPORT_EXPORT_CONTENT_VERSION = 3" in script.text
+    assert "generateNarrative" not in script.text
+    assert "/narrative" not in script.text
+    assert "createReportExport(runId, format)" in script.text
+    assert "narrative_synthesis_sha256" not in script.text
 
 
 def test_runtime_settings_endpoint_returns_redacted_provider_management_payload() -> None:
@@ -398,7 +408,7 @@ def test_storage_integrity_endpoint_is_read_only(tmp_path) -> None:
 
     assert response.status_code == 200
     assert payload["healthy"] is True
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 6
     assert payload["counts"]["chat_sessions"] == 0
 
 

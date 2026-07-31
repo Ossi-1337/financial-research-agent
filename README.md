@@ -83,6 +83,8 @@ Implemented:
 - One LLM orchestrator selects from four tool-using A2A specialist services started by default
   through Docker Compose.
 - Structured specialist outputs with evidence-ID validation and one bounded schema-repair attempt.
+- Markdown, HTML, and PDF links create all three immutable report snapshots locally in one
+  operation without another LLM, provider, retrieval, or A2A call.
 - Versioned runtime skills and an optional MCP interface to the canonical orchestrator flow.
 - Finance-only conversation policy with deterministic refusals for code generation, off-topic
   requests, prompt extraction, permission escalation, and personalized investment advice.

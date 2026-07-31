@@ -180,6 +180,7 @@ def _bundle_for_database(settings: Settings, database: SQLiteDatabase):
         SQLiteFilingStore,
         SQLiteFinancialStatementStore,
         SQLiteMarketDataStore,
+        SQLiteNarrativePresentationStore,
         SQLiteOrchestratorRunStore,
         SQLiteRuntimeSettingsStore,
     )
@@ -203,6 +204,7 @@ def _bundle_for_database(settings: Settings, database: SQLiteDatabase):
         ),
         cited_runs=SQLiteCitedResearchRunStore(database),
         orchestrator_runs=SQLiteOrchestratorRunStore(database),
+        narrative_presentations=SQLiteNarrativePresentationStore(database),
         runtime_settings=SQLiteRuntimeSettingsStore(database),
         background_jobs=SQLiteBackgroundJobStore(database),
     )

@@ -96,15 +96,18 @@ Deterministic code owns:
 - Completion status, limitations, no-advice framing, and scenario acceptance checks.
 
 LLMs classify messages, answer direct chat, analyze bounded tool results, and synthesize validated
-handoffs. Deterministic validation owns schemas, known evidence IDs, completion status,
-limitations, no-advice framing, persistence, and exports. One schema-repair retry is allowed;
-unknown evidence IDs or a second invalid output fail the handoff. Chain-of-thought is never stored.
+handoffs. The structured synthesis remains canonical. Deterministic validation owns schemas,
+known evidence and source point IDs, completion status, limitations, no-advice framing,
+persistence, and exports. Report export creation performs no LLM, provider, retrieval, or A2A
+call. One schema-repair retry is allowed; unknown evidence IDs or a second invalid output fail the
+handoff. Chain-of-thought is never stored.
 
 ## Persistence
 
 SQLite stores structured entities, chat, source metadata, research runs, handoffs, A2A tasks,
-delegations, background jobs, and runtime settings. The filesystem stores raw SEC documents,
-extracted text, vector indexes, caches, backups, logs, and immutable report exports.
+delegations, background jobs, runtime settings, and compatibility metadata. The filesystem stores
+raw SEC documents, extracted text, vector indexes, caches, backups, logs, and immutable report
+exports.
 
 Text-based PDFs are extracted locally in a bounded PDFium worker process. Normalized chunks stay
 inside page boundaries and preserve page number plus normalized text-region coordinates for

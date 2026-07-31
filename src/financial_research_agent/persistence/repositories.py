@@ -24,6 +24,7 @@ from financial_research_agent.runtime_settings import RuntimeSettingsOverrides
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements.contracts import FinancialStatementResult
 from financial_research_agent.statements.store import financial_statement_result_from_dict
+from financial_research_agent.synthesis import NarrativePresentation
 from financial_research_agent.web.sessions import (
     ChatMention,
     ChatSession,
@@ -652,6 +653,45 @@ class SQLiteOrchestratorRunStore:
 
     def clear(self) -> int:
         return _clear(self.database, "orchestrator_runs")
+
+
+class SQLiteNarrativePresentationStore:
+    def __init__(self, database: SQLiteDatabase) -> None:
+        self.database = database
+        self.storage_path = database.path
+
+    def matching(
+        self,
+        *,
+        run_id: str,
+        synthesis_sha256: str,
+        prompt_id: str,
+        prompt_version: str,
+        provider: str,
+        model: str,
+    ) -> NarrativePresentation | None:
+        with self.database.read() as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json FROM narrative_presentations
+                WHERE run_id = ? AND synthesis_sha256 = ? AND prompt_id = ?
+                  AND prompt_version = ? AND provider = ? AND model = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (
+                    _text("run_id", run_id),
+                    _text("synthesis_sha256", synthesis_sha256),
+                    _text("prompt_id", prompt_id),
+                    _text("prompt_version", prompt_version),
+                    _text("provider", provider),
+                    _text("model", model),
+                ),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else NarrativePresentation.from_dict(json.loads(row["payload_json"]))
+        )
 
 
 class SQLiteRuntimeSettingsStore:

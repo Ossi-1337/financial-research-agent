@@ -17,7 +17,7 @@ const state = {
 };
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-const REPORT_EXPORT_CONTENT_VERSION = 2;
+const REPORT_EXPORT_CONTENT_VERSION = 3;
 const STOCK_CHART_LAYOUT = Object.freeze({
   width: 720,
   height: 300,
@@ -280,12 +280,8 @@ function renderReportExportControl(runId) {
     return wrapper;
   }
   const exportState = state.exportsByRunId[runId];
-  if (exportState?.error) {
-    const error = document.createElement("span");
-    error.className = "report-export-error";
-    error.textContent = exportState.error;
-    wrapper.append(error);
-  }
+  const actions = document.createElement("div");
+  actions.className = "report-export-actions";
   const artifacts = new Map(
     (exportState?.payload?.export?.artifacts || []).map((artifact) => [
       artifact.format,
@@ -298,23 +294,38 @@ function renderReportExportControl(runId) {
     ["pdf", "PDF"],
   ]) {
     const url = exportState?.payload?.files?.[format];
+    const link = document.createElement("a");
+    link.className = "report-export-link";
+    link.textContent = label;
     if (url) {
-      const link = document.createElement("a");
-      link.className = "report-export-link";
       link.href = url;
       link.download = artifacts.get(format)?.filename || "";
-      link.textContent = label;
-      wrapper.append(link);
-      continue;
+    } else {
+      link.href = "#";
+      link.setAttribute("aria-disabled", String(Boolean(exportState?.loading)));
+      link.setAttribute("aria-label", `Generate and download ${label} report`);
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (!exportState?.loading) {
+          createReportExport(runId, format);
+        }
+      });
     }
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "report-export-link";
-    retry.textContent = label;
-    retry.disabled = Boolean(exportState?.loading);
-    retry.setAttribute("aria-label", `Generate and download ${label} report`);
-    retry.addEventListener("click", () => createReportExport(runId, format));
-    wrapper.append(retry);
+    actions.append(link);
+  }
+  wrapper.append(actions);
+  if (exportState?.loading) {
+    const status = document.createElement("span");
+    status.className = "report-export-status";
+    status.setAttribute("role", "status");
+    status.textContent = "Preparing files";
+    wrapper.append(status);
+  }
+  if (exportState?.error) {
+    const error = document.createElement("span");
+    error.className = "report-export-error";
+    error.textContent = exportState.error;
+    wrapper.append(error);
   }
   return wrapper;
 }
@@ -1577,8 +1588,6 @@ async function loadRunArtifacts(runId) {
     );
     if (existing) {
       state.exportsByRunId[runId] = { payload: existing };
-    } else if (hasSynthesisReport(runPayload.run)) {
-      await createReportExport(runId);
     }
   } catch (error) {
     state.evidenceByRunId[runId] = {
@@ -1586,12 +1595,6 @@ async function loadRunArtifacts(runId) {
       sources: [],
     };
   }
-}
-
-function hasSynthesisReport(run) {
-  return (run?.handoffs || []).some(
-    (handoff) => handoff.kind === "synthesis" && handoff.output?.report
-  );
 }
 
 input.addEventListener("input", () => {

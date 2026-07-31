@@ -16,6 +16,7 @@ from financial_research_agent.persistence.repositories import (
     SQLiteFilingStore,
     SQLiteFinancialStatementStore,
     SQLiteMarketDataStore,
+    SQLiteNarrativePresentationStore,
     SQLiteOrchestratorRunStore,
     SQLiteRuntimeSettingsStore,
 )
@@ -23,6 +24,7 @@ from financial_research_agent.reports import CitedResearchRunStore
 from financial_research_agent.runtime_settings import RuntimeSettingsStore
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements import FinancialStatementStore
+from financial_research_agent.synthesis import NarrativePresentationStore
 from financial_research_agent.web.sessions import ChatSessionStore
 
 LEGACY_STRUCTURED_PATHS = (
@@ -49,6 +51,7 @@ class PersistenceBundle:
     orchestrator_runs: object
     runtime_settings: object
     background_jobs: object | None
+    narrative_presentations: object
 
 
 def create_persistence(settings: Settings, *, allow_legacy: bool = False) -> PersistenceBundle:
@@ -64,6 +67,7 @@ def create_persistence(settings: Settings, *, allow_legacy: bool = False) -> Per
             orchestrator_runs=OrchestratorRunStore.from_settings(settings),
             runtime_settings=RuntimeSettingsStore.from_settings(settings),
             background_jobs=None,
+            narrative_presentations=NarrativePresentationStore(),
         )
     if settings.storage.provider != "sqlite":
         raise ValueError(f"Unsupported storage provider: {settings.storage.provider}")
@@ -100,6 +104,7 @@ def create_persistence(settings: Settings, *, allow_legacy: bool = False) -> Per
         orchestrator_runs=SQLiteOrchestratorRunStore(database),
         runtime_settings=SQLiteRuntimeSettingsStore(database),
         background_jobs=SQLiteBackgroundJobStore(database),
+        narrative_presentations=SQLiteNarrativePresentationStore(database),
     )
 
 

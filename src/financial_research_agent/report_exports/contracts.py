@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Any, Self
 
 REPORT_EXPORT_MANIFEST_VERSION = 1
-REPORT_EXPORT_CONTENT_VERSION = 2
+REPORT_EXPORT_CONTENT_VERSION = 3
 MAX_SOURCE_QUOTE_CHARS = 280
 _SAFE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 _MARKER_PATTERN = re.compile(r"^\[S[1-9][0-9]*\]$")
@@ -188,6 +188,33 @@ class ReportExportScenario:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportExportNarrativeParagraph:
+    text: str
+    source_markers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "text", _require_text("text", self.text))
+        object.__setattr__(
+            self,
+            "source_markers",
+            _marker_tuple("source_markers", self.source_markers),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReportExportNarrativeSection:
+    name: str
+    paragraphs: tuple[ReportExportNarrativeParagraph, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _require_text("name", self.name))
+        paragraphs = tuple(self.paragraphs)
+        if any(not isinstance(item, ReportExportNarrativeParagraph) for item in paragraphs):
+            raise ValueError("paragraphs must contain ReportExportNarrativeParagraph values")
+        object.__setattr__(self, "paragraphs", paragraphs)
+
+
+@dataclass(frozen=True, slots=True)
 class ReportExportChartPoint:
     priced_at: date
     indexed_value: Decimal
@@ -254,6 +281,10 @@ class ReportExportDocument:
     disclaimer: str
     sources: tuple[ReportSourceReference, ...]
     chart_series: tuple[ReportExportChartSeries, ...] = ()
+    narrative_sections: tuple[ReportExportNarrativeSection, ...] = ()
+    narrative_provider: str | None = None
+    narrative_model: str | None = None
+    narrative_synthesis_sha256: str | None = None
     generation_method: str = "deterministic"
     llm_provider: str = "not used"
     llm_model: str = "not used"
@@ -296,6 +327,24 @@ class ReportExportDocument:
         object.__setattr__(self, "limitations", _text_tuple("limitations", self.limitations))
         object.__setattr__(self, "sources", _source_tuple(self.sources))
         object.__setattr__(self, "chart_series", _chart_series_tuple(self.chart_series))
+        narrative_sections = tuple(self.narrative_sections)
+        if any(not isinstance(item, ReportExportNarrativeSection) for item in narrative_sections):
+            raise ValueError("narrative_sections must contain ReportExportNarrativeSection values")
+        object.__setattr__(self, "narrative_sections", narrative_sections)
+        for name in ("narrative_provider", "narrative_model", "narrative_synthesis_sha256"):
+            object.__setattr__(self, name, _optional_text(getattr(self, name)))
+        narrative_metadata = (
+            self.narrative_provider,
+            self.narrative_model,
+            self.narrative_synthesis_sha256,
+        )
+        if any(narrative_metadata) and not all(narrative_metadata):
+            raise ValueError("narrative metadata must be provided together")
+        if self.narrative_synthesis_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}",
+            self.narrative_synthesis_sha256,
+        ):
+            raise ValueError("narrative_synthesis_sha256 must be a lowercase SHA-256 digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +397,7 @@ class ReportExportSnapshot:
     ticker: str | None
     security_id: str | None
     artifacts: tuple[ReportExportArtifact, ...]
+    narrative_synthesis_sha256: str | None = None
     schema_version: int = REPORT_EXPORT_MANIFEST_VERSION
     content_version: int = REPORT_EXPORT_CONTENT_VERSION
 
@@ -362,6 +412,16 @@ class ReportExportSnapshot:
         if {artifact.format for artifact in artifacts} != set(ReportExportFormat):
             raise ValueError("snapshot must contain markdown, html, and pdf artifacts")
         object.__setattr__(self, "artifacts", artifacts)
+        object.__setattr__(
+            self,
+            "narrative_synthesis_sha256",
+            _optional_text(self.narrative_synthesis_sha256),
+        )
+        if self.narrative_synthesis_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}",
+            self.narrative_synthesis_sha256,
+        ):
+            raise ValueError("narrative_synthesis_sha256 must be a lowercase SHA-256 digest")
         if self.schema_version != REPORT_EXPORT_MANIFEST_VERSION:
             raise ValueError("unsupported report export manifest version")
         if not 1 <= self.content_version <= REPORT_EXPORT_CONTENT_VERSION:
@@ -385,6 +445,7 @@ class ReportExportSnapshot:
                 for item in payload.get("artifacts", ())
                 if isinstance(item, Mapping)
             ),
+            narrative_synthesis_sha256=_optional_text(payload.get("narrative_synthesis_sha256")),
             schema_version=int(payload["schema_version"]),
             content_version=int(payload.get("content_version", 1)),
         )
@@ -403,6 +464,7 @@ class ReportExportSnapshot:
             "created_at": self.created_at.isoformat(),
             "company": {"id": self.company_id, "name": self.company_name},
             "security": {"id": self.security_id, "ticker": self.ticker},
+            "narrative_synthesis_sha256": self.narrative_synthesis_sha256,
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
         }
 

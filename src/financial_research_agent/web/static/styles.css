@@ -532,16 +532,23 @@ h1 {
 }
 
 .report-export {
+  display: grid;
+  gap: 6px;
+}
+
+.report-export-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 14px;
 }
 
 .report-export-link {
-  padding: 0;
-  border: 0;
-  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 0;
   color: var(--accent-strong);
   cursor: pointer;
   font-family: inherit;
@@ -551,13 +558,42 @@ h1 {
   text-decoration: none;
 }
 
-.report-export-link:hover:not(:disabled) {
+.report-export-link:hover,
+.report-export-link:focus-visible {
+  background: transparent;
+  color: var(--accent-strong);
   text-decoration: underline;
 }
 
-.report-export-link:disabled {
-  color: var(--muted);
+.report-export-link[aria-disabled="true"] {
+  color: var(--accent-strong);
   cursor: wait;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.report-export-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.report-export-status::before {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  content: "";
+  animation: report-export-spin 700ms linear infinite;
+}
+
+@keyframes report-export-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .report-export-error {

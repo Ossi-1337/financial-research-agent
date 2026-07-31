@@ -19,7 +19,7 @@ from financial_research_agent.persistence.contracts import (
 )
 
 DATABASE_FILENAME = "financial_research_agent.sqlite3"
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 BUSY_TIMEOUT_MS = 5_000
 COUNTED_TABLES = (
     "companies",
@@ -42,6 +42,7 @@ COUNTED_TABLES = (
     "a2a_tasks",
     "a2a_task_events",
     "a2a_delegations",
+    "narrative_presentations",
     "runtime_settings",
     "import_records",
 )
@@ -70,6 +71,7 @@ REQUIRED_TABLES = (
     "a2a_tasks",
     "a2a_task_events",
     "a2a_delegations",
+    "narrative_presentations",
     "runtime_settings",
     "import_records",
 )
@@ -83,6 +85,8 @@ REQUIRED_INDEXES = (
     "idx_a2a_tasks_owner_state_updated",
     "idx_a2a_delegations_run_role",
     "filing_chunks_page_idx",
+    "narrative_presentations_cache_key_idx",
+    "narrative_presentations_run_created_idx",
 )
 
 

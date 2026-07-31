@@ -69,6 +69,7 @@ class ReportExportStore:
                 ticker=document.ticker,
                 security_id=document.security_id,
                 artifacts=tuple(artifacts),
+                narrative_synthesis_sha256=document.narrative_synthesis_sha256,
             )
             (temp / "manifest.json").write_text(
                 json.dumps(snapshot.to_dict(), indent=2, sort_keys=True),

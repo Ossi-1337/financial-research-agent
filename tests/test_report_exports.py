@@ -18,6 +18,7 @@ from financial_research_agent.orchestration import (
     OrchestratorRunStatus,
     OrchestratorRunStore,
     OrchestratorStepKind,
+    UnavailableResearchStepDispatcher,
     default_orchestrator_plan,
 )
 from financial_research_agent.report_exports import (
@@ -35,6 +36,15 @@ from financial_research_agent.report_exports import (
     render_pdf,
 )
 from financial_research_agent.settings import Settings
+from financial_research_agent.synthesis import (
+    NARRATIVE_SECTION_ORDER,
+    NarrativeParagraph,
+    NarrativePresentation,
+    NarrativePresentationSection,
+    NarrativePresentationStore,
+    NarrativeSection,
+    synthesis_sha256,
+)
 from financial_research_agent.web import ChatSessionStore, create_app
 
 NOW = datetime(2026, 7, 20, 12, tzinfo=UTC)
@@ -48,7 +58,7 @@ def test_export_contracts_are_immutable_and_manifest_round_trips(tmp_path: Path)
     assert {artifact.format for artifact in snapshot.artifacts} == set(ReportExportFormat)
     assert all(artifact.byte_size > 0 for artifact in snapshot.artifacts)
     assert all(len(artifact.sha256) == 64 for artifact in snapshot.artifacts)
-    assert snapshot.content_version == 2
+    assert snapshot.content_version == 3
     with pytest.raises(FrozenInstanceError):
         snapshot.export_id = "changed"
 
@@ -60,6 +70,15 @@ def test_legacy_manifest_defaults_to_original_content_version(tmp_path: Path) ->
     snapshot = ReportExportSnapshot.from_dict(payload)
 
     assert snapshot.content_version == 1
+
+
+def test_content_version_two_manifest_remains_readable(tmp_path: Path) -> None:
+    payload = _export_service(tmp_path).export(_run()).to_dict()
+    payload["content_version"] = 2
+
+    snapshot = ReportExportSnapshot.from_dict(payload)
+
+    assert snapshot.content_version == 2
 
 
 def test_source_resolver_deduplicates_sources_and_marks_unknown_evidence() -> None:
@@ -123,6 +142,58 @@ def test_renderers_escape_untrusted_text_and_create_unicode_pdf() -> None:
     assert "TEST: 110.0" in pdf_text
 
 
+def test_new_exports_include_matching_narrative_before_structured_report(
+    tmp_path: Path,
+) -> None:
+    run = _run()
+    store = NarrativePresentationStore((_narrative(run),))
+    service = ReportExportService(
+        store=ReportExportStore(root=tmp_path / "exports"),
+        redaction_policy=RedactionPolicy(),
+        narrative_store=store,
+        now=lambda: NOW,
+        id_factory=lambda: "export_narrative",
+    )
+
+    snapshot = service.export(run)
+    markdown_artifact = snapshot.artifact(ReportExportFormat.MARKDOWN)
+    html_artifact = snapshot.artifact(ReportExportFormat.HTML)
+    assert markdown_artifact is not None
+    assert html_artifact is not None
+    markdown = (tmp_path / "exports" / snapshot.export_id / markdown_artifact.filename).read_text(
+        encoding="utf-8"
+    )
+    html = (tmp_path / "exports" / snapshot.export_id / html_artifact.filename).read_text(
+        encoding="utf-8"
+    )
+
+    assert snapshot.narrative_synthesis_sha256 == _narrative(run).synthesis_sha256
+    assert markdown.index("LLM-Generated Narrative") < markdown.index("Current Situation")
+    assert "**Narrative provider/model:** local\\-openai / test\\-model" in markdown
+    assert "[S1]" in markdown
+    assert "LLM-Generated Narrative" in html
+    assert "structured report" in html
+
+
+def test_optional_legacy_narrative_failure_does_not_block_export(tmp_path: Path) -> None:
+    class BrokenNarrativeStore:
+        def matching(self, **_kwargs):
+            raise ValueError("corrupt legacy narrative")
+
+    service = ReportExportService(
+        store=ReportExportStore(root=tmp_path / "exports"),
+        redaction_policy=RedactionPolicy(),
+        narrative_store=BrokenNarrativeStore(),
+        now=lambda: NOW,
+        id_factory=lambda: "export_without_legacy_narrative",
+    )
+
+    snapshot = service.export(_run())
+
+    assert len(snapshot.artifacts) == 3
+    assert snapshot.narrative_synthesis_sha256 is None
+
+
 def test_redaction_removes_secrets_and_local_paths_from_all_artifacts(tmp_path: Path) -> None:
     secret = "sk-test-secret-value"
     local_path = str(tmp_path / "private" / "source.txt")
@@ -169,12 +240,15 @@ def test_store_is_atomic_immutable_sorted_and_rejects_traversal(tmp_path: Path) 
 
 def test_api_creates_lists_gets_and_downloads_all_formats(tmp_path: Path) -> None:
     run_store = OrchestratorRunStore(storage_path=tmp_path / "orchestrator_runs.json")
-    run_store.save(_run())
+    run = _run()
+    run_store.save(run)
+    narrative_store = NarrativePresentationStore((_narrative(run),))
     client = TestClient(
         create_app(
             settings=Settings.from_env({"FRA_HOME": str(tmp_path)}),
             session_store=ChatSessionStore(),
             orchestrator_run_store=run_store,
+            narrative_store=narrative_store,
         )
     )
 
@@ -183,6 +257,7 @@ def test_api_creates_lists_gets_and_downloads_all_formats(tmp_path: Path) -> Non
     export_id = payload["export"]["export_id"]
 
     assert created.status_code == 201
+    assert payload["export"]["narrative_synthesis_sha256"] == _narrative(run).synthesis_sha256
     listed = client.get("/api/report-exports").json()["exports"]
     assert listed[0]["export"]["export_id"] == export_id
     assert client.get(f"/api/report-exports/{export_id}").status_code == 200
@@ -196,6 +271,29 @@ def test_api_creates_lists_gets_and_downloads_all_formats(tmp_path: Path) -> Non
             assert "default-src 'none'" in response.headers["content-security-policy"]
         if export_format == ReportExportFormat.PDF:
             assert response.content.startswith(b"%PDF")
+
+
+def test_api_exports_without_waiting_for_a_narrative_provider(
+    tmp_path: Path,
+) -> None:
+    run_store = OrchestratorRunStore(storage_path=tmp_path / "orchestrator_runs.json")
+    run_store.save(_run())
+    client = TestClient(
+        create_app(
+            settings=Settings.from_env({"FRA_HOME": str(tmp_path)}),
+            session_store=ChatSessionStore(),
+            orchestrator_run_store=run_store,
+            research_dispatcher=UnavailableResearchStepDispatcher(),
+        )
+    )
+
+    created = client.post("/api/orchestrator/runs/orchestrator_run_fixture/exports")
+    payload = created.json()
+
+    assert created.status_code == 201
+    assert payload["export"]["narrative_synthesis_sha256"] is None
+    markdown = client.get(payload["files"]["markdown"])
+    assert "LLM-Generated Narrative" not in markdown.text
 
 
 def test_api_reports_unknown_and_missing_synthesis_without_paths(tmp_path: Path) -> None:
@@ -391,6 +489,8 @@ def _run(
         updated_at=NOW,
         execution_policy=OrchestratorExecutionPolicy.SEQUENTIAL_LOCAL_SAFE,
         plan=default_orchestrator_plan(),
+        agent_provider="local-openai",
+        agent_model="test-model",
         handoffs=tuple(handoffs),
         selected_company={"id": "company_fixture", "legal_name": "TEST Økonomi A/S"},
         selected_security={"id": "security_fixture", "ticker": "TEST"},
@@ -485,3 +585,38 @@ def _report(summary: str) -> dict[str, object]:
             "hold, price-target, or personalized investment advice."
         ),
     }
+
+
+def _narrative(run: OrchestratedResearchRun) -> NarrativePresentation:
+    report = run.handoffs[-1].output["report"]
+    assert isinstance(report, dict)
+    return NarrativePresentation(
+        id="narrative_export_fixture",
+        run_id=run.id,
+        report_id="synthesis_report_fixture",
+        synthesis_sha256=synthesis_sha256(report),
+        provider="local-openai",
+        model="test-model",
+        created_at=NOW,
+        sections=tuple(
+            NarrativePresentationSection(
+                section=section,
+                paragraphs=(
+                    (
+                        NarrativeParagraph(
+                            text="The stored evidence supports only a partial assessment.",
+                            source_point_ids=("point_current",),
+                            evidence_ids=("ev:financial",),
+                            source_markers=("[S1]",),
+                        ),
+                    )
+                    if section == NarrativeSection.CURRENT_SITUATION
+                    else ()
+                ),
+            )
+            for section in NARRATIVE_SECTION_ORDER
+        ),
+        warnings=("TEST narrative warning.",),
+        limitations=("TEST narrative limitation.",),
+        no_recommendation_notice=("TEST narrative is research only and is not investment advice."),
+    )

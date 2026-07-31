@@ -83,6 +83,7 @@ from financial_research_agent.security import ConversationPolicy
 from financial_research_agent.settings import ProviderTask, Settings
 from financial_research_agent.statements import FinancialStatementStore
 from financial_research_agent.storage import LocalStorageManager
+from financial_research_agent.synthesis import NarrativePresentationStore
 from financial_research_agent.web.conversation import AgentConversationService
 from financial_research_agent.web.report_routes import create_report_router
 from financial_research_agent.web.research_routes import (
@@ -175,6 +176,7 @@ def create_app(
     runtime_settings_store: RuntimeSettingsStore | None = None,
     embedding_cache: LocalEmbeddingCache | None = None,
     research_dispatcher: ResearchStepDispatcher | None = None,
+    narrative_store: NarrativePresentationStore | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings.from_env()
     provider_registry = registry or create_default_provider_registry(app_settings.provider)
@@ -204,12 +206,18 @@ def create_app(
     report_runs = report_run_store or persistence.cited_runs
     orchestrator_runs = orchestrator_run_store or persistence.orchestrator_runs
     report_exports = report_export_store or ReportExportStore.from_settings(app_settings)
+    scenario_catalog = create_default_scenario_catalog()
+    runtime_settings = runtime_settings_store or persistence.runtime_settings
+    narratives = narrative_store or (
+        persistence.narrative_presentations
+        if persistence is not None
+        else NarrativePresentationStore()
+    )
     report_export_service = ReportExportService(
         store=report_exports,
         redaction_policy=RedactionPolicy.from_settings(app_settings),
+        narrative_store=narratives,
     )
-    scenario_catalog = create_default_scenario_catalog()
-    runtime_settings = runtime_settings_store or persistence.runtime_settings
     embeddings_cache = embedding_cache or LocalEmbeddingCache.from_settings(app_settings)
 
     def current_settings() -> Settings:

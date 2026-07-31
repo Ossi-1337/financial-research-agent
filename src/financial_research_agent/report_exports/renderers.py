@@ -25,6 +25,7 @@ from reportlab.platypus import (
 from .contracts import (
     ReportExportChartSeries,
     ReportExportDocument,
+    ReportExportNarrativeSection,
     ReportExportPoint,
     ReportExportScenario,
 )
@@ -51,6 +52,7 @@ def render_markdown(document: ReportExportDocument) -> bytes:
         f"> **Research only:** {_md(document.disclaimer)}",
         "",
     ]
+    lines.extend(_markdown_narrative(document))
     for title, points in _sections(document):
         lines.extend(_markdown_points(title, points))
     lines.extend(_markdown_scenario("Upside Scenario", document.upside_scenario))
@@ -95,6 +97,7 @@ def render_html(document: ReportExportDocument) -> bytes:
         _metadata_html(document),
         f'<p class="disclaimer"><strong>Research only:</strong> {_html(document.disclaimer)}</p>',
     ]
+    body.append(_html_narrative(document))
     for section_title, points in _sections(document):
         body.append(_html_points(section_title, points))
     body.append(_html_scenario("Upside Scenario", document.upside_scenario))
@@ -164,6 +167,20 @@ def render_pdf(document: ReportExportDocument) -> bytes:
         Paragraph(f"<b>Research only:</b> {_html(document.disclaimer)}", styles["Notice"]),
         PageBreak(),
     ]
+    if document.narrative_sections:
+        story.append(Paragraph("LLM-Generated Narrative", styles["Heading1"]))
+        story.append(
+            Paragraph(
+                _html(
+                    "Presentation layer only. The structured report below remains the "
+                    "canonical source of truth."
+                ),
+                styles["Notice"],
+            )
+        )
+        for section in document.narrative_sections:
+            story.extend(_pdf_narrative_section(section, styles))
+        story.append(PageBreak())
     for title, points in _sections(document):
         story.append(Paragraph(_html(title), styles["Heading2"]))
         if not points:
@@ -218,6 +235,70 @@ def render_pdf(document: ReportExportDocument) -> bytes:
         onLaterPages=lambda canvas, _: _pdf_footer(canvas, document.export_id),
     )
     return buffer.getvalue()
+
+
+def _markdown_narrative(document: ReportExportDocument) -> list[str]:
+    if not document.narrative_sections:
+        return []
+    lines = [
+        "## LLM-Generated Narrative",
+        "",
+        (
+            "_Presentation layer only. The structured report below remains the canonical "
+            "source of truth._"
+        ),
+        "",
+    ]
+    for section in document.narrative_sections:
+        lines.extend([f"### {_md(section.name.replace('_', ' ').title())}", ""])
+        if not section.paragraphs:
+            lines.extend(["No narrative paragraph available.", ""])
+        for paragraph in section.paragraphs:
+            markers = f" {' '.join(paragraph.source_markers)}" if paragraph.source_markers else ""
+            lines.extend([f"{_md(paragraph.text)}{markers}", ""])
+    return lines
+
+
+def _html_narrative(document: ReportExportDocument) -> str:
+    if not document.narrative_sections:
+        return ""
+    parts = [
+        '<section class="narrative">',
+        "<h2>LLM-Generated Narrative</h2>",
+        (
+            '<p class="meta">Presentation layer only. The structured report below remains '
+            "the canonical source of truth.</p>"
+        ),
+    ]
+    for section in document.narrative_sections:
+        parts.append(f"<h3>{_html(section.name.replace('_', ' ').title())}</h3>")
+        if not section.paragraphs:
+            parts.append("<p>No narrative paragraph available.</p>")
+        for paragraph in section.paragraphs:
+            markers = (
+                f' <span class="markers">{_html(" ".join(paragraph.source_markers))}</span>'
+                if paragraph.source_markers
+                else ""
+            )
+            parts.append(f"<p>{_html(paragraph.text)}{markers}</p>")
+    parts.append("</section>")
+    return "".join(parts)
+
+
+def _pdf_narrative_section(
+    section: ReportExportNarrativeSection,
+    styles,
+) -> list[object]:
+    story: list[object] = [
+        Paragraph(_html(section.name.replace("_", " ").title()), styles["Heading2"])
+    ]
+    if not section.paragraphs:
+        story.append(Paragraph("No narrative paragraph available.", styles["Muted"]))
+    for paragraph in section.paragraphs:
+        markers = f" {' '.join(paragraph.source_markers)}" if paragraph.source_markers else ""
+        story.append(Paragraph(_html(f"{paragraph.text}{markers}"), styles["Body"]))
+        story.append(Spacer(1, 2 * mm))
+    return story
 
 
 def _sections(
@@ -487,7 +568,7 @@ def _chart_note(series: tuple[ReportExportChartSeries, ...]) -> str:
 
 
 def _metadata_markdown(document: ReportExportDocument) -> str:
-    values = (
+    values = [
         ("Company", document.company_name or "Not available"),
         ("Ticker", document.ticker or "Not available"),
         ("Query", document.query),
@@ -503,7 +584,17 @@ def _metadata_markdown(document: ReportExportDocument) -> str:
         ),
         ("Generation", document.generation_method),
         ("LLM provider/model", f"{document.llm_provider} / {document.llm_model}"),
-    )
+    ]
+    if document.narrative_provider is not None:
+        values.extend(
+            (
+                (
+                    "Narrative provider/model",
+                    f"{document.narrative_provider} / {document.narrative_model}",
+                ),
+                ("Narrative synthesis hash", document.narrative_synthesis_sha256 or ""),
+            )
+        )
     return "\n".join(f"- **{label}:** {_md(value)}" for label, value in values)
 
 
@@ -560,7 +651,7 @@ def _markdown_list(title: str, values: tuple[str, ...]) -> list[str]:
 
 
 def _metadata_html(document: ReportExportDocument) -> str:
-    values = (
+    values = [
         ("Company", document.company_name or "Not available"),
         ("Ticker", document.ticker or "Not available"),
         ("Query", document.query),
@@ -576,7 +667,17 @@ def _metadata_html(document: ReportExportDocument) -> str:
         ),
         ("Generation", document.generation_method),
         ("LLM provider/model", f"{document.llm_provider} / {document.llm_model}"),
-    )
+    ]
+    if document.narrative_provider is not None:
+        values.extend(
+            (
+                (
+                    "Narrative provider/model",
+                    f"{document.narrative_provider} / {document.narrative_model}",
+                ),
+                ("Narrative synthesis hash", document.narrative_synthesis_sha256 or ""),
+            )
+        )
     return (
         '<dl class="metadata">'
         + "".join(f"<dt>{label}</dt><dd>{_html(value)}</dd>" for label, value in values)
@@ -742,6 +843,14 @@ def _pdf_styles() -> dict[str, ParagraphStyle]:
 
 
 def _metadata_pdf(document: ReportExportDocument) -> str:
+    narrative_lines = (
+        (
+            f"Narrative provider/model: {document.narrative_provider} / {document.narrative_model}",
+            f"Narrative synthesis hash: {document.narrative_synthesis_sha256}",
+        )
+        if document.narrative_provider is not None
+        else ()
+    )
     return "<br/>".join(
         _html(line)
         for line in (
@@ -756,6 +865,7 @@ def _metadata_pdf(document: ReportExportDocument) -> str:
             f"({document.evidence_coverage_ratio:.0%})",
             f"Generation: {document.generation_method}",
             f"LLM provider/model: {document.llm_provider} / {document.llm_model}",
+            *narrative_lines,
         )
     )
 

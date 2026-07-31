@@ -15,6 +15,8 @@ from .contracts import (
     ReportExportChartPoint,
     ReportExportChartSeries,
     ReportExportDocument,
+    ReportExportNarrativeParagraph,
+    ReportExportNarrativeSection,
     ReportExportPoint,
     ReportExportScenario,
     ReportSourceReference,
@@ -48,6 +50,7 @@ def build_report_export_document(
     export_id: str,
     generated_at: datetime,
     redaction_policy: RedactionPolicy,
+    narrative_presentation: Mapping[str, object] | None = None,
 ) -> ReportExportDocument | None:
     payload = _redacted_run_payload(run, redaction_policy)
     report = _synthesis_report(payload)
@@ -72,6 +75,7 @@ def build_report_export_document(
         )
         for name in _SECTION_NAMES
     }
+    narrative = _mapping(narrative_presentation)
     return ReportExportDocument(
         export_id=export_id,
         run_id=_text(payload.get("id"), "run"),
@@ -118,6 +122,10 @@ def build_report_export_document(
         ),
         sources=sources,
         chart_series=_export_chart_series(payload),
+        narrative_sections=_narrative_sections(narrative),
+        narrative_provider=_optional_text(narrative.get("provider")),
+        narrative_model=_optional_text(narrative.get("model")),
+        narrative_synthesis_sha256=_optional_text(narrative.get("synthesis_sha256")),
     )
 
 
@@ -128,6 +136,27 @@ def build_report_evidence_index(
 ) -> ReportEvidenceIndex:
     payload = _redacted_run_payload(run, redaction_policy)
     return _evidence_index_from_payload(payload, _synthesis_report(payload))
+
+
+def _narrative_sections(
+    narrative: Mapping[str, object],
+) -> tuple[ReportExportNarrativeSection, ...]:
+    sections = []
+    for item in _sequence(narrative.get("sections")):
+        payload = _mapping(item)
+        name = _optional_text(payload.get("section"))
+        if name is None:
+            continue
+        paragraphs = tuple(
+            ReportExportNarrativeParagraph(
+                text=_text(paragraph.get("text"), "Narrative unavailable."),
+                source_markers=_texts(_sequence(paragraph.get("source_markers"))),
+            )
+            for value in _sequence(payload.get("paragraphs"))
+            if (paragraph := _mapping(value))
+        )
+        sections.append(ReportExportNarrativeSection(name=name, paragraphs=paragraphs))
+    return tuple(sections)
 
 
 def _evidence_index_from_payload(

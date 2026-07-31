@@ -31,6 +31,7 @@ from financial_research_agent.persistence.repositories import (
     SQLiteFilingStore,
     SQLiteFinancialStatementStore,
     SQLiteMarketDataStore,
+    SQLiteNarrativePresentationStore,
     SQLiteOrchestratorRunStore,
     SQLiteRuntimeSettingsStore,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "SQLiteFinancialStatementStore",
     "SQLiteMarketDataStore",
     "SQLiteMigrationRunner",
+    "SQLiteNarrativePresentationStore",
     "SQLiteOperations",
     "SQLiteOrchestratorRunStore",
     "SQLiteRuntimeSettingsStore",
