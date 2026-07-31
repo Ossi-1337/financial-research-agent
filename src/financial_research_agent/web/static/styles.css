@@ -461,6 +461,57 @@ h1 {
   font-size: 0.9em;
 }
 
+.assistant-markdown-table {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.assistant-markdown-table:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.assistant-markdown-table table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+}
+
+.assistant-markdown-table th,
+.assistant-markdown-table td {
+  padding: 8px 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  word-break: normal;
+}
+
+.assistant-markdown-table th:last-child,
+.assistant-markdown-table td:last-child {
+  border-right: 0;
+}
+
+.assistant-markdown-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.assistant-markdown-table th {
+  background: var(--surface);
+  font-weight: 700;
+}
+
+.assistant-markdown-table .align-center {
+  text-align: center;
+}
+
+.assistant-markdown-table .align-right {
+  text-align: right;
+}
+
 .message-content.pending {
   color: var(--muted);
   font-style: italic;

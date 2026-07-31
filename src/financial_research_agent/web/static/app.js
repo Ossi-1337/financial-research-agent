@@ -148,6 +148,76 @@ function appendInlineMarkdown(container, text) {
   }
 }
 
+function parseMarkdownTableRow(rawLine) {
+  const line = rawLine.trim();
+  if (!line.includes("|")) {
+    return null;
+  }
+  const withoutLeadingPipe = line.startsWith("|") ? line.slice(1) : line;
+  const cells = (withoutLeadingPipe.endsWith("|")
+    ? withoutLeadingPipe.slice(0, -1)
+    : withoutLeadingPipe
+  )
+    .split("|")
+    .map((cell) => cell.trim());
+  return cells.length >= 2 ? cells : null;
+}
+
+function markdownTableAlignments(rawLine, columnCount) {
+  const cells = parseMarkdownTableRow(rawLine);
+  if (!cells || cells.length !== columnCount) {
+    return null;
+  }
+  const alignments = [];
+  for (const cell of cells) {
+    if (!/^:?-{3,}:?$/.test(cell)) {
+      return null;
+    }
+    if (cell.startsWith(":") && cell.endsWith(":")) {
+      alignments.push("center");
+    } else if (cell.endsWith(":")) {
+      alignments.push("right");
+    } else {
+      alignments.push("left");
+    }
+  }
+  return alignments;
+}
+
+function renderMarkdownTable(container, headers, rows, alignments) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "assistant-markdown-table";
+  wrapper.tabIndex = 0;
+
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const [index, header] of headers.entries()) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.className = `align-${alignments[index]}`;
+    appendInlineMarkdown(cell, header);
+    headerRow.append(cell);
+  }
+  head.append(headerRow);
+  table.append(head);
+
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    const tableRow = document.createElement("tr");
+    for (let index = 0; index < headers.length; index += 1) {
+      const cell = document.createElement("td");
+      cell.className = `align-${alignments[index]}`;
+      appendInlineMarkdown(cell, row[index] || "");
+      tableRow.append(cell);
+    }
+    body.append(tableRow);
+  }
+  table.append(body);
+  wrapper.append(table);
+  container.append(wrapper);
+}
+
 function renderAssistantMarkdown(container, content) {
   container.classList.add("assistant-markdown");
   const lines = content.replace(/\r\n?/g, "\n").split("\n");
@@ -186,10 +256,34 @@ function renderAssistantMarkdown(container, content) {
     list.element.append(item);
   }
 
-  for (const rawLine of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const rawLine = lines[lineIndex];
     const line = rawLine.trim();
     if (!line) {
       flushParagraph();
+      continue;
+    }
+
+    const tableHeaders = parseMarkdownTableRow(line);
+    const tableAlignments =
+      tableHeaders && lineIndex + 1 < lines.length
+        ? markdownTableAlignments(lines[lineIndex + 1], tableHeaders.length)
+        : null;
+    if (tableHeaders && tableAlignments) {
+      flushParagraph();
+      flushList();
+      const rows = [];
+      let rowIndex = lineIndex + 2;
+      while (rowIndex < lines.length && lines[rowIndex].trim()) {
+        const row = parseMarkdownTableRow(lines[rowIndex]);
+        if (!row) {
+          break;
+        }
+        rows.push(row);
+        rowIndex += 1;
+      }
+      renderMarkdownTable(container, tableHeaders, rows, tableAlignments);
+      lineIndex = rowIndex - 1;
       continue;
     }
 

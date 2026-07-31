@@ -122,7 +122,10 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".report-export-link" in css_response.text
     assert "renderAssistantMarkdown" in script_response.text
     assert "appendInlineMarkdown" in script_response.text
+    assert "renderMarkdownTable" in script_response.text
+    assert "markdownTableAlignments" in script_response.text
     assert "container.innerHTML = message.content" not in script_response.text
+    assert ".assistant-markdown-table" in css_response.text
     assert ".report-export-status" in css_response.text
     assert ".report-export-button" not in css_response.text
     assert ".stock-chart-axis-label" in css_response.text
