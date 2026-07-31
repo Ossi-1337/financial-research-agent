@@ -105,10 +105,133 @@ function safeExternalUrl(value) {
   }
 }
 
+const inlineMarkdownPattern =
+  /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|\*[^*\n]+\*|_[^_\n]+_)/g;
+
+function appendInlineMarkdown(container, text) {
+  let cursor = 0;
+  for (const match of text.matchAll(inlineMarkdownPattern)) {
+    if (match.index > cursor) {
+      container.append(document.createTextNode(text.slice(cursor, match.index)));
+    }
+
+    const token = match[0];
+    let element;
+    if (token.startsWith("**")) {
+      element = document.createElement("strong");
+      element.textContent = token.slice(2, -2);
+    } else if (token.startsWith("`")) {
+      element = document.createElement("code");
+      element.textContent = token.slice(1, -1);
+    } else if (token.startsWith("[")) {
+      const closingLabel = token.indexOf("](");
+      const url = safeExternalUrl(token.slice(closingLabel + 2, -1));
+      if (closingLabel < 1 || !url) {
+        element = document.createTextNode(token);
+      } else {
+        element = document.createElement("a");
+        element.textContent = token.slice(1, closingLabel);
+        element.href = url;
+        element.target = "_blank";
+        element.rel = "noopener noreferrer";
+      }
+    } else {
+      element = document.createElement("em");
+      element.textContent = token.slice(1, -1);
+    }
+    container.append(element);
+    cursor = match.index + token.length;
+  }
+
+  if (cursor < text.length) {
+    container.append(document.createTextNode(text.slice(cursor)));
+  }
+}
+
+function renderAssistantMarkdown(container, content) {
+  container.classList.add("assistant-markdown");
+  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  let paragraph = [];
+  let list = null;
+
+  function flushParagraph() {
+    if (!paragraph.length) {
+      return;
+    }
+    const element = document.createElement("p");
+    appendInlineMarkdown(element, paragraph.join(" ").trim());
+    container.append(element);
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!list) {
+      return;
+    }
+    container.append(list.element);
+    list = null;
+  }
+
+  function appendListItem(ordered, text) {
+    flushParagraph();
+    if (!list || list.ordered !== ordered) {
+      flushList();
+      list = {
+        ordered,
+        element: document.createElement(ordered ? "ol" : "ul"),
+      };
+    }
+    const item = document.createElement("li");
+    appendInlineMarkdown(item, text);
+    list.element.append(item);
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushParagraph();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const element = document.createElement(`h${heading[1].length + 2}`);
+      appendInlineMarkdown(element, heading[2]);
+      container.append(element);
+      continue;
+    }
+
+    const orderedItem = line.match(/^\d+\.\s+(.+)$/);
+    if (orderedItem) {
+      appendListItem(true, orderedItem[1]);
+      continue;
+    }
+
+    const unorderedItem = line.match(/^[-+*]\s+(.+)$/);
+    if (unorderedItem) {
+      appendListItem(false, unorderedItem[1]);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+}
+
 function renderMessageContent(container, message) {
   if (message.role === "assistant" && message.streaming && !message.content) {
     container.classList.add("pending");
     container.textContent = "Thinking...";
+    return;
+  }
+
+  if (message.role === "assistant") {
+    renderAssistantMarkdown(container, message.content);
     return;
   }
 

@@ -419,6 +419,48 @@ h1 {
   word-break: break-word;
 }
 
+.assistant-markdown {
+  display: grid;
+  gap: 12px;
+  white-space: normal;
+}
+
+.assistant-markdown > * {
+  margin: 0;
+}
+
+.assistant-markdown h3,
+.assistant-markdown h4,
+.assistant-markdown h5 {
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.assistant-markdown ol,
+.assistant-markdown ul {
+  display: grid;
+  gap: 9px;
+  padding-left: 1.5rem;
+}
+
+.assistant-markdown li {
+  padding-left: 2px;
+}
+
+.assistant-markdown a {
+  color: var(--accent-strong);
+  text-underline-offset: 2px;
+}
+
+.assistant-markdown code {
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 0.9em;
+}
+
 .message-content.pending {
   color: var(--muted);
   font-style: italic;

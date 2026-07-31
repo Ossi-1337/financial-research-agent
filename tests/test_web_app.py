@@ -109,6 +109,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "overflow: hidden" in css_response.text
     assert "height: 100vh" in css_response.text
     assert ".message.assistant" in css_response.text
+    assert ".assistant-markdown" in css_response.text
     assert "width: 100%" in css_response.text
     assert "border-top: 1px solid var(--border)" in css_response.text
     assert ".context-panel[hidden]" in css_response.text
@@ -119,6 +120,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".synthesis-report" in css_response.text
     assert ".report-export-actions" in css_response.text
     assert ".report-export-link" in css_response.text
+    assert "renderAssistantMarkdown" in script_response.text
+    assert "appendInlineMarkdown" in script_response.text
+    assert "container.innerHTML = message.content" not in script_response.text
     assert ".report-export-status" in css_response.text
     assert ".report-export-button" not in css_response.text
     assert ".stock-chart-axis-label" in css_response.text
