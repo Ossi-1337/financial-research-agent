@@ -105,6 +105,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "--accent: #2563eb" in css_response.text
     assert "resize: none" in css_response.text
     assert "overflow-wrap: anywhere" in css_response.text
+    assert "grid-template-rows: minmax(88px, 1fr) auto" in css_response.text
+    assert ".composer-shell:focus-within" in css_response.text
+    assert "padding: 13px 14px 8px" in css_response.text
     assert "html {" in css_response.text
     assert "overflow: hidden" in css_response.text
     assert "height: 100vh" in css_response.text

@@ -977,20 +977,32 @@ h1 {
 
 .composer-shell {
   position: relative;
-  width: 100%;
-}
-
-.message-input {
+  display: grid;
+  grid-template-rows: minmax(88px, 1fr) auto;
   width: 100%;
   min-height: 132px;
   max-height: 240px;
-  overflow-y: auto;
-  overflow-wrap: anywhere;
-  resize: none;
-  padding: 13px 14px 58px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.composer-shell:focus-within {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.message-input {
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  resize: none;
+  padding: 13px 14px 8px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
   color: var(--text);
   font: inherit;
   line-height: 1.45;
@@ -1005,20 +1017,16 @@ h1 {
 }
 
 .message-input:focus {
-  border-color: var(--accent);
-  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline: 0;
 }
 
 .composer-controls {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  left: 12px;
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  pointer-events: none;
+  padding: 4px 10px 10px;
 }
 
 .composer-model-select {
@@ -1035,7 +1043,6 @@ h1 {
   font-size: 0.78rem;
   text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: auto;
 }
 
 .composer-model-select:disabled {
@@ -1053,7 +1060,6 @@ h1 {
   background: var(--accent);
   font-size: 1.15rem;
   line-height: 1;
-  pointer-events: auto;
 }
 
 .composer-action.busy {
