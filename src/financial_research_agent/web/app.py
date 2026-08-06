@@ -1046,6 +1046,7 @@ async def _provider_health_payload(provider: str, settings: Settings) -> dict[st
             "provider": metadata.provider,
             "model": metadata.model,
             "reachable": True,
+            "ready": True,
             "authenticated": True,
             "status": "ok",
             "available_models": [metadata.model],

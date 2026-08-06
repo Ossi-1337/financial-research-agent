@@ -14,10 +14,20 @@ const state = {
   runsByRunId: {},
   settings: null,
   modelOptionsRequestId: 0,
+  localReadiness: {
+    required: false,
+    ready: true,
+    status: "not_required",
+    requestId: 0,
+    timerId: null,
+  },
 };
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const REPORT_EXPORT_CONTENT_VERSION = 3;
+const LOCAL_PROVIDER = "local-openai";
+const LOCAL_LOADING_POLL_MS = 2000;
+const LOCAL_UNAVAILABLE_POLL_MS = 5000;
 const STOCK_CHART_LAYOUT = Object.freeze({
   width: 720,
   height: 300,
@@ -32,6 +42,7 @@ const input = document.querySelector("#message-input");
 const mentionMenu = document.querySelector("#mention-menu");
 const sendButton = document.querySelector("#send-button");
 const composerModelSelect = document.querySelector("#composer-model-select");
+const composerRuntimeStatus = document.querySelector("#composer-runtime-status");
 const messageList = document.querySelector("#message-list");
 const errorBanner = document.querySelector("#error-banner");
 const sessionList = document.querySelector("#session-list");
@@ -57,7 +68,7 @@ function setBusy(value) {
   state.busy = value;
   input.contentEditable = value ? "false" : "true";
   newSessionButton.disabled = value;
-  composerModelSelect.disabled = value || composerModelSelect.options.length === 0;
+  composerModelSelect.disabled = modelSelectionBlocked();
   clearSessionsButton.disabled = value;
   sendButton.textContent = value ? "Stop" : "↑";
   sendButton.setAttribute("aria-label", value ? "Stop response" : "Send message");
@@ -69,8 +80,84 @@ function setBusy(value) {
   }
 }
 
+function activeProvider() {
+  return state.settings?.settings?.provider?.llm_provider || null;
+}
+
+function localReadinessBlocksSend() {
+  return state.localReadiness.required && !state.localReadiness.ready;
+}
+
+function modelSelectionBlocked() {
+  const checkingLocalModel =
+    state.localReadiness.required && state.localReadiness.status === "checking";
+  return state.busy || composerModelSelect.options.length === 0 || checkingLocalModel;
+}
+
 function updateSendButtonState() {
-  sendButton.disabled = !state.busy && editorText().length === 0;
+  sendButton.disabled = state.busy
+    ? false
+    : editorText().length === 0 || !state.sessionId || localReadinessBlocksSend();
+}
+
+function clearLocalReadinessTimer() {
+  if (state.localReadiness.timerId !== null) {
+    window.clearTimeout(state.localReadiness.timerId);
+    state.localReadiness.timerId = null;
+  }
+}
+
+function localReadinessText(status) {
+  if (status === "checking" || status === "loading") {
+    return "Loading local model...";
+  }
+  if (status === "no_models") {
+    return "No local model is loaded. Retrying...";
+  }
+  return "Local model unavailable. Retrying...";
+}
+
+function setLocalReadiness({ required, ready, status }) {
+  state.localReadiness.required = required;
+  state.localReadiness.ready = ready;
+  state.localReadiness.status = status;
+  composerRuntimeStatus.hidden = !required || ready;
+  composerRuntimeStatus.textContent = required && !ready ? localReadinessText(status) : "";
+  composerModelSelect.disabled = modelSelectionBlocked();
+  updateSendButtonState();
+}
+
+function scheduleLocalReadinessCheck(delayMs) {
+  clearLocalReadinessTimer();
+  state.localReadiness.timerId = window.setTimeout(() => {
+    state.localReadiness.timerId = null;
+    checkConfiguredLocalReadiness().catch(() => {});
+  }, delayMs);
+}
+
+function applyLocalHealth(health) {
+  const ready = health.ready === true;
+  const status = typeof health.status === "string" ? health.status : "unavailable";
+  setLocalReadiness({ required: true, ready, status });
+  if (!ready) {
+    scheduleLocalReadinessCheck(
+      status === "loading" ? LOCAL_LOADING_POLL_MS : LOCAL_UNAVAILABLE_POLL_MS
+    );
+  } else {
+    clearLocalReadinessTimer();
+  }
+}
+
+function handleLocalProviderFailure(error) {
+  if (activeProvider() !== LOCAL_PROVIDER || error?.status !== 503) {
+    return false;
+  }
+  const status = /loading model/i.test(error.message) ? "loading" : "unavailable";
+  setLocalReadiness({ required: true, ready: false, status });
+  scheduleLocalReadinessCheck(
+    status === "loading" ? LOCAL_LOADING_POLL_MS : LOCAL_UNAVAILABLE_POLL_MS
+  );
+  return true;
 }
 
 function showError(message) {
@@ -1171,14 +1258,27 @@ async function requestJson(url, options = {}) {
   return payload;
 }
 
-async function errorMessageFromResponse(response) {
+async function errorFromResponse(response) {
+  let message = `Request failed with ${response.status}`;
+  let code = null;
   try {
     const payload = await response.json();
     const detail = payload.detail || {};
-    return detail.message || detail.error || `Request failed with ${response.status}`;
-  } catch {
-    return `Request failed with ${response.status}`;
-  }
+    message = detail.message || detail.error || message;
+    code = detail.error || null;
+  } catch {}
+  const error = new Error(message);
+  error.status = response.status;
+  error.code = code;
+  return error;
+}
+
+function errorFromStreamEvent(event) {
+  const detail = event.detail || {};
+  const error = new Error(detail.message || detail.error || "Chat request failed.");
+  error.status = event.status || null;
+  error.code = detail.code || detail.error || null;
+  return error;
 }
 
 function pendingId(prefix) {
@@ -1311,7 +1411,7 @@ function setModelOptions(
   );
   if (syncComposer) {
     replaceModelOptions(composerModelSelect, normalized, selectedModel, placeholder);
-    composerModelSelect.disabled = state.busy || normalized.length === 0;
+    composerModelSelect.disabled = modelSelectionBlocked();
   }
 }
 
@@ -1326,6 +1426,44 @@ function compatibleConfiguredModel(provider) {
   return configured.llm_model;
 }
 
+async function checkConfiguredLocalReadiness() {
+  if (activeProvider() !== LOCAL_PROVIDER) {
+    clearLocalReadinessTimer();
+    state.localReadiness.requestId += 1;
+    setLocalReadiness({ required: false, ready: true, status: "not_required" });
+    return;
+  }
+
+  const requestId = ++state.localReadiness.requestId;
+  try {
+    const payload = await requestJson(
+      `/api/settings/provider-health?provider=${encodeURIComponent(LOCAL_PROVIDER)}`
+    );
+    if (requestId !== state.localReadiness.requestId || activeProvider() !== LOCAL_PROVIDER) {
+      return;
+    }
+    const health = payload.provider_health;
+    const configuredModel = compatibleConfiguredModel(LOCAL_PROVIDER);
+    const models = [...(health.available_models || [])];
+    if (configuredModel && !models.includes(configuredModel)) {
+      models.push(configuredModel);
+    }
+    replaceModelOptions(
+      composerModelSelect,
+      models,
+      configuredModel,
+      health.status === "loading" ? "Loading model..." : "Local provider unavailable"
+    );
+    applyLocalHealth(health);
+  } catch {
+    if (requestId !== state.localReadiness.requestId || activeProvider() !== LOCAL_PROVIDER) {
+      return;
+    }
+    setLocalReadiness({ required: true, ready: false, status: "unavailable" });
+    scheduleLocalReadinessCheck(LOCAL_UNAVAILABLE_POLL_MS);
+  }
+}
+
 async function refreshProviderModels({ syncComposer = true } = {}) {
   const provider = settingsForm.elements.llm_provider.value;
   const configuredModel = compatibleConfiguredModel(provider);
@@ -1333,9 +1471,22 @@ async function refreshProviderModels({ syncComposer = true } = {}) {
   if (provider === "offline-test") {
     setModelOptions(["offline-test"], "offline-test", "No models available", { syncComposer });
     settingsProviderStatus.textContent = "offline-test health: ok / deterministic test responses";
+    if (syncComposer) {
+      clearLocalReadinessTimer();
+      state.localReadiness.requestId += 1;
+      setLocalReadiness({ required: false, ready: true, status: "not_required" });
+    }
     return;
   }
 
+  if (syncComposer && provider === LOCAL_PROVIDER) {
+    clearLocalReadinessTimer();
+    setLocalReadiness({ required: true, ready: false, status: "checking" });
+  } else if (syncComposer) {
+    clearLocalReadinessTimer();
+    state.localReadiness.requestId += 1;
+    setLocalReadiness({ required: false, ready: true, status: "not_required" });
+  }
   setModelOptions([], null, "Loading models...", { syncComposer });
   try {
     const payload = await requestJson(
@@ -1350,6 +1501,9 @@ async function refreshProviderModels({ syncComposer = true } = {}) {
       models.push(configuredModel);
     }
     setModelOptions(models, configuredModel, "No models available", { syncComposer });
+    if (syncComposer && provider === LOCAL_PROVIDER) {
+      applyLocalHealth(health);
+    }
     settingsProviderStatus.textContent = `${health.provider} health: ${health.status}${
       health.error ? ` / ${health.error}` : ""
     }`;
@@ -1363,6 +1517,10 @@ async function refreshProviderModels({ syncComposer = true } = {}) {
       "Provider unavailable",
       { syncComposer }
     );
+    if (syncComposer && provider === LOCAL_PROVIDER) {
+      setLocalReadiness({ required: true, ready: false, status: "unavailable" });
+      scheduleLocalReadinessCheck(LOCAL_UNAVAILABLE_POLL_MS);
+    }
     settingsProviderStatus.textContent =
       error instanceof Error ? error.message : "Provider health check failed.";
   }
@@ -1669,7 +1827,7 @@ async function sendMessage(content, mentions, assistantId) {
     signal: state.abortController.signal,
   });
   if (!response.ok) {
-    throw new Error(await errorMessageFromResponse(response));
+    throw await errorFromResponse(response);
   }
   let completed = false;
   await readNdjsonStream(response, async (event) => {
@@ -1678,8 +1836,7 @@ async function sendMessage(content, mentions, assistantId) {
       return;
     }
     if (event.type === "error") {
-      const detail = event.detail || {};
-      throw new Error(detail.message || detail.error || "Chat request failed.");
+      throw errorFromStreamEvent(event);
     }
     if (event.type === "completed") {
       completed = true;
@@ -1855,7 +2012,9 @@ input.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-    form.requestSubmit();
+    if (!localReadinessBlocksSend()) {
+      form.requestSubmit();
+    }
   }
 });
 
@@ -1990,7 +2149,7 @@ composerModelSelect.addEventListener("change", async (event) => {
     showError(error instanceof Error ? error.message : "Could not change model.");
     await loadSettingsPanel();
   } finally {
-    event.currentTarget.disabled = state.busy || event.currentTarget.options.length === 0;
+    event.currentTarget.disabled = modelSelectionBlocked();
   }
 });
 
@@ -1998,6 +2157,9 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (state.busy) {
     state.abortController?.abort();
+    return;
+  }
+  if (localReadinessBlocksSend()) {
     return;
   }
   const content = editorText();
@@ -2017,7 +2179,9 @@ form.addEventListener("submit", async (event) => {
       showError("Response stopped.");
     } else {
       input.textContent = content;
-      showError(error instanceof Error ? error.message : "Chat request failed.");
+      if (!handleLocalProviderFailure(error)) {
+        showError(error instanceof Error ? error.message : "Chat request failed.");
+      }
     }
   } finally {
     state.abortController = null;

@@ -75,6 +75,7 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="mention-menu"' in root_response.text
     assert 'id="send-button"' in root_response.text
     assert 'id="composer-model-select"' in root_response.text
+    assert 'id="composer-runtime-status"' in root_response.text
     assert 'id="context-panel"' in root_response.text
     assert 'id="context-source-list"' in root_response.text
     assert 'id="settings-panel"' in root_response.text
@@ -144,6 +145,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert ".composer-model-select" in css_response.text
     assert "max-width: min(360px, calc(100% - 48px))" in css_response.text
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
+    assert ".composer-runtime-status" in css_response.text
+    assert css_response.text.count("grid-column: 1") >= 2
 
 
 def test_session_api_does_not_expose_retrieval_strategy() -> None:
@@ -162,6 +165,13 @@ def test_frontend_has_one_message_entrypoint_without_slash_routing() -> None:
     assert 'document.querySelector("#composer-model-select")' in script.text
     assert "JSON.stringify({ llm_model: selectedModel })" in script.text
     assert "refreshProviderModels({ syncComposer: false })" in script.text
+    assert "localReadinessBlocksSend()" in script.text
+    assert 'state.localReadiness.status === "checking"' in script.text
+    assert "checkConfiguredLocalReadiness()" in script.text
+    assert "activeProvider() !== LOCAL_PROVIDER || error?.status !== 503" in script.text
+    assert "error.status = event.status || null" in script.text
+    assert "throw errorFromStreamEvent(event)" in script.text
+    assert 'status === "loading" ? LOCAL_LOADING_POLL_MS : LOCAL_UNAVAILABLE_POLL_MS' in script.text
     assert "/messages/stream" in script.text
     assert "routeChatMessage" not in script.text
     assert "/api/chat/route" not in script.text
@@ -294,6 +304,7 @@ def test_runtime_provider_health_reports_offline_capabilities() -> None:
     assert response.status_code == 200
     assert health["provider"] == "offline-test"
     assert health["reachable"] is True
+    assert health["ready"] is True
     assert health["status"] == "ok"
     assert health["available_models"] == ["offline-test"]
     assert "chat" in health["capabilities"]

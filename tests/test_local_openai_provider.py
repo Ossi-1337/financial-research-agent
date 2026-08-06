@@ -221,14 +221,21 @@ def test_local_openai_provider_reports_health_and_models() -> None:
             return httpx.Response(200, json={"data": [{"id": "local-model"}]})
         return httpx.Response(404)
 
-    async def scenario() -> tuple[bool, str, tuple[str, ...], tuple[ProviderCapability, ...]]:
+    async def scenario() -> tuple[bool, bool, str, tuple[str, ...], tuple[ProviderCapability, ...]]:
         async with _provider(handler) as provider:
             health = await provider.check_health()
-        return health.reachable, health.status, health.available_models, health.capabilities
+        return (
+            health.reachable,
+            health.ready,
+            health.status,
+            health.available_models,
+            health.capabilities,
+        )
 
-    reachable, status, models, capabilities = asyncio.run(scenario())
+    reachable, ready, status, models, capabilities = asyncio.run(scenario())
 
     assert reachable is True
+    assert ready is True
     assert status == "ok"
     assert models == ("local-model",)
     assert ProviderCapability.CHAT in capabilities
@@ -242,12 +249,63 @@ def test_local_openai_provider_tolerates_missing_health_when_models_work() -> No
             return httpx.Response(200, json={"data": [{"id": "local-model"}]})
         return httpx.Response(404)
 
-    async def scenario() -> tuple[bool, str, tuple[str, ...]]:
+    async def scenario() -> tuple[bool, bool, str, tuple[str, ...]]:
         async with _provider(handler) as provider:
             health = await provider.check_health()
-        return health.reachable, health.status, health.available_models
+        return health.reachable, health.ready, health.status, health.available_models
 
-    assert asyncio.run(scenario()) == (True, "models_available", ("local-model",))
+    assert asyncio.run(scenario()) == (True, True, "models_available", ("local-model",))
+
+
+def test_local_openai_provider_reports_llama_cpp_model_loading_as_not_ready() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return httpx.Response(
+            503,
+            json={"error": {"code": 503, "message": "Loading model", "type": "server_error"}},
+        )
+
+    async def scenario() -> tuple[bool, bool, str, str | None]:
+        async with _provider(handler) as provider:
+            health = await provider.check_health()
+        return health.reachable, health.ready, health.status, health.error
+
+    assert asyncio.run(scenario()) == (
+        True,
+        False,
+        "loading",
+        "Local model is still loading.",
+    )
+    assert requests == ["/v1/health"]
+
+
+def test_local_openai_provider_does_not_treat_unknown_503_as_loading() -> None:
+    async def scenario() -> tuple[bool, bool, str]:
+        async with _provider(
+            lambda _request: httpx.Response(503, json={"error": {"message": "Unavailable"}})
+        ) as provider:
+            health = await provider.check_health()
+        return health.reachable, health.ready, health.status
+
+    assert asyncio.run(scenario()) == (False, False, "unreachable")
+
+
+def test_local_openai_provider_requires_models_when_health_is_not_supported() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/health":
+            return httpx.Response(404)
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(404)
+
+    async def scenario() -> tuple[bool, bool, str]:
+        async with _provider(handler) as provider:
+            health = await provider.check_health()
+        return health.reachable, health.ready, health.status
+
+    assert asyncio.run(scenario()) == (True, False, "no_models")
 
 
 @pytest.mark.parametrize(

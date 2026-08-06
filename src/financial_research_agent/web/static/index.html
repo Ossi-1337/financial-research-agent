@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Financial Research Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=47" />
+    <link rel="stylesheet" href="/static/styles.css?v=48" />
   </head>
   <body>
     <main class="app-shell">
@@ -47,6 +47,13 @@
                 hidden
               ></ol>
               <div class="composer-controls">
+                <span
+                  id="composer-runtime-status"
+                  class="composer-runtime-status"
+                  role="status"
+                  aria-live="polite"
+                  hidden
+                ></span>
                 <label class="sr-only" for="composer-model-select">Model</label>
                 <select
                   id="composer-model-select"
@@ -183,6 +190,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/app.js?v=46" type="module"></script>
+    <script src="/static/app.js?v=47" type="module"></script>
   </body>
 </html>

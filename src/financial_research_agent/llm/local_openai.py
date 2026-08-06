@@ -41,6 +41,7 @@ class LocalEndpointHealth:
     base_url: str
     model: str
     reachable: bool
+    ready: bool
     status: str
     available_models: tuple[str, ...] = ()
     capabilities: tuple[ProviderCapability, ...] = ()
@@ -54,6 +55,7 @@ class LocalEndpointHealth:
             "base_url": self.base_url,
             "model": self.model,
             "reachable": self.reachable,
+            "ready": self.ready,
             "status": self.status,
             "available_models": list(self.available_models),
             "capabilities": [capability.value for capability in self.capabilities],
@@ -164,6 +166,19 @@ class OpenAICompatibleLocalProvider:
 
         try:
             health_status = await self._health_status()
+            if health_status == "loading":
+                return LocalEndpointHealth(
+                    provider=self.provider,
+                    runtime=self.runtime,
+                    base_url=self.base_url,
+                    model=self.model,
+                    reachable=True,
+                    ready=False,
+                    status=health_status,
+                    capabilities=(),
+                    limitations=_limitations_for_runtime(self.runtime),
+                    error="Local model is still loading.",
+                )
             available_models = await self._available_models()
         except ProviderError as exc:
             error = exc.message
@@ -177,6 +192,7 @@ class OpenAICompatibleLocalProvider:
                         base_url=self.base_url,
                         model=self.model,
                         reachable=False,
+                        ready=False,
                         status="unreachable",
                         capabilities=(),
                         limitations=_limitations_for_runtime(self.runtime),
@@ -191,6 +207,7 @@ class OpenAICompatibleLocalProvider:
                     base_url=self.base_url,
                     model=self.model,
                     reachable=False,
+                    ready=False,
                     status="unreachable",
                     capabilities=(),
                     limitations=_limitations_for_runtime(self.runtime),
@@ -203,7 +220,12 @@ class OpenAICompatibleLocalProvider:
             base_url=self.base_url,
             model=self.model,
             reachable=True,
-            status=health_status,
+            ready=health_status != "models_available" or bool(available_models),
+            status=(
+                health_status
+                if health_status != "models_available" or available_models
+                else "no_models"
+            ),
             available_models=available_models,
             capabilities=_wire.default_capabilities(),
             limitations=_limitations_for_runtime(self.runtime),
@@ -219,6 +241,12 @@ class OpenAICompatibleLocalProvider:
                 provider=self.provider,
                 model=self.model,
             )
+        if (
+            response.status_code == 503
+            and self.runtime == LocalRuntime.LLAMA_CPP
+            and _response_reports_model_loading(response)
+        ):
+            return "loading"
         if response.status_code >= 400:
             _wire.raise_http_error(response, self.provider, self.model, "Local endpoint")
         try:
@@ -318,6 +346,11 @@ class OpenAICompatibleLocalProvider:
             headers={"User-Agent": "financial-research-agent/local-openai"},
         )
         return _wire.AsyncClientContext(client, close=True)
+
+
+def _response_reports_model_loading(response: httpx.Response) -> bool:
+    text = response.text.casefold()
+    return "loading model" in text or "model is loading" in text
 
 
 def _limitations_for_runtime(runtime: LocalRuntime) -> tuple[str, ...]:

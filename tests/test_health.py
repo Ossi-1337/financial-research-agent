@@ -43,6 +43,7 @@ def test_health_report_includes_local_endpoint_when_configured(monkeypatch) -> N
                 base_url="http://127.0.0.1:8080/v1/",
                 model="local-model",
                 reachable=True,
+                ready=True,
                 status="ok",
                 available_models=("local-model",),
             )
@@ -62,7 +63,43 @@ def test_health_report_includes_local_endpoint_when_configured(monkeypatch) -> N
 
     assert report["status"] == "ok"
     assert report["local_endpoint"]["reachable"] is True
+    assert report["local_endpoint"]["ready"] is True
     assert report["local_endpoint"]["available_models"] == ["local-model"]
+
+
+def test_health_report_is_degraded_while_local_model_loads(monkeypatch) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, _settings):
+            return cls()
+
+        async def check_health(self) -> LocalEndpointHealth:
+            return LocalEndpointHealth(
+                provider="local-openai",
+                runtime=LocalRuntime.LLAMA_CPP,
+                base_url="http://127.0.0.1:8080/v1/",
+                model="local-model",
+                reachable=True,
+                ready=False,
+                status="loading",
+            )
+
+    monkeypatch.setattr(
+        "financial_research_agent.health.OpenAICompatibleLocalProvider",
+        FakeProvider,
+    )
+    settings = Settings.from_env(
+        {
+            "FRA_LLM_PROVIDER": "local-openai",
+            "FRA_LLM_MODEL": "local-model",
+        }
+    )
+
+    report = build_health_report(settings)
+
+    assert report["status"] == "degraded"
+    assert report["local_endpoint"]["reachable"] is True
+    assert report["local_endpoint"]["ready"] is False
 
 
 def test_health_report_includes_openai_provider_when_configured(monkeypatch) -> None:

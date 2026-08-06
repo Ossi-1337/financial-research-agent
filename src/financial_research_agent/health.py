@@ -101,7 +101,7 @@ def build_health_report(settings: Settings) -> dict[str, Any]:
             OpenAICompatibleLocalProvider.from_settings(settings.provider).check_health()
         )
         report["local_endpoint"] = local_endpoint.to_dict()
-        if not local_endpoint.reachable:
+        if not local_endpoint.ready:
             report["status"] = "degraded"
     elif settings.provider.llm_provider == "openai":
         online_provider = asyncio.run(
