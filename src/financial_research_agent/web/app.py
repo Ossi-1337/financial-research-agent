@@ -389,8 +389,28 @@ def create_app(
                 "recommendations": "disabled",
             },
             "context_analysis": {
-                "source": "explicit_source_items",
+                "source": "approved_sources_with_optional_bounded_web_research",
                 "recommendations": "disabled",
+            },
+            "web_research": {
+                "enabled": settings_for_request.data_sources.web_research_enabled,
+                "status": settings_for_request.data_sources.web_research_status,
+                "provider": settings_for_request.data_sources.web_search_provider,
+                "provider_configured": (
+                    settings_for_request.data_sources.web_search_provider_configured
+                ),
+                "supported_providers": ["brave", "tavily", "searxng"],
+                "brave_search_api_key_configured": (
+                    settings_for_request.data_sources.brave_search_api_key is not None
+                ),
+                "tavily_api_key_configured": (
+                    settings_for_request.data_sources.tavily_api_key is not None
+                ),
+                "alpha_vantage_news_configured": (
+                    settings_for_request.data_sources.alpha_vantage_api_key is not None
+                ),
+                "jurisdictions": ["DK", "EU", "US"],
+                "access": "context_agent_only",
             },
             "orchestration": {
                 "execution_policy": "distributed_a2a",
@@ -582,6 +602,9 @@ def create_app(
                     OrchestratorResearchInput(
                         query=content,
                         company_query=plan.decision.company_query,
+                        research_subject=plan.decision.research_subject,
+                        jurisdiction=plan.decision.jurisdiction,
+                        requires_official_source=plan.decision.requires_official_source,
                         specialist_roles=plan.decision.specialist_roles,
                         agent_provider=plan.provider.metadata.provider,
                         agent_model=plan.model,
@@ -706,6 +729,9 @@ def create_app(
                 OrchestratorResearchInput(
                     query=content,
                     company_query=plan.decision.company_query,
+                    research_subject=plan.decision.research_subject,
+                    jurisdiction=plan.decision.jurisdiction,
+                    requires_official_source=plan.decision.requires_official_source,
                     specialist_roles=plan.decision.specialist_roles,
                     agent_provider=plan.provider.metadata.provider,
                     agent_model=plan.model,
@@ -883,6 +909,10 @@ def _settings_payload(
             "alpha_vantage_api_key_configured": (
                 settings.data_sources.alpha_vantage_api_key is not None
             ),
+            "brave_search_api_key_configured": (
+                settings.data_sources.brave_search_api_key is not None
+            ),
+            "tavily_api_key_configured": settings.data_sources.tavily_api_key is not None,
             "message": (
                 "Secrets are not stored in the local settings override file. Configure API "
                 "keys through environment variables."
@@ -1046,6 +1076,13 @@ def _synthesis_message_content(
     run: OrchestratedResearchRun,
     report: dict[str, object] | None,
 ) -> str:
+    if run.cited_context_answer is not None:
+        answer = run.cited_context_answer.get("answer")
+        notice = run.cited_context_answer.get("no_legal_advice_notice")
+        parts = [str(answer)] if isinstance(answer, str) and answer.strip() else []
+        if isinstance(notice, str) and notice.strip():
+            parts.append(notice)
+        return "\n\n".join(parts) if parts else "Cited context answer is unavailable."
     if report is None:
         return run.synthesis_summary or "Synthesis report is unavailable."
     summary = report.get("summary")

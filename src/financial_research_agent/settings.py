@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
+from urllib.parse import urlsplit
 
 DEFAULT_ENVIRONMENT = "local"
 DEFAULT_LLM_PROVIDER = "offline-test"
@@ -36,6 +37,16 @@ DEFAULT_PDF_MAX_DOCUMENT_BYTES = 50_000_000
 DEFAULT_PDF_MAX_PAGES = 300
 DEFAULT_PDF_MAX_EXTRACTED_CHARS = 2_000_000
 DEFAULT_PDF_EXTRACTION_TIMEOUT_SECONDS = 120.0
+DEFAULT_WEB_RESEARCH_ENABLED = False
+DEFAULT_WEB_SEARCH_PROVIDER = "brave"
+DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com"
+DEFAULT_SEARXNG_BASE_URL = "http://127.0.0.1:8888"
+DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS = 15.0
+DEFAULT_WEB_SEARCH_MAX_RESULTS = 8
+DEFAULT_WEB_FETCH_MAX_SOURCES = 5
+DEFAULT_WEB_FETCH_MAX_BYTES = 2_000_000
+DEFAULT_WEB_NEWS_CACHE_TTL_MINUTES = 60
+DEFAULT_WEB_REGULATORY_CACHE_TTL_HOURS = 24
 DEFAULT_STORAGE_PROVIDER = "sqlite"
 DEFAULT_RETRIEVAL_PROVIDER = "local-vector"
 DEFAULT_RETRIEVAL_TOP_K = 5
@@ -291,6 +302,19 @@ class DataSourceSettings:
     pdf_max_pages: int = DEFAULT_PDF_MAX_PAGES
     pdf_max_extracted_chars: int = DEFAULT_PDF_MAX_EXTRACTED_CHARS
     pdf_extraction_timeout_seconds: float = DEFAULT_PDF_EXTRACTION_TIMEOUT_SECONDS
+    web_research_enabled: bool = DEFAULT_WEB_RESEARCH_ENABLED
+    web_search_provider: str = DEFAULT_WEB_SEARCH_PROVIDER
+    brave_search_api_key: str | None = None
+    tavily_api_key: str | None = None
+    tavily_base_url: str = DEFAULT_TAVILY_BASE_URL
+    searxng_base_url: str = DEFAULT_SEARXNG_BASE_URL
+    web_search_timeout_seconds: float = DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS
+    web_search_max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS
+    web_fetch_max_sources: int = DEFAULT_WEB_FETCH_MAX_SOURCES
+    web_fetch_max_bytes: int = DEFAULT_WEB_FETCH_MAX_BYTES
+    web_news_cache_ttl_minutes: int = DEFAULT_WEB_NEWS_CACHE_TTL_MINUTES
+    web_regulatory_cache_ttl_hours: int = DEFAULT_WEB_REGULATORY_CACHE_TTL_HOURS
+    web_live_smoke_test: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -309,6 +333,21 @@ class DataSourceSettings:
         object.__setattr__(
             self, "alpha_vantage_api_key", _optional_text(self.alpha_vantage_api_key)
         )
+        object.__setattr__(
+            self,
+            "web_search_provider",
+            _require_text(self.web_search_provider).lower(),
+        )
+        if self.web_search_provider not in {"brave", "tavily", "searxng"}:
+            raise ValueError("web_search_provider must be brave, tavily, or searxng")
+        object.__setattr__(
+            self,
+            "brave_search_api_key",
+            _optional_text(self.brave_search_api_key),
+        )
+        object.__setattr__(self, "tavily_api_key", _optional_text(self.tavily_api_key))
+        object.__setattr__(self, "tavily_base_url", _http_base_url(self.tavily_base_url))
+        object.__setattr__(self, "searxng_base_url", _http_base_url(self.searxng_base_url))
         if self.company_lookup_cache_ttl_days <= 0:
             raise ValueError("company_lookup_cache_ttl_days must be positive")
         if self.market_data_cache_ttl_days <= 0:
@@ -327,6 +366,18 @@ class DataSourceSettings:
             raise ValueError("pdf_max_extracted_chars must be positive")
         if self.pdf_extraction_timeout_seconds <= 0:
             raise ValueError("pdf_extraction_timeout_seconds must be positive")
+        if self.web_search_timeout_seconds <= 0:
+            raise ValueError("web_search_timeout_seconds must be positive")
+        if not 1 <= self.web_search_max_results <= 8:
+            raise ValueError("web_search_max_results must be between 1 and 8")
+        if not 1 <= self.web_fetch_max_sources <= 5:
+            raise ValueError("web_fetch_max_sources must be between 1 and 5")
+        if self.web_fetch_max_bytes <= 0:
+            raise ValueError("web_fetch_max_bytes must be positive")
+        if self.web_news_cache_ttl_minutes <= 0:
+            raise ValueError("web_news_cache_ttl_minutes must be positive")
+        if self.web_regulatory_cache_ttl_hours <= 0:
+            raise ValueError("web_regulatory_cache_ttl_hours must be positive")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -345,7 +396,40 @@ class DataSourceSettings:
             "pdf_max_pages": self.pdf_max_pages,
             "pdf_max_extracted_chars": self.pdf_max_extracted_chars,
             "pdf_extraction_timeout_seconds": self.pdf_extraction_timeout_seconds,
+            "web_research_enabled": self.web_research_enabled,
+            "web_research_status": self.web_research_status,
+            "web_search_provider": self.web_search_provider,
+            "web_search_provider_configured": self.web_search_provider_configured,
+            "brave_search_api_key_configured": self.brave_search_api_key is not None,
+            "tavily_api_key_configured": self.tavily_api_key is not None,
+            "tavily_base_url": self.tavily_base_url,
+            "searxng_base_url": self.searxng_base_url,
+            "web_search_timeout_seconds": self.web_search_timeout_seconds,
+            "web_search_max_results": self.web_search_max_results,
+            "web_fetch_max_sources": self.web_fetch_max_sources,
+            "web_fetch_max_bytes": self.web_fetch_max_bytes,
+            "web_news_cache_ttl_minutes": self.web_news_cache_ttl_minutes,
+            "web_regulatory_cache_ttl_hours": self.web_regulatory_cache_ttl_hours,
+            "web_live_smoke_test": self.web_live_smoke_test,
         }
+
+    @property
+    def web_research_status(self) -> str:
+        if not self.web_research_enabled:
+            return "disabled"
+        if self.web_search_provider_configured:
+            return "ready"
+        if self.alpha_vantage_api_key is not None:
+            return "company_news_only"
+        return "not_configured"
+
+    @property
+    def web_search_provider_configured(self) -> bool:
+        if self.web_search_provider == "brave":
+            return self.brave_search_api_key is not None
+        if self.web_search_provider == "tavily":
+            return self.tavily_api_key is not None
+        return self.web_search_provider == "searxng"
 
 
 @dataclass(frozen=True, slots=True)
@@ -673,6 +757,67 @@ class Settings:
                     "FRA_PDF_EXTRACTION_TIMEOUT_SECONDS",
                     DEFAULT_PDF_EXTRACTION_TIMEOUT_SECONDS,
                 ),
+                web_research_enabled=_env_bool_value(
+                    env,
+                    "FRA_WEB_RESEARCH_ENABLED",
+                    DEFAULT_WEB_RESEARCH_ENABLED,
+                ),
+                web_search_provider=_env_value(
+                    env,
+                    "FRA_WEB_SEARCH_PROVIDER",
+                    DEFAULT_WEB_SEARCH_PROVIDER,
+                ),
+                brave_search_api_key=_env_optional(env, "FRA_BRAVE_SEARCH_API_KEY"),
+                tavily_api_key=_env_optional_any(
+                    env,
+                    "FRA_TAVILY_API_KEY",
+                    "TAVILY_API_KEY",
+                ),
+                tavily_base_url=_env_value(
+                    env,
+                    "FRA_TAVILY_BASE_URL",
+                    DEFAULT_TAVILY_BASE_URL,
+                ),
+                searxng_base_url=_env_value(
+                    env,
+                    "FRA_SEARXNG_BASE_URL",
+                    DEFAULT_SEARXNG_BASE_URL,
+                ),
+                web_search_timeout_seconds=_env_float_value(
+                    env,
+                    "FRA_WEB_SEARCH_TIMEOUT_SECONDS",
+                    DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
+                ),
+                web_search_max_results=_env_int_value(
+                    env,
+                    "FRA_WEB_SEARCH_MAX_RESULTS",
+                    DEFAULT_WEB_SEARCH_MAX_RESULTS,
+                ),
+                web_fetch_max_sources=_env_int_value(
+                    env,
+                    "FRA_WEB_FETCH_MAX_SOURCES",
+                    DEFAULT_WEB_FETCH_MAX_SOURCES,
+                ),
+                web_fetch_max_bytes=_env_int_value(
+                    env,
+                    "FRA_WEB_FETCH_MAX_BYTES",
+                    DEFAULT_WEB_FETCH_MAX_BYTES,
+                ),
+                web_news_cache_ttl_minutes=_env_int_value(
+                    env,
+                    "FRA_WEB_NEWS_CACHE_TTL_MINUTES",
+                    DEFAULT_WEB_NEWS_CACHE_TTL_MINUTES,
+                ),
+                web_regulatory_cache_ttl_hours=_env_int_value(
+                    env,
+                    "FRA_WEB_REGULATORY_CACHE_TTL_HOURS",
+                    DEFAULT_WEB_REGULATORY_CACHE_TTL_HOURS,
+                ),
+                web_live_smoke_test=_env_bool_value(
+                    env,
+                    "FRA_WEB_LIVE_SMOKE_TEST",
+                    False,
+                ),
             ),
             storage=StorageSettings(
                 provider=_env_value(env, "FRA_STORAGE_PROVIDER", DEFAULT_STORAGE_PROVIDER),
@@ -878,6 +1023,16 @@ def _optional_text(value: str | None) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+def _http_base_url(value: str) -> str:
+    text = _require_text(value).rstrip("/")
+    parts = urlsplit(text)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ValueError("web provider base URL must use HTTP or HTTPS")
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError("web provider base URL cannot contain credentials, query, or fragment")
+    return text
 
 
 def _normalize_path(value: str | Path) -> Path:

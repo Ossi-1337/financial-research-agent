@@ -24,6 +24,7 @@ from financial_research_agent.orchestration.contracts import (
     OrchestratorResearchInput,
     OrchestratorRunStatus,
     OrchestratorStepKind,
+    ResearchSubject,
     default_orchestrator_plan,
 )
 from financial_research_agent.orchestration.dispatch import (
@@ -72,7 +73,13 @@ class ResearchOrchestrator:
             created_at=created_at,
             updated_at=created_at,
             execution_policy=OrchestratorExecutionPolicy.DISTRIBUTED_A2A,
-            plan=default_orchestrator_plan(request.specialist_roles),
+            plan=default_orchestrator_plan(
+                request.specialist_roles,
+                research_subject=request.research_subject,
+            ),
+            research_subject=request.research_subject,
+            jurisdiction=request.jurisdiction,
+            requires_official_source=request.requires_official_source,
             specialist_roles=request.specialist_roles,
             agent_provider=agent_provider,
             agent_model=agent_model,
@@ -87,6 +94,13 @@ class ResearchOrchestrator:
             scenario_version=request.scenario_version,
         )
         run = self._save(run, progress_observer)
+
+        if request.research_subject == ResearchSubject.GENERAL_CONTEXT:
+            context = await self._dispatch_general_context(request, run)
+            run = self._append_handoff(run, context, progress_observer)
+            synthesis = await self._dispatch_synthesis(run)
+            run = self._append_handoff(run, synthesis, progress_observer)
+            return self._finalize_run(run, synthesis, progress_observer)
 
         resolution, _result, candidate = await self._resolve_company(request)
         run = self._append_handoff(run, resolution, progress_observer)
@@ -129,15 +143,53 @@ class ResearchOrchestrator:
 
         synthesis = await self._dispatch_synthesis(run)
         run = self._append_handoff(run, synthesis, progress_observer)
-        final_status = _final_status(run.handoffs)
+        return self._finalize_run(run, synthesis, progress_observer)
+
+    async def _dispatch_general_context(
+        self,
+        request: OrchestratorResearchInput,
+        run: OrchestratedResearchRun,
+    ) -> AgentHandoff:
+        result = await self._step_dispatcher.dispatch(
+            DelegationRequest(
+                role=AgentRole.CONTEXT,
+                run_id=run.id,
+                step_id="context_analysis",
+                correlation_id=run.id,
+                expected_kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
+                payload={
+                    "query": request.query,
+                    "company_symbols": [],
+                    "source_items": [item.to_dict() for item in request.context_source_items],
+                    "evidence_required": True,
+                    "web_research": True,
+                    "jurisdiction": request.jurisdiction,
+                    "requires_official_source": request.requires_official_source,
+                },
+            ),
+            run=run,
+        )
+        return result.handoff
+
+    def _finalize_run(
+        self,
+        run: OrchestratedResearchRun,
+        synthesis: AgentHandoff,
+        observer: Callable[[OrchestratedResearchRun], None] | None,
+    ) -> OrchestratedResearchRun:
         retrieval_methods, retrieval_evidence_ids, retrieval_duration_ms = _retrieval_metadata(
             run.handoffs
         )
         return self._save(
             replace(
                 run,
-                status=final_status,
+                status=_final_status(run.handoffs),
                 synthesis_summary=_synthesis_summary(synthesis),
+                cited_context_answer=(
+                    _cited_context_answer(run, synthesis)
+                    if run.research_subject == ResearchSubject.GENERAL_CONTEXT
+                    else None
+                ),
                 limitations=tuple(
                     dict.fromkeys(
                         limitation for handoff in run.handoffs for limitation in handoff.limitations
@@ -153,7 +205,7 @@ class ResearchOrchestrator:
                 ),
                 updated_at=_aware_now(self._now()),
             ),
-            progress_observer,
+            observer,
         )
 
     async def _resolve_company(
@@ -336,6 +388,9 @@ class ResearchOrchestrator:
                         "cik": cik or "",
                         "retrieval_query": request.retrieval_query or request.query,
                         "evidence_required": bool(request.evidence_required),
+                        "web_research": True,
+                        "jurisdiction": request.jurisdiction,
+                        "requires_official_source": request.requires_official_source,
                     },
                 )
             )
@@ -368,6 +423,7 @@ class ResearchOrchestrator:
                     expected_kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
                     payload={
                         "query": request.query,
+                        "company_name": candidate.company.legal_name,
                         "company_symbols": [security.ticker],
                         "source_items": [item.to_dict() for item in request.context_source_items],
                         "evidence_required": bool(request.evidence_required),
@@ -450,6 +506,48 @@ def _final_status(handoffs: tuple[AgentHandoff, ...]) -> OrchestratorRunStatus:
 def _synthesis_summary(handoff: AgentHandoff) -> str | None:
     value = handoff.output.get("summary")
     return str(value).strip() if value is not None and str(value).strip() else None
+
+
+def _cited_context_answer(
+    run: OrchestratedResearchRun,
+    synthesis: AgentHandoff,
+) -> dict[str, object] | None:
+    summary = _synthesis_summary(synthesis)
+    context = next(
+        (
+            handoff
+            for handoff in reversed(run.handoffs)
+            if handoff.kind == OrchestratorStepKind.CONTEXT_ANALYSIS
+        ),
+        None,
+    )
+    if summary is None or context is None or not context.evidence_ids:
+        return None
+    analysis = context.output.get("analysis")
+    source_items = analysis.get("source_items", ()) if isinstance(analysis, Mapping) else ()
+    sources = tuple(item for item in source_items if isinstance(item, Mapping))
+    known = set(context.evidence_ids)
+    resolved = tuple(item for item in sources if str(item.get("id", "")) in known)
+    source_dates = {
+        str(item["id"]): str(item.get("published_at") or item.get("retrieved_at") or "unknown")
+        for item in resolved
+    }
+    links = "\n".join(
+        f"[S{index}] [{item.get('title', 'Source')!s}]({item.get('source_url', '')!s})"
+        for index, item in enumerate(resolved, start=1)
+    )
+    answer = summary if not links else f"{summary}\n\nSources:\n{links}"
+    return {
+        "answer": answer[:4_000],
+        "evidence_ids": [str(item["id"]) for item in resolved],
+        "jurisdiction": run.jurisdiction,
+        "source_dates": source_dates,
+        "warnings": list(context.warnings),
+        "limitations": list(context.limitations),
+        "no_legal_advice_notice": (
+            "This is source-backed research and education, not legal or accounting advice."
+        ),
+    }
 
 
 def _retrieval_metadata(

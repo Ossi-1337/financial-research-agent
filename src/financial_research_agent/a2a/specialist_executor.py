@@ -49,6 +49,10 @@ _ALLOWED_PAYLOAD_KEYS = {
         "company_symbols",
         "source_items",
         "evidence_required",
+        "web_research",
+        "jurisdiction",
+        "requires_official_source",
+        "company_name",
     },
     AgentRole.SYNTHESIS: {"handoff_ids"},
 }

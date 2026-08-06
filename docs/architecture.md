@@ -17,7 +17,7 @@ flowchart LR
 
     FIN --> FINTOOLS["SEC statements, HTML/TXT/PDF filings, and filing RAG"]
     STOCK --> STOCKTOOLS["Market data and deterministic calculations"]
-    CONTEXT --> CONTEXTTOOLS["Bounded company, macro, and sector sources"]
+    CONTEXT --> CONTEXTTOOLS["Approved sources + optional bounded web research"]
     SYNTH --> EVIDENCE["Validated handoffs, evidence, and report exports"]
 ```
 
@@ -33,8 +33,11 @@ Specialist ownership:
   then returns a structured LLM analysis.
 - Stock agent uses allowlisted company/benchmark price tools and deterministic market metrics,
   then returns a structured LLM analysis.
-- Context agent uses only approved source-linked company, macro, and sector inputs. Automatic news
-  ingestion is not implemented.
+- Context agent uses approved source-linked inputs and is the only specialist allowed to perform
+  optional web research. A provider-neutral factory selects Brave, Tavily, or local SearXNG for
+  discovery without changing the agent. Search results are discovery candidates; deterministic
+  policy controls HTTPS fetching, official-source requirements, bounds, caching, and source
+  metadata.
 - Synthesis agent reads validated persisted handoffs through one allowlisted tool and creates a
   structured LLM report.
 
@@ -50,6 +53,13 @@ Filing retrieval is company/CIK scoped, lexical by default, and may use optional
 Prompts receive at most five filing snippets, 900 characters per snippet, and 4,000 evidence
 characters total. Statement, market, and approved context evidence stays owned by its specialist.
 Synthesis receives only validated handoffs and known evidence IDs.
+
+Current company questions can add bounded news or web context when web research is explicitly
+enabled. Current regulatory questions without a company use the same orchestrator but dispatch
+only context and synthesis; DK, EU, or US jurisdiction is required. Regulatory claims require an
+official source. General web and Yahoo Finance are secondary context only and never replace SEC,
+Alpha Vantage market data, or official legal sources. No agent accepts user- or model-supplied
+URLs.
 
 Provider and model are resolved from current shared runtime settings when a run starts, then
 snapshotted on that run. Every specialist resolves the snapshot through its local provider adapter,
@@ -175,7 +185,7 @@ These controls are defense in depth, not a guarantee against every prompt-inject
 | `entities` | Company and security resolution |
 | `documents`, `statements`, `filings`, `retrieval`, `report_analysis` | Normalized documents plus financial-report agent data and analysis |
 | `market_data`, `stock_analysis` | Stock agent data and analysis |
-| `context_analysis` | Context agent analysis |
+| `context_analysis`, `web_research` | Context analysis plus bounded search/fetch policy and accepted-source cache |
 | `synthesis`, `report_exports` | Validated LLM synthesis, deterministic report mapping, and immutable exports |
 | `llm`, `tools`, `agents`, `skills`, `security` | Provider abstraction, guarded tools, prompts, bounded workflow skills, and conversation policy |
 | `mcp` | Optional local MCP adapter to the canonical application message and research APIs |

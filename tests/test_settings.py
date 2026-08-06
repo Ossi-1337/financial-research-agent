@@ -35,6 +35,10 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.data_sources.pdf_max_pages == 300
     assert settings.data_sources.pdf_max_extracted_chars == 2_000_000
     assert settings.data_sources.pdf_extraction_timeout_seconds == 120.0
+    assert settings.data_sources.web_research_enabled is False
+    assert settings.data_sources.web_research_status == "disabled"
+    assert settings.data_sources.web_search_provider == "brave"
+    assert settings.data_sources.brave_search_api_key is None
     assert settings.storage.provider == "sqlite"
     assert settings.retrieval.provider == "local-vector"
     assert settings.retrieval.top_k == 5
@@ -57,6 +61,59 @@ def test_settings_defaults_to_local_offline_provider() -> None:
     assert settings.performance.agent_max_output_tokens == 2_048
     assert settings.performance.embedding_cache_enabled is True
     assert settings.security.allow_remote_bind is False
+
+
+def test_web_search_provider_supports_swappable_adapters() -> None:
+    for provider in ("brave", "tavily", "searxng"):
+        assert (
+            Settings.from_env(
+                {"FRA_WEB_SEARCH_PROVIDER": provider}
+            ).data_sources.web_search_provider
+            == provider
+        )
+
+    with pytest.raises(ValueError, match="brave, tavily, or searxng"):
+        Settings.from_env({"FRA_WEB_SEARCH_PROVIDER": "unknown"})
+
+
+def test_web_research_status_reflects_available_credentials() -> None:
+    assert (
+        Settings.from_env(
+            {
+                "FRA_WEB_RESEARCH_ENABLED": "true",
+                "FRA_ALPHA_VANTAGE_API_KEY": "alpha-key",
+            }
+        ).data_sources.web_research_status
+        == "company_news_only"
+    )
+    assert (
+        Settings.from_env(
+            {
+                "FRA_WEB_RESEARCH_ENABLED": "true",
+                "FRA_BRAVE_SEARCH_API_KEY": "brave-key",
+            }
+        ).data_sources.web_research_status
+        == "ready"
+    )
+    assert (
+        Settings.from_env(
+            {
+                "FRA_WEB_RESEARCH_ENABLED": "true",
+                "FRA_WEB_SEARCH_PROVIDER": "tavily",
+                "FRA_TAVILY_API_KEY": "tavily-key",
+            }
+        ).data_sources.web_research_status
+        == "ready"
+    )
+    assert (
+        Settings.from_env(
+            {
+                "FRA_WEB_RESEARCH_ENABLED": "true",
+                "FRA_WEB_SEARCH_PROVIDER": "searxng",
+            }
+        ).data_sources.web_research_status
+        == "ready"
+    )
 
 
 def test_remote_a2a_requires_environment_only_bearer_key() -> None:
@@ -109,6 +166,19 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
             "FRA_MARKET_DATA_PROVIDER": "alpha-vantage",
             "FRA_MARKET_DATA_CACHE_TTL_DAYS": "2",
             "FRA_ALPHA_VANTAGE_API_KEY": "alpha-key",
+            "FRA_WEB_RESEARCH_ENABLED": "true",
+            "FRA_WEB_SEARCH_PROVIDER": "brave",
+            "FRA_BRAVE_SEARCH_API_KEY": "brave-key",
+            "FRA_TAVILY_API_KEY": "tavily-key",
+            "FRA_TAVILY_BASE_URL": "https://tavily.example.test",
+            "FRA_SEARXNG_BASE_URL": "http://searxng:8080",
+            "FRA_WEB_SEARCH_TIMEOUT_SECONDS": "9",
+            "FRA_WEB_SEARCH_MAX_RESULTS": "6",
+            "FRA_WEB_FETCH_MAX_SOURCES": "4",
+            "FRA_WEB_FETCH_MAX_BYTES": "1000000",
+            "FRA_WEB_NEWS_CACHE_TTL_MINUTES": "30",
+            "FRA_WEB_REGULATORY_CACHE_TTL_HOURS": "12",
+            "FRA_WEB_LIVE_SMOKE_TEST": "1",
             "FRA_FILING_PROVIDER": "sec-edgar",
             "FRA_FILING_CACHE_TTL_DAYS": "12",
             "FRA_FILING_MAX_DOCUMENT_BYTES": "5000000",
@@ -189,6 +259,19 @@ def test_settings_reads_environment_overrides(tmp_path: Path) -> None:
     assert settings.data_sources.market_data_provider == "alpha-vantage"
     assert settings.data_sources.market_data_cache_ttl_days == 2
     assert settings.data_sources.alpha_vantage_api_key == "alpha-key"
+    assert settings.data_sources.web_research_enabled is True
+    assert settings.data_sources.web_search_provider == "brave"
+    assert settings.data_sources.brave_search_api_key == "brave-key"
+    assert settings.data_sources.tavily_api_key == "tavily-key"
+    assert settings.data_sources.tavily_base_url == "https://tavily.example.test"
+    assert settings.data_sources.searxng_base_url == "http://searxng:8080"
+    assert settings.data_sources.web_search_timeout_seconds == 9
+    assert settings.data_sources.web_search_max_results == 6
+    assert settings.data_sources.web_fetch_max_sources == 4
+    assert settings.data_sources.web_fetch_max_bytes == 1_000_000
+    assert settings.data_sources.web_news_cache_ttl_minutes == 30
+    assert settings.data_sources.web_regulatory_cache_ttl_hours == 12
+    assert settings.data_sources.web_live_smoke_test is True
     assert settings.data_sources.financial_statement_provider == "sec-companyfacts"
     assert settings.data_sources.financial_statement_cache_ttl_days == 30
     assert settings.data_sources.filing_provider == "sec-edgar"

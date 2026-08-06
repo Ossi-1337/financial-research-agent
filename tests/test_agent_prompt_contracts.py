@@ -23,7 +23,7 @@ def test_prompt_contract_construction_is_immutable_and_response_format_is_json_s
     response_format = contract.response_format()
 
     assert contract.id == "agent.orchestrator.v2"
-    assert contract.version.value == "2.1.0"
+    assert contract.version.value == "2.2.0"
     assert contract.skill_ids == ("company-research",)
     assert response_format.format_type == ResponseFormatType.JSON_SCHEMA
     assert response_format.name == "orchestrator_output"

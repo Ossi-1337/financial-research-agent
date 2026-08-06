@@ -74,6 +74,12 @@ from financial_research_agent.tools import (
     ToolResult,
     ToolSpec,
 )
+from financial_research_agent.web_research import (
+    WebJurisdiction,
+    WebResearchRequest,
+    WebResearchService,
+    to_context_source_items,
+)
 
 
 class SpecialistExecutionService:
@@ -93,6 +99,7 @@ class SpecialistExecutionService:
         run_store: object | None = None,
         agent_runtime: AgentRuntimeResolver,
         prompt_catalog: PromptCatalog | None = None,
+        web_research_service: WebResearchService | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.financial_report_agent = financial_report_agent
@@ -108,6 +115,7 @@ class SpecialistExecutionService:
         self.run_store = run_store
         self.agent_runtime = agent_runtime
         self.prompt_catalog = prompt_catalog or create_default_prompt_catalog()
+        self.web_research_service = web_research_service
         self._now = now or (lambda: datetime.now(UTC))
 
     async def execute(self, request: DelegationRequest) -> AgentHandoff:
@@ -545,26 +553,60 @@ class SpecialistExecutionService:
             _context_source_from_dict(item)
             for item in _mapping_list(request.payload.get("source_items", ()))
         )
-        if not source_items:
+        web_warnings: tuple[str, ...] = ()
+        web_duration_ms = 0
+        web_methods: tuple[str, ...] = ()
+        symbols = tuple(str(item) for item in _list(request.payload.get("company_symbols", ())))
+        web_requested = _payload_bool(request.payload, "web_research")
+        if not source_items and not (web_requested and self.web_research_service is not None):
             return _skipped_handoff(
                 request,
                 started_at,
                 "No approved context sources were available.",
             )
-        symbols = tuple(str(item) for item in _list(request.payload.get("company_symbols", ())))
         result_holder: dict[str, object] = {}
 
         async def load_evidence(
             _context: ToolContext,
             _arguments: Mapping[str, object],
         ) -> ToolResult:
+            nonlocal source_items, web_duration_ms, web_methods, web_warnings
             retrieval_started = perf_counter_ns()
+            if web_requested and self.web_research_service is not None:
+                jurisdiction_value = _optional_text(request.payload.get("jurisdiction"))
+                web_result = await self.web_research_service.research(
+                    WebResearchRequest(
+                        query=_text(request.payload, "query"),
+                        jurisdiction=(
+                            WebJurisdiction(jurisdiction_value)
+                            if jurisdiction_value is not None
+                            else None
+                        ),
+                        company_name=_optional_text(request.payload.get("company_name")),
+                        ticker=next(iter(symbols), None),
+                        requires_official_source=_payload_bool(
+                            request.payload,
+                            "requires_official_source",
+                        ),
+                    )
+                )
+                source_items = _dedupe_context_sources(
+                    (
+                        *source_items,
+                        *to_context_source_items(web_result, company_symbols=symbols),
+                    )
+                )
+                web_warnings = web_result.warnings
+                web_duration_ms = web_result.duration_ms
+                web_methods = tuple(dict.fromkeys(source.provider for source in web_result.sources))
             result = self.context_agent.analyze(
                 query=_text(request.payload, "query"),
                 source_items=source_items,
                 company_symbols=symbols,
+                region=_optional_text(request.payload.get("jurisdiction")),
             )
             result_holder["analysis"] = result
+            result_holder["known_evidence_ids"] = tuple(item.id for item in source_items)
             result_holder["retrieval_duration_ms"] = _elapsed_ms(retrieval_started)
             return ToolResult.succeeded(
                 tool_call_id="load_context_evidence",
@@ -575,7 +617,6 @@ class SpecialistExecutionService:
             )
 
         try:
-            known_evidence = tuple(item.id for item in source_items)
             registry = ToolRegistry(
                 (
                     _source_tool(
@@ -596,7 +637,9 @@ class SpecialistExecutionService:
                 },
                 registry=registry,
                 context=_tool_context("load_context_evidence", ToolPermission.CONTEXT_DATA),
-                known_evidence_ids=known_evidence,
+                known_evidence_ids=lambda: tuple(
+                    str(item) for item in result_holder.get("known_evidence_ids", ())
+                ),
                 require_evidence=_payload_bool(request.payload, "evidence_required"),
             )
             result = result_holder.get("analysis")
@@ -607,7 +650,7 @@ class SpecialistExecutionService:
                 )
         except Exception as exc:
             return _failed_handoff(request, started_at, self._now(), exc)
-        evidence_ids = known_evidence
+        evidence_ids = tuple(str(item) for item in result_holder.get("known_evidence_ids", ()))
         contract = self.prompt_catalog.by_role(PromptAgentRole.NEWS_MACRO_ANALYST)
         return _handoff(
             request=request,
@@ -618,11 +661,13 @@ class SpecialistExecutionService:
             output={
                 "analysis": result.to_dict(),
                 "agent_output": dict(agent.output),
-                "retrieval_methods": ["approved_context"],
-                "retrieval_duration_ms": int(result_holder.get("retrieval_duration_ms", 0)),
+                "retrieval_methods": ["approved_context", *web_methods],
+                "retrieval_duration_ms": (
+                    int(result_holder.get("retrieval_duration_ms", 0)) + web_duration_ms
+                ),
             },
             evidence_ids=tuple(dict.fromkeys(evidence_ids)),
-            warnings=result.warnings,
+            warnings=tuple(dict.fromkeys((*result.warnings, *web_warnings))),
             limitations=result.limitations,
             confidence=_confidence(result.status),
             execution=_agent_execution(request, contract, agent),
@@ -1020,6 +1065,13 @@ def _optional_text(value: object) -> str | None:
     if not isinstance(value, str):
         raise ValueError("optional text value must be a string")
     return value.strip() or None
+
+
+def _dedupe_context_sources(values):
+    selected = {}
+    for value in values:
+        selected.setdefault(value.id, value)
+    return tuple(selected.values())
 
 
 def _payload_bool(payload: Mapping[str, object], name: str) -> bool:

@@ -72,3 +72,7 @@ def test_compose_default_starts_orchestrator_and_specialist_topology() -> None:
     assert 'FRA_A2A_ENABLED: "true"' in compose
     assert "ghcr.io/ggml-org/llama.cpp:server}" in compose
     assert "ghcr.io/ggml-org/llama.cpp:server-cuda}" in compose
+    assert "profiles: [searxng]" in compose
+    assert "FRA_TAVILY_API_KEY" in compose
+    assert "FRA_SEARXNG_BASE_URL" in compose
+    assert root.joinpath("deploy/searxng/settings.yml").is_file()

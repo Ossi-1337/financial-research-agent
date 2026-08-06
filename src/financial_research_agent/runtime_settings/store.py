@@ -267,16 +267,15 @@ def _replace_data_source_settings(
     settings: DataSourceSettings,
     overrides: RuntimeSettingsOverrides,
 ) -> DataSourceSettings:
-    return DataSourceSettings(
+    return replace(
+        settings,
         company_lookup_provider=overrides.company_lookup_provider
         or settings.company_lookup_provider,
         company_lookup_cache_ttl_days=overrides.company_lookup_cache_ttl_days
         or settings.company_lookup_cache_ttl_days,
-        sec_user_agent=settings.sec_user_agent,
         market_data_provider=overrides.market_data_provider or settings.market_data_provider,
         market_data_cache_ttl_days=overrides.market_data_cache_ttl_days
         or settings.market_data_cache_ttl_days,
-        alpha_vantage_api_key=settings.alpha_vantage_api_key,
         financial_statement_provider=overrides.financial_statement_provider
         or settings.financial_statement_provider,
         financial_statement_cache_ttl_days=overrides.financial_statement_cache_ttl_days

@@ -1,0 +1,18 @@
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: Financial Research Agent Search
+
+search:
+  safe_search: 2
+  formats:
+    - html
+    - json
+
+server:
+  bind_address: 0.0.0.0
+  port: 8080
+  secret_key: local-only-searxng-instance
+  limiter: false
+  image_proxy: false

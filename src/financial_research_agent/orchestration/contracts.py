@@ -22,6 +22,11 @@ ALLOWED_RESEARCH_SPECIALIST_ROLES = (
 DEFAULT_RESEARCH_SPECIALIST_ROLES = ALLOWED_RESEARCH_SPECIALIST_ROLES
 
 
+class ResearchSubject(StrEnum):
+    COMPANY = "company"
+    GENERAL_CONTEXT = "general_context"
+
+
 class OrchestratorExecutionPolicy(StrEnum):
     SEQUENTIAL_LOCAL_SAFE = "sequential_local_safe"
     DISTRIBUTED_A2A = "distributed_a2a"
@@ -129,6 +134,9 @@ class AgentExecutionMetadata:
 class OrchestratorResearchInput:
     query: str
     company_query: str | None = None
+    research_subject: ResearchSubject = ResearchSubject.COMPANY
+    jurisdiction: str | None = None
+    requires_official_source: bool = False
     run_id: str | None = None
     refresh: bool = True
     company_search_limit: int = 3
@@ -151,6 +159,18 @@ class OrchestratorResearchInput:
     def __post_init__(self) -> None:
         object.__setattr__(self, "query", _require_text("query", self.query))
         object.__setattr__(self, "company_query", _optional_text(self.company_query))
+        object.__setattr__(self, "research_subject", ResearchSubject(self.research_subject))
+        object.__setattr__(self, "jurisdiction", _optional_upper_text(self.jurisdiction))
+        if self.jurisdiction is not None and self.jurisdiction not in {"DK", "EU", "US"}:
+            raise ValueError("jurisdiction must be DK, EU, or US")
+        roles = _specialist_role_tuple(self.specialist_roles)
+        if self.research_subject == ResearchSubject.GENERAL_CONTEXT:
+            object.__setattr__(self, "company_query", None)
+            if set(roles) != {"context", "synthesis"}:
+                raise ValueError("general_context requires context and synthesis specialists")
+            roles = ("context", "synthesis")
+        if self.requires_official_source and self.jurisdiction is None:
+            raise ValueError("official-source research requires a jurisdiction")
         object.__setattr__(self, "run_id", _optional_text(self.run_id))
         if self.company_search_limit <= 0:
             raise ValueError("company_search_limit must be positive")
@@ -182,7 +202,7 @@ class OrchestratorResearchInput:
         object.__setattr__(
             self,
             "specialist_roles",
-            _specialist_role_tuple(self.specialist_roles),
+            roles,
         )
         object.__setattr__(self, "agent_provider", _optional_text(self.agent_provider))
         object.__setattr__(self, "agent_model", _optional_text(self.agent_model))
@@ -305,6 +325,9 @@ class OrchestratedResearchRun:
     updated_at: datetime
     execution_policy: OrchestratorExecutionPolicy
     plan: tuple[OrchestratorPlanStep, ...]
+    research_subject: ResearchSubject = ResearchSubject.COMPANY
+    jurisdiction: str | None = None
+    requires_official_source: bool = False
     specialist_roles: tuple[str, ...] = DEFAULT_RESEARCH_SPECIALIST_ROLES
     agent_provider: str | None = None
     agent_model: str | None = None
@@ -319,6 +342,7 @@ class OrchestratedResearchRun:
     selected_company: Mapping[str, object] | None = None
     selected_security: Mapping[str, object] | None = None
     synthesis_summary: str | None = None
+    cited_context_answer: Mapping[str, object] | None = None
     warnings: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
     no_recommendation_notice: str = NO_ORCHESTRATOR_RECOMMENDATION_NOTICE
@@ -339,6 +363,10 @@ class OrchestratedResearchRun:
             OrchestratorExecutionPolicy(self.execution_policy),
         )
         object.__setattr__(self, "plan", _plan_step_tuple(self.plan))
+        object.__setattr__(self, "research_subject", ResearchSubject(self.research_subject))
+        object.__setattr__(self, "jurisdiction", _optional_upper_text(self.jurisdiction))
+        if self.jurisdiction is not None and self.jurisdiction not in {"DK", "EU", "US"}:
+            raise ValueError("jurisdiction must be DK, EU, or US")
         object.__setattr__(
             self,
             "specialist_roles",
@@ -390,6 +418,11 @@ class OrchestratedResearchRun:
             _optional_object_mapping("selected_security", self.selected_security),
         )
         object.__setattr__(self, "synthesis_summary", _optional_text(self.synthesis_summary))
+        object.__setattr__(
+            self,
+            "cited_context_answer",
+            _optional_object_mapping("cited_context_answer", self.cited_context_answer),
+        )
         object.__setattr__(self, "warnings", _text_tuple("warnings", self.warnings))
         object.__setattr__(self, "limitations", _text_tuple("limitations", self.limitations))
         object.__setattr__(
@@ -411,6 +444,9 @@ class OrchestratedResearchRun:
             "updated_at": self.updated_at.isoformat(),
             "execution_policy": self.execution_policy.value,
             "plan": [step.to_dict() for step in self.plan],
+            "research_subject": self.research_subject.value,
+            "jurisdiction": self.jurisdiction,
+            "requires_official_source": self.requires_official_source,
             "specialist_roles": list(self.specialist_roles),
             "agent_provider": self.agent_provider,
             "agent_model": self.agent_model,
@@ -429,6 +465,9 @@ class OrchestratedResearchRun:
                 dict(self.selected_security) if self.selected_security is not None else None
             ),
             "synthesis_summary": self.synthesis_summary,
+            "cited_context_answer": (
+                dict(self.cited_context_answer) if self.cited_context_answer is not None else None
+            ),
             "warnings": list(self.warnings),
             "limitations": list(self.limitations),
             "no_recommendation_notice": self.no_recommendation_notice,
@@ -439,7 +478,10 @@ class OrchestratedResearchRun:
 
 def default_orchestrator_plan(
     specialist_roles: Iterable[str] = DEFAULT_RESEARCH_SPECIALIST_ROLES,
+    *,
+    research_subject: ResearchSubject = ResearchSubject.COMPANY,
 ) -> tuple[OrchestratorPlanStep, ...]:
+    subject = ResearchSubject(research_subject)
     roles = set(_specialist_role_tuple(specialist_roles))
     steps = (
         OrchestratorPlanStep(
@@ -509,7 +551,13 @@ def default_orchestrator_plan(
     return tuple(
         step
         for step in steps
-        if (required_role := role_by_step.get(step.kind)) is None or required_role in roles
+        if (
+            (
+                subject == ResearchSubject.COMPANY
+                or step.kind != OrchestratorStepKind.COMPANY_RESOLUTION
+            )
+            and ((required_role := role_by_step.get(step.kind)) is None or required_role in roles)
+        )
     )
 
 

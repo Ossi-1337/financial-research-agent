@@ -66,6 +66,11 @@ def create_research_router(
                 {
                     **run.to_dict(),
                     "synthesis_report": synthesis_report_from_run(run),
+                    "cited_context_answer": (
+                        dict(run.cited_context_answer)
+                        if run.cited_context_answer is not None
+                        else None
+                    ),
                 }
                 for run in orchestrator_runs.list()
             ]
@@ -74,7 +79,13 @@ def create_research_router(
     @router.get("/api/orchestrator/runs/{run_id}")
     def get_orchestrator_run(run_id: str) -> dict[str, Any]:
         run = orchestrator_run_or_404(orchestrator_runs, run_id)
-        return {"run": run.to_dict(), "synthesis_report": synthesis_report_from_run(run)}
+        return {
+            "run": run.to_dict(),
+            "synthesis_report": synthesis_report_from_run(run),
+            "cited_context_answer": (
+                dict(run.cited_context_answer) if run.cited_context_answer is not None else None
+            ),
+        }
 
     @router.get("/api/orchestrator/runs/{run_id}/evidence")
     def get_orchestrator_run_evidence(run_id: str) -> dict[str, Any]:
@@ -98,6 +109,8 @@ def create_research_router(
 
 
 def synthesis_report_from_run(run: OrchestratedResearchRun) -> dict[str, object] | None:
+    if run.research_subject.value == "general_context":
+        return None
     for handoff in reversed(run.handoffs):
         if handoff.kind.value != "synthesis":
             continue
@@ -128,6 +141,11 @@ def background_job_payload(
             "progress": progress,
             "orchestrator_run": run.to_dict() if run is not None else None,
             "synthesis_report": synthesis_report_from_run(run) if run is not None else None,
+            "cited_context_answer": (
+                dict(run.cited_context_answer)
+                if run is not None and run.cited_context_answer is not None
+                else None
+            ),
         }
     }
 

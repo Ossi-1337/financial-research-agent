@@ -12,6 +12,7 @@ from financial_research_agent.a2a.specialists import (
     _synthesis_handoff_payload,
 )
 from financial_research_agent.agents import AgentRuntimeResolver
+from financial_research_agent.context_analysis import NewsMacroSectorAgent
 from financial_research_agent.llm import (
     ChatMessage,
     ChatRequest,
@@ -45,6 +46,14 @@ from financial_research_agent.orchestration import (
 )
 from financial_research_agent.report_analysis import FinancialReportAnalysisStatus
 from financial_research_agent.settings import Settings
+from financial_research_agent.web_research import (
+    WebJurisdiction,
+    WebResearchResult,
+    WebResearchStatus,
+    WebSourceEvidence,
+    WebSourceReliability,
+    WebSourceType,
+)
 
 EVIDENCE_ID = "financial:evidence:1"
 NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
@@ -103,6 +112,54 @@ def test_context_specialist_skips_when_no_approved_sources_exist() -> None:
 
     assert handoff.status == OrchestratorHandoffStatus.SKIPPED
     assert handoff.limitations == ("No approved context sources were available.",)
+
+
+def test_context_specialist_runs_web_research_inside_allowlisted_evidence_tool() -> None:
+    provider = ContextSpecialistProvider()
+    registry = ProviderRegistry().register_chat_provider("scripted", provider)
+    settings = Settings.from_env(
+        {"FRA_LLM_PROVIDER": "scripted", "FRA_LLM_MODEL": "scripted-model"}
+    )
+    web_service = FakeWebResearchService()
+    service = SpecialistExecutionService(
+        financial_report_agent=object(),  # type: ignore[arg-type]
+        stock_price_agent=object(),  # type: ignore[arg-type]
+        context_agent=NewsMacroSectorAgent(now=lambda: NOW),
+        agent_runtime=AgentRuntimeResolver(
+            settings=lambda: settings,
+            registry=lambda _current: registry,
+        ),
+        web_research_service=web_service,  # type: ignore[arg-type]
+        now=lambda: NOW,
+    )
+
+    handoff = asyncio.run(
+        service.execute(
+            DelegationRequest(
+                role=AgentRole.CONTEXT,
+                run_id="run:test",
+                step_id="context_analysis",
+                correlation_id="run:test",
+                expected_kind=OrchestratorStepKind.CONTEXT_ANALYSIS,
+                payload={
+                    "query": "Current Danish A/S reporting rules",
+                    "company_symbols": [],
+                    "source_items": [],
+                    "web_research": True,
+                    "jurisdiction": "DK",
+                    "requires_official_source": True,
+                    "evidence_required": True,
+                },
+            )
+        )
+    )
+
+    request_payload = json.loads(provider.requests[0].messages[-1].content)
+    assert web_service.calls == 1
+    assert provider.requests[0].tools == ()
+    assert request_payload["required_tool_result"]["source"] == "bounded_context_sources"
+    assert handoff.evidence_ids == ("web:test",)
+    assert "brave" in handoff.output["retrieval_methods"]
 
 
 def test_market_refresh_reuses_fresh_cache_in_auto_mode() -> None:
@@ -377,6 +434,46 @@ class CapturingSpecialistProvider:
 
     def stream_chat(self, _request: ChatRequest):
         raise NotImplementedError
+
+
+class ContextSpecialistProvider(CapturingSpecialistProvider):
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        self.requests.append(request)
+        output = json.loads(json.dumps(_valid_agent_output()).replace(EVIDENCE_ID, "web:test"))
+        output["agent_role"] = "news_macro_analyst"
+        return ChatResponse(
+            message=ChatMessage(role=MessageRole.ASSISTANT, content=""),
+            provider=self.provider,
+            model=request.model or self.model,
+            structured_output=output,
+        )
+
+
+class FakeWebResearchService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def research(self, _request) -> WebResearchResult:
+        self.calls += 1
+        return WebResearchResult(
+            status=WebResearchStatus.COMPLETE,
+            sources=(
+                WebSourceEvidence(
+                    id="web:test",
+                    canonical_url="https://www.retsinformation.dk/example",
+                    title="Danish company law",
+                    publisher="Retsinformation",
+                    quote="TEST TOOL OUTPUT official Danish reporting rules.",
+                    source_type=WebSourceType.REGULATORY,
+                    reliability=WebSourceReliability.REGULATORY,
+                    provider="brave",
+                    jurisdiction=WebJurisdiction.DK,
+                    retrieved_at=NOW,
+                    expires_at=NOW + timedelta(hours=24),
+                    content_sha256="a" * 64,
+                ),
+            ),
+        )
 
 
 def _valid_agent_output() -> dict[str, object]:

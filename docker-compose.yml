@@ -30,6 +30,21 @@ x-runtime-environment: &runtime-environment
   FRA_SEC_USER_AGENT: ${FRA_SEC_USER_AGENT:-financial-research-agent/0.1 local-research contact@financial-research-agent.local}
   FRA_ALLOW_REMOTE_BIND: "true"
 
+x-web-environment: &web-environment
+  FRA_WEB_RESEARCH_ENABLED: ${FRA_WEB_RESEARCH_ENABLED:-false}
+  FRA_WEB_SEARCH_PROVIDER: ${FRA_WEB_SEARCH_PROVIDER:-brave}
+  FRA_BRAVE_SEARCH_API_KEY: ${FRA_BRAVE_SEARCH_API_KEY:-}
+  FRA_TAVILY_API_KEY: ${FRA_TAVILY_API_KEY:-}
+  FRA_TAVILY_BASE_URL: ${FRA_TAVILY_BASE_URL:-https://api.tavily.com}
+  FRA_SEARXNG_BASE_URL: ${FRA_SEARXNG_BASE_URL:-http://searxng:8080}
+  FRA_WEB_SEARCH_TIMEOUT_SECONDS: ${FRA_WEB_SEARCH_TIMEOUT_SECONDS:-15}
+  FRA_WEB_SEARCH_MAX_RESULTS: ${FRA_WEB_SEARCH_MAX_RESULTS:-8}
+  FRA_WEB_FETCH_MAX_SOURCES: ${FRA_WEB_FETCH_MAX_SOURCES:-5}
+  FRA_WEB_FETCH_MAX_BYTES: ${FRA_WEB_FETCH_MAX_BYTES:-2000000}
+  FRA_WEB_NEWS_CACHE_TTL_MINUTES: ${FRA_WEB_NEWS_CACHE_TTL_MINUTES:-60}
+  FRA_WEB_REGULATORY_CACHE_TTL_HOURS: ${FRA_WEB_REGULATORY_CACHE_TTL_HOURS:-24}
+  FRA_WEB_LIVE_SMOKE_TEST: ${FRA_WEB_LIVE_SMOKE_TEST:-0}
+
 x-a2a-service: &a2a-service
   <<: *app-image
   depends_on:
@@ -65,7 +80,7 @@ services:
     ports:
       - "127.0.0.1:${FRA_APP_PORT:-8000}:8000"
     environment:
-      <<: *runtime-environment
+      <<: [*runtime-environment, *web-environment]
       FRA_A2A_FINANCIAL_REPORT_URL: http://financial-report-agent:8002
       FRA_A2A_STOCK_URL: http://stock-agent:8003
       FRA_A2A_CONTEXT_URL: http://context-agent:8004
@@ -116,7 +131,7 @@ services:
     command: [financial-research-agent, a2a-serve, --role, context, --host, 0.0.0.0, --port, "8004"]
     expose: ["8004"]
     environment:
-      <<: *runtime-environment
+      <<: [*runtime-environment, *web-environment]
       FRA_A2A_ENABLED: "true"
       FRA_A2A_LOCAL_ONLY: "true"
       FRA_A2A_PORT: "8004"
@@ -127,6 +142,20 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 12
+
+  searxng:
+    image: ${FRA_SEARXNG_IMAGE:-docker.io/searxng/searxng:latest}
+    profiles: [searxng]
+    ports:
+      - "127.0.0.1:${FRA_SEARXNG_PORT:-8888}:8080"
+    environment:
+      SEARXNG_BASE_URL: http://localhost:${FRA_SEARXNG_PORT:-8888}/
+      SEARXNG_SECRET: ${FRA_SEARXNG_SECRET:-local-only-searxng-instance}
+      SEARXNG_LIMITER: "false"
+      SEARXNG_IMAGE_PROXY: "false"
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
 
   synthesis-agent:
     <<: *a2a-service

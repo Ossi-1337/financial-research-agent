@@ -17,6 +17,7 @@ from financial_research_agent.llm import (
     ChatResponse,
     FinishReason,
     MessageRole,
+    ProviderError,
     StreamEvent,
     StreamEventType,
 )
@@ -87,11 +88,30 @@ class AgentConversationService:
                 provider=runtime.provider,
                 model=runtime.model,
             )
-        decision = await AgentDecisionService(runtime.provider, model=runtime.model).decide(
+        context = tuple(context_messages)
+        decision_service = AgentDecisionService(runtime.provider, model=runtime.model)
+        decision = await decision_service.decide(
             content=content,
-            context_messages=context_messages,
+            context_messages=context,
             company_references=references,
         )
+        if _should_reclassify_company_request(decision, references):
+            original_decision = decision
+            try:
+                repaired_decision = await decision_service.reconsider_company_request(
+                    content=content,
+                    context_messages=context,
+                    company_references=references,
+                )
+                self._policy.validate_agent_decision(
+                    mode=repaired_decision.mode.value,
+                    scope=repaired_decision.scope,
+                    reason=repaired_decision.policy_reason,
+                    flags=repaired_decision.risk_flags,
+                )
+                decision = repaired_decision
+            except AgentRuntimeError, ProviderError, ValueError:
+                decision = original_decision
         decision = _canonicalize_research_company_query(decision, references)
         try:
             policy = self._policy.validate_agent_decision(
@@ -280,6 +300,8 @@ def _sensitive_values(settings: Settings) -> tuple[str, ...]:
         settings.provider.gemini_api_key,
         settings.provider.litellm_api_key,
         settings.data_sources.alpha_vantage_api_key,
+        settings.data_sources.brave_search_api_key,
+        settings.data_sources.tavily_api_key,
         settings.a2a.api_key,
     )
     return tuple(value for value in values if value)
@@ -289,7 +311,11 @@ def _canonicalize_research_company_query(
     decision: AgentDecision,
     references: tuple[Mapping[str, object], ...],
 ) -> AgentDecision:
-    if decision.mode != AgentDecisionMode.RESEARCH or not references:
+    if (
+        decision.mode != AgentDecisionMode.RESEARCH
+        or decision.research_subject.value != "company"
+        or not references
+    ):
         return decision
 
     reference = _matching_company_reference(decision.company_query, references)
@@ -302,6 +328,26 @@ def _canonicalize_research_company_query(
     if not lookup_query or lookup_query == decision.company_query:
         return decision
     return replace(decision, company_query=lookup_query)
+
+
+def _should_reclassify_company_request(
+    decision: AgentDecision,
+    references: tuple[Mapping[str, object], ...],
+) -> bool:
+    if not any(_is_resolved_company_reference(reference) for reference in references):
+        return False
+    return (
+        decision.mode == AgentDecisionMode.REFUSAL
+        and decision.scope == ConversationScope.OUT_OF_SCOPE
+        and decision.policy_reason == ConversationPolicyReason.OUT_OF_SCOPE
+        and set(decision.risk_flags).issubset({ConversationPolicyReason.OUT_OF_SCOPE})
+    )
+
+
+def _is_resolved_company_reference(reference: Mapping[str, object]) -> bool:
+    company_id = reference.get("company_id") or reference.get("id")
+    label = reference.get("legal_name") or reference.get("ticker") or reference.get("label")
+    return bool(str(company_id or "").strip() and str(label or "").strip())
 
 
 def _matching_company_reference(

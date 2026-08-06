@@ -79,6 +79,9 @@ Implemented:
 - SQLite persistence, local filing retrieval, citations, evidence inspection, and report exports.
 - Automatic source grounding for company research, selected by the orchestrator and executed by
   the relevant A2A specialists.
+- Optional on-demand web, news, and regulatory research owned by the context specialist. Brave,
+  Tavily, or a local SearXNG instance can discover candidates; Alpha Vantage can add company news,
+  and official DK/EU/US sources are required for regulatory claims.
 - Provider adapters for local OpenAI-compatible endpoints, OpenAI, Anthropic, Gemini, and LiteLLM.
 - One LLM orchestrator selects from four tool-using A2A specialist services started by default
   through Docker Compose.
@@ -93,12 +96,17 @@ Implemented:
 Current boundaries:
 
 - No trading, broker integration, price targets, alerts, or buy/sell/hold recommendations.
-- No automatic news/macro ingestion, OCR, arbitrary PDF upload, or retrieval for greetings,
-  product help, and general financial education.
+- No background news ingestion, OCR, arbitrary PDF upload, or retrieval for greetings, product
+  help, and general financial education.
 - No durable cross-host queue, remote database, public A2A deployment, or hosted telemetry claim.
 - Market data may be delayed or provider-limited; SEC coverage is limited to SEC filers.
 - Local LLM quality depends on the selected model, runtime, context budget, and hardware.
-- Context analysis accepts approved source-linked inputs; automatic news ingestion is not present.
+- Web research is disabled by default. Enable `FRA_WEB_RESEARCH_ENABLED=true`, choose one discovery
+  adapter with `FRA_WEB_SEARCH_PROVIDER=brave|tavily|searxng`, and configure that provider. Brave
+  uses `FRA_BRAVE_SEARCH_API_KEY`; Tavily uses `FRA_TAVILY_API_KEY`; local SearXNG uses
+  `FRA_SEARXNG_BASE_URL` and can be started with `docker compose --profile searxng up -d --build`.
+  `FRA_ALPHA_VANTAGE_API_KEY` optionally adds documented company-news results. Retrieved pages are
+  bounded untrusted evidence, not agent instructions.
 - Direct model answers are limited to financial education and are buffered for output validation;
   greetings and application help use fixed local responses.
 

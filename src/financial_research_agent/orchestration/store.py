@@ -17,6 +17,7 @@ from financial_research_agent.orchestration.contracts import (
     OrchestratorPlanStep,
     OrchestratorRunStatus,
     OrchestratorStepKind,
+    ResearchSubject,
 )
 from financial_research_agent.settings import Settings
 
@@ -101,6 +102,11 @@ def orchestrated_research_run_from_dict(payload: Any) -> OrchestratedResearchRun
         updated_at=_datetime_from_payload(payload["updated_at"]),
         execution_policy=OrchestratorExecutionPolicy(str(payload["execution_policy"])),
         plan=tuple(_plan_step_from_payload(item) for item in payload.get("plan", ())),
+        research_subject=ResearchSubject(
+            str(payload.get("research_subject", ResearchSubject.COMPANY.value))
+        ),
+        jurisdiction=_optional_payload_text(payload, "jurisdiction"),
+        requires_official_source=bool(payload.get("requires_official_source", False)),
         specialist_roles=tuple(
             str(item)
             for item in payload.get(
@@ -132,6 +138,7 @@ def orchestrated_research_run_from_dict(payload: Any) -> OrchestratedResearchRun
         selected_company=_optional_mapping(payload.get("selected_company")),
         selected_security=_optional_mapping(payload.get("selected_security")),
         synthesis_summary=_optional_payload_text(payload, "synthesis_summary"),
+        cited_context_answer=_optional_mapping(payload.get("cited_context_answer")),
         warnings=tuple(str(item) for item in payload.get("warnings", ())),
         limitations=tuple(str(item) for item in payload.get("limitations", ())),
         no_recommendation_notice=str(payload["no_recommendation_notice"]),

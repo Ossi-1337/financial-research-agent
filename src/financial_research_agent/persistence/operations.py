@@ -195,6 +195,7 @@ class SQLiteOperations:
             "cited_runs",
             "orchestrator_runs",
             "background_jobs",
+            "web_source_evidence",
             "runtime_settings",
             "securities",
             "companies",

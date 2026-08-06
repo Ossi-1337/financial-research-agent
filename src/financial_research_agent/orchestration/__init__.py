@@ -15,6 +15,7 @@ from financial_research_agent.orchestration.contracts import (
     OrchestratorResearchInput,
     OrchestratorRunStatus,
     OrchestratorStepKind,
+    ResearchSubject,
     default_orchestrator_plan,
 )
 from financial_research_agent.orchestration.dispatch import (
@@ -51,6 +52,7 @@ __all__ = [
     "OrchestratorStepKind",
     "ResearchOrchestrator",
     "ResearchStepDispatcher",
+    "ResearchSubject",
     "UnavailableResearchStepDispatcher",
     "default_orchestrator_plan",
     "delegation_request_from_dict",

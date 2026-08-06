@@ -30,6 +30,14 @@ def create_report_router(
                 status_code=404,
                 detail={"error": "orchestrator_run_not_found"},
             )
+        if run.research_subject.value == "general_context":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "report_export_not_supported",
+                    "message": "General context answers do not create report exports.",
+                },
+            )
         try:
             snapshot = report_export_service.export(run)
         except ReportExportError as exc:

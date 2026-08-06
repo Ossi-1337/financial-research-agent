@@ -27,6 +27,7 @@ from financial_research_agent.orchestration import (
     OrchestratorRunStatus,
     OrchestratorStepKind,
     ResearchOrchestrator,
+    ResearchSubject,
     default_orchestrator_plan,
 )
 from financial_research_agent.orchestration.store import orchestrated_research_run_from_dict
@@ -62,6 +63,56 @@ def test_orchestrator_requires_dispatcher() -> None:
         ResearchOrchestrator(
             company_search_provider=FixtureCompanySearchProvider(),
             step_dispatcher=None,  # type: ignore[arg-type]
+        )
+
+
+def test_general_context_skips_company_resolution_and_uses_context_then_synthesis() -> None:
+    dispatcher = RecordingDispatcher()
+    orchestrator = ResearchOrchestrator(
+        company_search_provider=FailingCompanySearchProvider(),
+        step_dispatcher=dispatcher,
+        now=lambda: NOW,
+    )
+
+    run = asyncio.run(
+        orchestrator.run(
+            OrchestratorResearchInput(
+                query="What are current Danish A/S reporting rules?",
+                research_subject=ResearchSubject.GENERAL_CONTEXT,
+                jurisdiction="DK",
+                requires_official_source=True,
+                specialist_roles=("context", "synthesis"),
+            )
+        )
+    )
+
+    assert run.research_subject == ResearchSubject.GENERAL_CONTEXT
+    assert run.selected_company is None
+    assert [request.step_id for request in dispatcher.requests] == [
+        "context_analysis",
+        "synthesis",
+    ]
+    assert dispatcher.requests[0].payload["requires_official_source"] is True
+    assert [step.id for step in run.plan] == ["context_analysis", "synthesis"]
+
+
+def test_general_context_contract_canonicalizes_roles_and_requires_jurisdiction() -> None:
+    request = OrchestratorResearchInput(
+        query="What are current Danish A/S reporting rules?",
+        research_subject=ResearchSubject.GENERAL_CONTEXT,
+        jurisdiction="dk",
+        requires_official_source=True,
+        specialist_roles=("synthesis", "context"),
+    )
+
+    assert request.specialist_roles == ("context", "synthesis")
+    assert request.jurisdiction == "DK"
+    with pytest.raises(ValueError, match="requires a jurisdiction"):
+        OrchestratorResearchInput(
+            query="What are current company reporting rules?",
+            research_subject=ResearchSubject.GENERAL_CONTEXT,
+            requires_official_source=True,
+            specialist_roles=("context", "synthesis"),
         )
 
 
@@ -357,6 +408,12 @@ class RecordingDispatcher:
                 error_message="Specialist unavailable." if failed else None,
             )
         )
+
+
+class FailingCompanySearchProvider:
+    async def search(self, query: str, *, limit: int = 10):
+        del query, limit
+        raise AssertionError("general context must not resolve a company")
 
 
 class ConcurrentRecordingDispatcher(RecordingDispatcher):

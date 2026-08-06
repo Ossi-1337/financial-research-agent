@@ -46,6 +46,7 @@ const settingsForm = document.querySelector("#settings-form");
 const settingsError = document.querySelector("#settings-error");
 const settingsSessionLabel = document.querySelector("#settings-session-label");
 const settingsAgentRuntimeStatus = document.querySelector("#settings-agent-runtime-status");
+const settingsWebResearchStatus = document.querySelector("#settings-web-research-status");
 const settingsProviderStatus = document.querySelector("#settings-provider-status");
 const settingsSecretNote = document.querySelector("#settings-secret-note");
 const settingsHealthButton = document.querySelector("#settings-health-button");
@@ -1383,6 +1384,12 @@ function renderSettingsSummary(payload) {
         agentRuntime.model || "unavailable"
       } (${agentRuntime.compatible ? "ready" : agentRuntime.error_code || "unavailable"})`
     : "Research agent runtime is unavailable.";
+  const webResearch = payload.settings.data_sources;
+  settingsWebResearchStatus.textContent = `Web research: ${
+    webResearch.web_research_enabled ? "enabled" : "disabled"
+  } (${webResearch.web_research_status}) / ${webResearch.web_search_provider} ${
+    webResearch.web_search_provider_configured ? "configured" : "not configured"
+  } / context agent only`;
   settingsSecretNote.textContent = payload.secrets.message;
 }
 

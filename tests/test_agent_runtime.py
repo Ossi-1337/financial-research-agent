@@ -31,6 +31,7 @@ from financial_research_agent.llm import (
     ToolCall,
 )
 from financial_research_agent.llm.registry import ProviderRegistry
+from financial_research_agent.orchestration import ResearchSubject
 from financial_research_agent.security import ConversationPolicyReason, ConversationScope
 from financial_research_agent.settings import Settings
 from financial_research_agent.tools import (
@@ -62,7 +63,8 @@ def test_orchestrator_accepts_each_valid_decision(mode: AgentDecisionMode) -> No
     assert provider.requests[0].response_format is not None
     assert provider.requests[0].metadata["agent_role"] == "orchestrator"
     assert provider.requests[0].metadata["skills"] == "company-research@2.0.0"
-    assert provider.requests[0].metadata["prompt_version"] == "2.1.0"
+    assert provider.requests[0].metadata["prompt_version"] == "2.2.0"
+    assert provider.requests[0].metadata["decision_attempt"] == "initial"
     assert "Reusable workflow skills:" in provider.requests[0].messages[0].content
     assert decision.scope == _decision_scope(mode)
     assert decision.retrieval_query == (
@@ -97,6 +99,42 @@ def test_orchestrator_prompt_does_not_treat_wrapper_metadata_as_user_risk() -> N
     assert decision.risk_flags == ()
 
 
+def test_orchestrator_reclassifies_typo_company_request_with_bounded_prompt() -> None:
+    provider = RepairDecisionProvider()
+    service = AgentDecisionService(provider, model="scripted-model")
+    references = (
+        {
+            "company_id": "sec:cik:0000353278",
+            "legal_name": "NOVO NORDISK A S",
+            "ticker": "NVO",
+        },
+    )
+
+    initial = asyncio.run(
+        service.decide(
+            content="can you make a stoke analysis on @NVO",
+            company_references=references,
+        )
+    )
+    repaired = asyncio.run(
+        service.reconsider_company_request(
+            content="can you make a stoke analysis on @NVO",
+            company_references=references,
+        )
+    )
+
+    assert initial.mode == AgentDecisionMode.REFUSAL
+    assert repaired.mode == AgentDecisionMode.RESEARCH
+    assert repaired.scope == ConversationScope.FINANCIAL_RESEARCH
+    assert [request.metadata["decision_attempt"] for request in provider.requests] == [
+        "initial",
+        "company_scope_repair",
+    ]
+    assert "make a stoke analysis on @NVO" in provider.requests[1].messages[0].content
+    assert provider.requests[1].model == "scripted-model"
+    assert provider.requests[1].response_format == provider.requests[0].response_format
+
+
 def test_orchestrator_rejects_client_selected_specialist() -> None:
     provider = DecisionProvider(AgentDecisionMode.RESEARCH, roles=("external-agent",))
 
@@ -113,6 +151,28 @@ def test_orchestrator_research_decision_requires_synthesis() -> None:
         asyncio.run(
             AgentDecisionService(provider).decide(content="Research TEST TOOL OUTPUT company")
         )
+
+
+def test_orchestrator_routes_general_regulatory_context_without_company() -> None:
+    provider = DecisionProvider(
+        AgentDecisionMode.RESEARCH,
+        roles=("synthesis", "context"),
+        subject=ResearchSubject.GENERAL_CONTEXT,
+        jurisdiction="DK",
+        requires_official_source=True,
+    )
+
+    decision = asyncio.run(
+        AgentDecisionService(provider).decide(
+            content="What are current Danish A/S reporting rules?"
+        )
+    )
+
+    assert decision.research_subject == ResearchSubject.GENERAL_CONTEXT
+    assert decision.company_query is None
+    assert decision.jurisdiction == "DK"
+    assert decision.requires_official_source is True
+    assert decision.specialist_roles == ("context", "synthesis")
 
 
 def test_non_research_decision_discards_retrieval_fields() -> None:
@@ -337,6 +397,9 @@ def test_required_evidence_fails_before_answer_generation() -> None:
 class DecisionProvider:
     mode: AgentDecisionMode
     roles: tuple[str, ...] = ()
+    subject: ResearchSubject = ResearchSubject.COMPANY
+    jurisdiction: str | None = None
+    requires_official_source: bool = False
 
     def __post_init__(self) -> None:
         self.requests: list[ChatRequest] = []
@@ -370,7 +433,14 @@ class DecisionProvider:
                     if refusal
                     else ConversationPolicyReason.ALLOWED.value
                 ),
-                "company_query": "TEST TOOL OUTPUT COMPANY" if research else None,
+                "company_query": (
+                    "TEST TOOL OUTPUT COMPANY"
+                    if research and self.subject == ResearchSubject.COMPANY
+                    else None
+                ),
+                "research_subject": self.subject.value,
+                "jurisdiction": self.jurisdiction,
+                "requires_official_source": self.requires_official_source,
                 "retrieval_query": "TEST TOOL OUTPUT request" if research else None,
                 "evidence_required": research,
                 "specialist_roles": (
@@ -385,6 +455,15 @@ class DecisionProvider:
 
     def stream_chat(self, _request: ChatRequest):
         raise NotImplementedError
+
+
+class RepairDecisionProvider(DecisionProvider):
+    def __init__(self) -> None:
+        super().__init__(AgentDecisionMode.REFUSAL)
+
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        self.mode = AgentDecisionMode.REFUSAL if not self.requests else AgentDecisionMode.RESEARCH
+        return await super().chat(request)
 
 
 def _decision_scope(mode: AgentDecisionMode) -> ConversationScope:

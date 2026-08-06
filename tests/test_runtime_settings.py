@@ -20,6 +20,10 @@ def test_runtime_settings_overrides_are_applied_without_storing_secrets() -> Non
             "FRA_GEMINI_API_KEY": "gemini-key",
             "FRA_LITELLM_API_KEY": "litellm-key",
             "FRA_ALPHA_VANTAGE_API_KEY": "alpha-key",
+            "FRA_BRAVE_SEARCH_API_KEY": "brave-key",
+            "FRA_TAVILY_API_KEY": "tavily-key",
+            "FRA_WEB_RESEARCH_ENABLED": "true",
+            "FRA_PDF_MAX_PAGES": "42",
         }
     )
     overrides = RuntimeSettingsOverrides(
@@ -42,6 +46,10 @@ def test_runtime_settings_overrides_are_applied_without_storing_secrets() -> Non
     assert settings.provider.gemini_api_key == "gemini-key"
     assert settings.provider.litellm_api_key == "litellm-key"
     assert settings.data_sources.alpha_vantage_api_key == "alpha-key"
+    assert settings.data_sources.brave_search_api_key == "brave-key"
+    assert settings.data_sources.tavily_api_key == "tavily-key"
+    assert settings.data_sources.web_research_enabled is True
+    assert settings.data_sources.pdf_max_pages == 42
     assert settings.retrieval.top_k == 9
     assert settings.background.max_concurrent_research_runs == 2
     assert "openai_api_key" not in payload

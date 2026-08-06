@@ -8,6 +8,7 @@ from financial_research_agent.a2a.specialists import SpecialistExecutionService
 from financial_research_agent.a2a.store import SQLiteA2ATaskStore
 from financial_research_agent.agents import AgentRuntimeResolver
 from financial_research_agent.context_analysis import NewsMacroSectorAgent
+from financial_research_agent.documents import PDFDocumentExtractor
 from financial_research_agent.filings import create_default_filing_provider
 from financial_research_agent.market_data import create_default_market_data_provider
 from financial_research_agent.orchestration import (
@@ -19,6 +20,12 @@ from financial_research_agent.report_analysis import FinancialReportAnalysisAgen
 from financial_research_agent.settings import Settings
 from financial_research_agent.statements import create_default_financial_statement_provider
 from financial_research_agent.stock_analysis import StockPriceAnalysisAgent
+from financial_research_agent.web_research import (
+    BoundedWebSourceFetcher,
+    SQLiteWebSourceCache,
+    WebResearchService,
+    create_web_search_providers,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +61,26 @@ def create_default_a2a_runtime(
         market_data_store=persistence.market_data,
         market_data_provider=settings.data_sources.market_data_provider,
     )
+    web_research_service = None
+    if role == AgentRole.CONTEXT:
+        pdf_extractor = PDFDocumentExtractor(
+            max_document_bytes=settings.data_sources.pdf_max_document_bytes,
+            max_pages=settings.data_sources.pdf_max_pages,
+            max_extracted_chars=settings.data_sources.pdf_max_extracted_chars,
+            timeout_seconds=settings.data_sources.pdf_extraction_timeout_seconds,
+        )
+        web_research_service = WebResearchService(
+            enabled=settings.data_sources.web_research_enabled,
+            search_providers=create_web_search_providers(settings.data_sources),
+            fetcher=BoundedWebSourceFetcher(
+                timeout_seconds=settings.data_sources.web_search_timeout_seconds,
+                max_bytes=settings.data_sources.web_fetch_max_bytes,
+                pdf_extractor=pdf_extractor,
+            ),
+            cache=SQLiteWebSourceCache(persistence.database),
+            max_results=settings.data_sources.web_search_max_results,
+            max_sources=settings.data_sources.web_fetch_max_sources,
+        )
     specialist_service = SpecialistExecutionService(
         financial_report_agent=financial_report_agent,
         stock_price_agent=stock_price_agent,
@@ -66,6 +93,7 @@ def create_default_a2a_runtime(
         filing_store=persistence.filings,
         run_store=persistence.orchestrator_runs,
         agent_runtime=agent_runtime,
+        web_research_service=web_research_service,
     )
     return A2AResearchRuntime(
         task_store=SQLiteA2ATaskStore(persistence.database, owner=role.value),
