@@ -147,6 +147,13 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
     assert ".composer-runtime-status" in css_response.text
     assert css_response.text.count("grid-column: 1") >= 2
+    assert ".research-work" in css_response.text
+    assert ".research-work-item.running" in css_response.text
+    assert "renderResearchWork" in script_response.text
+    assert 'message.role !== "assistant"' in script_response.text
+    assert "startProgressiveReportReveal" in script_response.text
+    assert "Research run running." not in script_response.text
+    assert "Research run completed. Loading results..." not in script_response.text
 
 
 def test_session_api_does_not_expose_retrieval_strategy() -> None:
@@ -1048,10 +1055,21 @@ def test_plain_company_question_starts_canonical_agent_research() -> None:
             break
         time.sleep(0.01)
     session = client.get(f"/api/sessions/{session_id}").json()["session"]
+    persisted_run = client.get(f"/api/orchestrator/runs/{job['orchestrator_run_id']}").json()
 
     assert response.status_code == 200
     assert event["type"] == "research"
     assert job["status"] == "succeeded"
+    assert job["progress"]["work"]["schema_version"] == 1
+    assert job["progress"]["work"]["status"] == "succeeded"
+    assert persisted_run["work"] == job["progress"]["work"]
+    assert job["progress"]["work"]["total_steps"] == 4
+    assert [item["kind"] for item in job["progress"]["work"]["items"]] == [
+        "company_resolution",
+        "market_data_refresh",
+        "stock_price_analysis",
+        "synthesis",
+    ]
     assert [request.step_id for request in dispatcher.requests] == [
         "refresh_market_data",
         "stock_price_analysis",

@@ -749,7 +749,11 @@ def create_app(
                 yield _stream_line(
                     {
                         "type": "research",
-                        **background_job_payload(job, orchestrator_runs),
+                        **background_job_payload(
+                            job,
+                            orchestrator_runs,
+                            settings=current_settings(),
+                        ),
                     }
                 )
 

@@ -12,6 +12,9 @@ const state = {
   exportsByRunId: {},
   evidenceByRunId: {},
   runsByRunId: {},
+  workByRunId: {},
+  expandedWorkRunIds: new Set(),
+  progressiveReport: null,
   settings: null,
   modelOptionsRequestId: 0,
   localReadiness: {
@@ -406,6 +409,9 @@ function renderAssistantMarkdown(container, content) {
 }
 
 function renderMessageContent(container, message) {
+  if (message.role === "assistant" && message.research_work && !message.content) {
+    return;
+  }
   if (message.role === "assistant" && message.streaming && !message.content) {
     container.classList.add("pending");
     container.textContent = "Thinking...";
@@ -529,18 +535,18 @@ function renderSynthesisReport(container, message) {
   }
 
   header.append(title, badges);
-  wrapper.append(header);
+  appendReportRevealBlock(wrapper, header, message);
   if (report.created_at) {
     const timestamp = document.createElement("time");
     timestamp.className = "synthesis-timestamp";
     timestamp.dateTime = report.created_at;
     timestamp.textContent = `Generated ${new Date(report.created_at).toLocaleString()}`;
-    wrapper.append(timestamp);
+    appendReportRevealBlock(wrapper, timestamp, message);
   }
   const notice = document.createElement("p");
   notice.className = "synthesis-notice";
   notice.textContent = report.no_recommendation_notice || "Not financial advice.";
-  wrapper.append(notice);
+  appendReportRevealBlock(wrapper, notice, message);
 
   const sections = report.sections || {};
   for (const key of [
@@ -551,12 +557,14 @@ function renderSynthesisReport(container, message) {
     "risks",
     "unknowns",
   ]) {
-    wrapper.append(
+    appendReportRevealBlock(
+      wrapper,
       renderSynthesisSection(
         titleFromKey(key),
         sections[key] || [],
         message.research_run_id
-      )
+      ),
+      message
     );
   }
 
@@ -570,12 +578,75 @@ function renderSynthesisReport(container, message) {
   scenarioSection.append(
     renderScenario("Downside", scenarios.downside, message.research_run_id)
   );
-  wrapper.append(scenarioSection);
-  wrapper.append(renderStockChart(message.research_run_id));
-  wrapper.append(renderRunEvidencePanel(message.research_run_id));
-  wrapper.append(renderReportExportControl(message.research_run_id));
+  appendReportRevealBlock(wrapper, scenarioSection, message);
+  appendReportRevealBlock(wrapper, renderStockChart(message.research_run_id), message);
+  appendReportRevealBlock(wrapper, renderRunEvidencePanel(message.research_run_id), message);
+  appendReportRevealBlock(wrapper, renderReportExportControl(message.research_run_id), message);
 
   container.append(wrapper);
+  scheduleProgressiveReportReveal(message, wrapper);
+}
+
+function appendReportRevealBlock(wrapper, element, message) {
+  const reveal = state.progressiveReport;
+  const applies = reveal?.messageId === message.id && reveal.sessionId === state.sessionId;
+  if (applies) {
+    const index = wrapper.querySelectorAll("[data-report-reveal-index]").length;
+    element.dataset.reportRevealIndex = String(index);
+    element.hidden = index >= reveal.visibleBlocks;
+  }
+  wrapper.append(element);
+}
+
+function scheduleProgressiveReportReveal(message, wrapper) {
+  const reveal = state.progressiveReport;
+  if (!reveal || reveal.messageId !== message.id || reveal.sessionId !== state.sessionId) {
+    return;
+  }
+  const totalBlocks = wrapper.querySelectorAll("[data-report-reveal-index]").length;
+  reveal.totalBlocks = totalBlocks;
+  if (reveal.timerId !== null || reveal.visibleBlocks >= totalBlocks) {
+    if (reveal.visibleBlocks >= totalBlocks) {
+      state.progressiveReport = null;
+    }
+    return;
+  }
+  const delay = Math.max(70, Math.min(180, Math.floor(2000 / Math.max(1, totalBlocks))));
+  reveal.timerId = window.setTimeout(() => {
+    if (state.progressiveReport !== reveal) {
+      return;
+    }
+    reveal.timerId = null;
+    reveal.visibleBlocks += 1;
+    renderMessages();
+  }, delay);
+}
+
+function startProgressiveReportReveal(runId) {
+  cancelProgressiveReportReveal();
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  const message = [...state.messages]
+    .reverse()
+    .find((item) => item.role === "assistant" && item.research_run_id === runId);
+  if (!message?.synthesis_report) {
+    return;
+  }
+  state.progressiveReport = {
+    sessionId: state.sessionId,
+    messageId: message.id,
+    visibleBlocks: 1,
+    totalBlocks: null,
+    timerId: null,
+  };
+}
+
+function cancelProgressiveReportReveal() {
+  if (state.progressiveReport && state.progressiveReport.timerId !== null) {
+    window.clearTimeout(state.progressiveReport.timerId);
+  }
+  state.progressiveReport = null;
 }
 
 function renderReportExportControl(runId) {
@@ -1085,6 +1156,104 @@ function renderMentionChip(mention) {
   return chip;
 }
 
+function workForMessage(message) {
+  if (message.role !== "assistant") {
+    return null;
+  }
+  return message.research_work || state.workByRunId[message.research_run_id] || null;
+}
+
+function renderResearchWork(work, runId) {
+  const active = ["queued", "running"].includes(work.status);
+  const details = document.createElement("details");
+  details.className = `research-work ${active ? "active" : "terminal"}`;
+  details.open = active || state.expandedWorkRunIds.has(runId);
+
+  const summary = document.createElement("summary");
+  const elapsed = formatElapsedTime(workElapsedMilliseconds(work));
+  summary.textContent = active
+    ? `Working · ${work.completed_steps}/${work.total_steps} · ${elapsed}`
+    : `Work · ${elapsed}`;
+  details.append(summary);
+
+  const list = document.createElement("ol");
+  list.className = "research-work-list";
+  for (const item of work.items || []) {
+    const row = document.createElement("li");
+    row.className = `research-work-item ${item.status}`;
+    if (item.status === "running") {
+      row.setAttribute("aria-current", "step");
+    }
+
+    const marker = document.createElement("span");
+    marker.className = "research-work-marker";
+    marker.setAttribute("aria-hidden", "true");
+
+    const body = document.createElement("div");
+    body.className = "research-work-body";
+    const title = document.createElement("strong");
+    title.textContent = item.title;
+    const activity = document.createElement("p");
+    activity.textContent = item.activity;
+    const metadata = document.createElement("small");
+    metadata.textContent = workItemMetadata(item);
+    body.append(title, activity, metadata);
+    row.append(marker, body);
+    list.append(row);
+  }
+  details.append(list);
+  details.addEventListener("toggle", () => {
+    if (!runId || active) {
+      return;
+    }
+    if (details.open) {
+      state.expandedWorkRunIds.add(runId);
+    } else {
+      state.expandedWorkRunIds.delete(runId);
+    }
+  });
+  return details;
+}
+
+function workElapsedMilliseconds(work) {
+  const base = Number(work.elapsed_ms || 0);
+  if (!["queued", "running"].includes(work.status) || !work._receivedAt) {
+    return base;
+  }
+  return base + Math.max(0, Date.now() - work._receivedAt);
+}
+
+function formatElapsedTime(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function workItemMetadata(item) {
+  const parts = [titleFromKey(item.status)];
+  if (item.duration_ms !== null && item.duration_ms !== undefined) {
+    parts.push(formatElapsedTime(item.duration_ms));
+  }
+  if (item.evidence_count) {
+    parts.push(`${item.evidence_count} evidence`);
+  }
+  if (item.warning_count) {
+    parts.push(`${item.warning_count} warnings`);
+  }
+  if (item.limitation_count) {
+    parts.push(`${item.limitation_count} limitations`);
+  }
+  return parts.join(" · ");
+}
+
 function renderMessages() {
   messageList.innerHTML = "";
   for (const message of state.messages) {
@@ -1095,13 +1264,21 @@ function renderMessages() {
     content.className = "message-content";
     renderMessageContent(content, message);
 
+    const work = workForMessage(message);
+    if (work) {
+      item.append(renderResearchWork(work, message.research_run_id));
+    }
     item.append(content);
     renderMessageCitations(item, message);
     renderSynthesisReport(item, message);
     messageList.append(item);
   }
   const hasStreamingMessage = state.messages.some((message) => message.streaming);
-  if (state.busy && !hasStreamingMessage) {
+  const hasActiveWork = state.messages.some((message) => {
+    const work = workForMessage(message);
+    return work && ["queued", "running"].includes(work.status);
+  });
+  if (state.busy && !hasStreamingMessage && !hasActiveWork) {
     messageList.append(renderLoadingIndicator());
   }
   renderContextPanel();
@@ -1592,6 +1769,20 @@ function updateAssistantContent(assistantId, content) {
   renderMessages();
 }
 
+function updateAssistantResearchWork(assistantId, job) {
+  const message = state.messages.find((item) => item.id === assistantId);
+  const work = job.progress?.work;
+  if (!message || !work) {
+    return;
+  }
+  work._receivedAt = Date.now();
+  message.content = "";
+  message.streaming = false;
+  message.research_run_id = job.orchestrator_run_id;
+  message.research_work = work;
+  renderMessages();
+}
+
 async function readNdjsonStream(response, onEvent) {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -1764,6 +1955,7 @@ function editorMentions() {
 }
 
 async function createSession() {
+  cancelProgressiveReportReveal();
   const payload = await requestJson("/api/sessions", { method: "POST" });
   state.sessionId = payload.session.id;
   state.messages = payload.session.messages;
@@ -1778,7 +1970,7 @@ async function loadSessions() {
   renderSessions();
 }
 
-async function openSession(sessionId, allowBusy = false) {
+async function openSession(sessionId, allowBusy = false, revealRunId = null) {
   if (!allowBusy && (state.busy || sessionId === state.sessionId)) {
     return;
   }
@@ -1790,6 +1982,9 @@ async function openSession(sessionId, allowBusy = false) {
     state.messages = payload.session.messages;
     settingsSessionLabel.textContent = payload.session.id;
     await loadRunArtifactsForMessages();
+    if (revealRunId) {
+      startProgressiveReportReveal(revealRunId);
+    }
     await loadSessions();
     renderMessages();
   } catch (error) {
@@ -1848,7 +2043,8 @@ async function sendMessage(content, mentions, assistantId) {
     if (event.type === "research") {
       completed = true;
       const job = event.job;
-      updateAssistantContent(assistantId, backgroundJobText(job));
+      state.abortController = null;
+      updateAssistantResearchWork(assistantId, job);
       await pollBackgroundResearchJob(job.id, assistantId);
     }
   });
@@ -1863,14 +2059,22 @@ async function pollBackgroundResearchJob(jobId, assistantId) {
   while (state.activeBackgroundJobId === jobId) {
     const payload = await requestJson(`/api/background/research-runs/${jobId}`);
     const job = payload.job;
-    updateAssistantContent(assistantId, backgroundJobText(job));
+    updateAssistantResearchWork(assistantId, job);
     if (["succeeded", "failed", "cancelled"].includes(job.status)) {
       state.activeBackgroundJobId = null;
       if (job.status === "succeeded") {
-        await openSession(state.sessionId, true);
+        await openSession(state.sessionId, true, job.orchestrator_run_id);
         return;
       }
-      throw new Error(job.error_message || `Research run ${job.status}.`);
+      const message = state.messages.find((item) => item.id === assistantId);
+      if (message) {
+        message.content =
+          job.status === "cancelled"
+            ? "Research was cancelled. Completed work remains visible above."
+            : "Research stopped before a validated report was available.";
+        renderMessages();
+      }
+      return;
     }
     await sleep(750);
   }
@@ -1883,26 +2087,6 @@ async function cancelBackgroundResearchJob() {
   await requestJson(`/api/background/research-runs/${state.activeBackgroundJobId}/cancel`, {
     method: "POST",
   });
-}
-
-function backgroundJobText(job) {
-  const progress = job.progress || {};
-  const completed = progress.completed_steps ?? 0;
-  const total = progress.total_steps ?? 0;
-  const current = progress.current_step ? ` Current step: ${progress.current_step}.` : "";
-  if (job.status === "queued") {
-    return `Research run queued. ${completed}/${total} steps complete.`;
-  }
-  if (job.status === "running") {
-    return `Research run running. ${completed}/${total} steps complete.${current}`;
-  }
-  if (job.status === "succeeded") {
-    return "Research run completed. Loading results...";
-  }
-  if (job.status === "cancelled") {
-    return "Research run cancelled. Partial results were preserved when available.";
-  }
-  return job.error_message || "Research run failed.";
 }
 
 function sleep(milliseconds) {
@@ -1961,6 +2145,9 @@ async function loadRunArtifacts(runId) {
       requestJson("/api/report-exports"),
     ]);
     state.runsByRunId[runId] = runPayload.run;
+    if (runPayload.work) {
+      state.workByRunId[runId] = runPayload.work;
+    }
     state.evidenceByRunId[runId] = evidencePayload.evidence;
     const existing = (exportsPayload.exports || []).find(
       (item) =>
@@ -2134,6 +2321,7 @@ composerModelSelect.addEventListener("change", async (event) => {
   if (!selectedModel || state.busy) {
     return;
   }
+  cancelProgressiveReportReveal();
   clearError();
   event.currentTarget.disabled = true;
   try {

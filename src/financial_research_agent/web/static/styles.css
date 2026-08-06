@@ -518,6 +518,112 @@ h1 {
   font-style: italic;
 }
 
+.research-work {
+  width: min(860px, 96%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  white-space: normal;
+}
+
+.research-work summary {
+  padding: 10px 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 800;
+  list-style-position: inside;
+}
+
+.research-work.active summary {
+  color: var(--accent-strong);
+}
+
+.research-work-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0 12px 12px;
+  list-style: none;
+}
+
+.research-work-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.research-work-marker {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.research-work-item.running .research-work-marker {
+  border-color: var(--accent);
+  border-top-color: transparent;
+  animation: research-work-spin 800ms linear infinite;
+}
+
+.research-work-item.succeeded .research-work-marker,
+.research-work-item.partial .research-work-marker {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.research-work-item.failed .research-work-marker {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.research-work-item.pending,
+.research-work-item.skipped {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.research-work-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.research-work-body strong,
+.research-work-body p,
+.research-work-body small {
+  margin: 0;
+}
+
+.research-work-body strong {
+  font-size: 0.84rem;
+}
+
+.research-work-body p {
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.research-work-body small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+@keyframes research-work-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+[data-report-reveal-index][hidden] {
+  display: none;
+}
+
 .citation-list {
   display: grid;
   gap: 8px;
@@ -687,6 +793,13 @@ h1 {
 @keyframes report-export-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .research-work-item.running .research-work-marker,
+  .report-export-status::before {
+    animation: none;
   }
 }
 
