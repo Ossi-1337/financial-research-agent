@@ -64,7 +64,9 @@ class RuntimeSettingsOverrides:
     def from_mapping(cls, values: dict[str, object]) -> Self:
         forbidden = set(values) & _SECRET_FIELD_NAMES
         if forbidden:
-            raise ValueError(f"Secret settings are environment-only: {sorted(forbidden)[0]}")
+            raise ValueError(
+                f"Secret settings cannot be stored in runtime overrides: {sorted(forbidden)[0]}"
+            )
         unknown = set(values) - _override_field_names()
         if unknown:
             raise ValueError(f"Unsupported runtime setting: {sorted(unknown)[0]}")

@@ -19,6 +19,7 @@ from financial_research_agent.a2a import (
     create_a2a_app,
     create_default_a2a_runtime,
 )
+from financial_research_agent.credentials import KeyringCredentialStore
 from financial_research_agent.orchestration import (
     AgentEndpoint,
     AgentHandoff,
@@ -236,6 +237,35 @@ def test_specialist_runtime_reloads_shared_provider_settings_without_restart(
     assert updated.model == "runtime-selected-model"
 
 
+def test_specialist_runtime_resolves_hosted_credential_from_shared_keyring(
+    tmp_path: Path,
+) -> None:
+    settings = Settings.from_env(
+        {
+            "FRA_HOME": str(tmp_path),
+            "FRA_A2A_ENABLED": "true",
+            "FRA_SEC_USER_AGENT": "financial-research-agent tests tests@example.com",
+        }
+    )
+    backend = MemoryKeyringBackend()
+    credential_store = KeyringCredentialStore(backend=backend)
+    credential_store.set("openai", "saved-provider-key")
+    runtime = create_default_a2a_runtime(
+        settings,
+        role=AgentRole.STOCK,
+        credential_store=credential_store,
+    )
+    runtime.persistence.runtime_settings.update(
+        RuntimeSettingsOverrides(llm_provider="openai", llm_model="gpt-5-mini"),
+        base_settings=settings,
+    )
+
+    selection = runtime.specialist_service.agent_runtime.resolve(require_research=True)
+
+    assert selection.provider_name == "openai"
+    assert selection.provider.api_key == "saved-provider-key"
+
+
 def _runtime(
     tmp_path: Path,
     role: AgentRole,
@@ -256,6 +286,20 @@ def _runtime(
         role=role,
         specialist_service=StubSpecialistService(),  # type: ignore[arg-type]
     )
+
+
+class MemoryKeyringBackend:
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service: str, username: str) -> str | None:
+        return self.values.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self.values[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        self.values.pop((service, username), None)
 
 
 def _stock_request() -> DelegationRequest:

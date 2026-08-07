@@ -9,6 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from financial_research_agent.a2a import A2AResearchStepDispatcher
+from financial_research_agent.credentials import (
+    CredentialStoreError,
+    UnavailableCredentialStore,
+)
 from financial_research_agent.entities import (
     CompanySearchCandidate,
     CompanySearchError,
@@ -81,6 +85,11 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'id="settings-panel"' in root_response.text
     assert 'class="settings-scroll"' in root_response.text
     assert 'id="settings-agent-runtime-status"' in root_response.text
+    assert 'id="settings-provider-api-key"' in root_response.text
+    assert 'id="settings-credential-save-button"' in root_response.text
+    assert 'data-provider-field="base-url"' in root_response.text
+    assert 'data-provider-field="local-runtime"' in root_response.text
+    assert 'data-provider-field="timeout"' in root_response.text
     assert 'id="settings-button"' in root_response.text
     assert 'id="settings-session-label"' in root_response.text
     assert "<dt>Name</dt>" not in root_response.text
@@ -143,6 +152,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "grid-template-rows: minmax(0, 1fr) auto" in css_response.text
     assert "scrollbar-gutter: stable" in css_response.text
     assert ".composer-model-select" in css_response.text
+    assert ".composer-model-select:focus-visible" in css_response.text
+    assert "border: 0" in css_response.text
     assert "max-width: min(360px, calc(100% - 48px))" in css_response.text
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
     assert ".composer-runtime-status" in css_response.text
@@ -172,6 +183,10 @@ def test_frontend_has_one_message_entrypoint_without_slash_routing() -> None:
     assert 'document.querySelector("#composer-model-select")' in script.text
     assert "JSON.stringify({ llm_model: selectedModel })" in script.text
     assert "refreshProviderModels({ syncComposer: false })" in script.text
+    assert "renderProviderFields" in script.text
+    assert "Add API key to load models" in script.text
+    assert '"not configured"' in script.text
+    assert "/api/settings/provider-credentials/" in script.text
     assert "localReadinessBlocksSend()" in script.text
     assert 'state.localReadiness.status === "checking"' in script.text
     assert "checkConfiguredLocalReadiness()" in script.text
@@ -236,12 +251,18 @@ def test_runtime_settings_endpoint_returns_redacted_provider_management_payload(
     assert payload["settings"]["provider"]["llm_provider"] == "offline-test"
     assert payload["research_agent_runtime"]["provider"] == "offline-test"
     assert payload["research_agent_runtime"]["compatible"] is False
-    assert payload["secrets"]["strategy"] == "environment_only"
+    assert payload["secrets"]["strategy"] == "environment_or_os_keyring"
     assert payload["secrets"]["plaintext_storage"] == "disabled"
     assert payload["secrets"]["openai_api_key_configured"] is True
     assert payload["secrets"]["anthropic_api_key_configured"] is True
     assert payload["secrets"]["gemini_api_key_configured"] is True
     assert payload["secrets"]["litellm_api_key_configured"] is True
+    assert payload["secrets"]["providers"]["openai"] == {
+        "provider": "openai",
+        "configured": True,
+        "source": "environment",
+        "writable": False,
+    }
     assert {"anthropic", "gemini", "litellm"} <= {
         provider["provider"] for provider in payload["providers"]
     }
@@ -300,6 +321,110 @@ def test_runtime_settings_reject_secret_fields_and_can_reset() -> None:
     assert reset.status_code == 200
     assert reset.json()["overrides"] == {}
     assert reset.json()["settings"]["provider"]["llm_model"] == "offline-test"
+
+
+def test_provider_credential_api_saves_reports_and_removes_without_echoing_secret() -> None:
+    credential_store = FakeCredentialStore()
+    client = _client(credential_store=credential_store)
+    secret = "provider-secret-value"
+
+    saved = client.put(
+        "/api/settings/provider-credentials/openai",
+        json={"api_key": secret},
+    )
+    settings = client.get("/api/settings")
+    removed = client.delete("/api/settings/provider-credentials/openai")
+    dumped = json.dumps([saved.json(), settings.json(), removed.json()])
+
+    assert saved.status_code == 200
+    assert saved.json()["credential"]["source"] == "keyring"
+    assert settings.json()["secrets"]["providers"]["openai"]["configured"] is True
+    assert settings.json()["settings"]["provider"]["openai_api_key_configured"] is True
+    assert removed.status_code == 200
+    assert removed.json()["credential"]["source"] == "not_configured"
+    assert secret not in dumped
+    assert credential_store.values == {}
+
+
+def test_provider_credential_api_never_persists_secret_in_sqlite(tmp_path) -> None:
+    credential_store = FakeCredentialStore()
+    settings = Settings.from_env({"FRA_HOME": str(tmp_path)})
+    client = TestClient(create_app(settings=settings, credential_store=credential_store))
+    secret = "sqlite-forbidden-provider-secret"
+
+    saved = client.put(
+        "/api/settings/provider-credentials/anthropic",
+        json={"api_key": secret},
+    )
+    updated = client.put(
+        "/api/settings",
+        json={"llm_provider": "anthropic", "llm_model": "claude-sonnet-4-5"},
+    )
+    database = tmp_path / "data" / "financial_research_agent.sqlite3"
+
+    assert saved.status_code == 200
+    assert updated.status_code == 200
+    assert database.exists()
+    for path in database.parent.glob(f"{database.name}*"):
+        assert secret.encode() not in path.read_bytes()
+
+
+def test_provider_credential_api_preserves_environment_precedence() -> None:
+    credential_store = FakeCredentialStore()
+    client = _client(
+        settings=Settings.from_env({"FRA_OPENAI_API_KEY": "environment-secret"}),
+        credential_store=credential_store,
+    )
+
+    response = client.put(
+        "/api/settings/provider-credentials/openai",
+        json={"api_key": "replacement-secret"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "environment_credential_managed_externally"
+    assert "environment-secret" not in response.text
+    assert "replacement-secret" not in response.text
+    assert credential_store.values == {}
+
+
+def test_provider_credential_api_fails_safely_without_secure_backend() -> None:
+    client = _client(credential_store=UnavailableCredentialStore())
+    secret = "provider-secret-value"
+
+    unavailable = client.put(
+        "/api/settings/provider-credentials/gemini",
+        json={"api_key": secret},
+    )
+    invalid = client.put(
+        "/api/settings/provider-credentials/unsupported",
+        json={"api_key": secret},
+    )
+    malformed = client.put(
+        "/api/settings/provider-credentials/gemini",
+        json={"api_key": secret * 100},
+    )
+
+    assert unavailable.status_code == 503
+    assert invalid.status_code == 400
+    assert malformed.status_code == 400
+    assert secret not in unavailable.text
+    assert secret not in invalid.text
+    assert secret not in malformed.text
+
+
+def test_provider_credential_api_sanitizes_store_error_details() -> None:
+    secret = "backend-error-secret"
+    client = _client(credential_store=LeakingCredentialStore())
+
+    response = client.put(
+        "/api/settings/provider-credentials/openai",
+        json={"api_key": secret},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"] == "credential_store_unavailable"
+    assert secret not in response.text
 
 
 def test_runtime_provider_health_reports_offline_capabilities() -> None:
@@ -384,7 +509,7 @@ def test_status_returns_chat_provider_without_secrets() -> None:
     assert "public_base_url" not in payload["a2a"]
     assert "api_key_configured" not in payload["a2a"]
     assert payload["security"]["allow_remote_bind"] is False
-    assert payload["security"]["secret_storage"] == "environment_only"
+    assert payload["security"]["secret_storage"] == "environment_or_os_keyring"
     assert payload["synthesis"]["source"] == "orchestrator_specialist_handoffs"
     assert payload["synthesis"]["recommendations"] == "disabled"
     assert payload["observability"]["source"] == "stored_orchestrator_runs"
@@ -1239,6 +1364,7 @@ def _client(
     report_run_store=None,
     orchestrator_run_store=None,
     runtime_settings_store=None,
+    credential_store=None,
     research_dispatcher=None,
 ) -> TestClient:
     return TestClient(
@@ -1254,9 +1380,39 @@ def _client(
             report_run_store=report_run_store or CitedResearchRunStore(),
             orchestrator_run_store=orchestrator_run_store or OrchestratorRunStore(),
             runtime_settings_store=runtime_settings_store or RuntimeSettingsStore(),
+            credential_store=credential_store or UnavailableCredentialStore(),
             research_dispatcher=research_dispatcher,
         )
     )
+
+
+class FakeCredentialStore:
+    def __init__(self, values: dict[str, str] | None = None) -> None:
+        self.values = dict(values or {})
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def backend_name(self) -> str:
+        return "tests.FakeCredentialStore"
+
+    def get(self, provider: str) -> str | None:
+        return self.values.get(provider)
+
+    def set(self, provider: str, api_key: str) -> None:
+        if not api_key:
+            raise CredentialStoreError("Could not save the provider credential securely.")
+        self.values[provider] = api_key
+
+    def delete(self, provider: str) -> None:
+        self.values.pop(provider, None)
+
+
+class LeakingCredentialStore(FakeCredentialStore):
+    def set(self, provider: str, api_key: str) -> None:
+        raise CredentialStoreError(api_key)
 
 
 class CapturingProvider:

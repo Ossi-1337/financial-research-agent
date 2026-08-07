@@ -6,7 +6,7 @@ from pathlib import Path
 from time import perf_counter_ns
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +21,14 @@ from financial_research_agent.agents import (
     AgentRuntimeResolver,
 )
 from financial_research_agent.background import BackgroundResearchRunner
+from financial_research_agent.credentials import (
+    SUPPORTED_CREDENTIAL_PROVIDERS,
+    CredentialStore,
+    CredentialStoreError,
+    create_system_credential_store,
+    credential_status,
+    resolve_provider_credentials,
+)
 from financial_research_agent.entities import (
     CompanySearchError,
     CompanySearchErrorCode,
@@ -174,6 +182,7 @@ def create_app(
     report_export_store: ReportExportStore | None = None,
     background_runner: BackgroundResearchRunner | None = None,
     runtime_settings_store: RuntimeSettingsStore | None = None,
+    credential_store: CredentialStore | None = None,
     embedding_cache: LocalEmbeddingCache | None = None,
     research_dispatcher: ResearchStepDispatcher | None = None,
     narrative_store: NarrativePresentationStore | None = None,
@@ -208,6 +217,7 @@ def create_app(
     report_exports = report_export_store or ReportExportStore.from_settings(app_settings)
     scenario_catalog = create_default_scenario_catalog()
     runtime_settings = runtime_settings_store or persistence.runtime_settings
+    credentials = credential_store or create_system_credential_store()
     narratives = narrative_store or (
         persistence.narrative_presentations
         if persistence is not None
@@ -221,7 +231,7 @@ def create_app(
     embeddings_cache = embedding_cache or LocalEmbeddingCache.from_settings(app_settings)
 
     def current_settings() -> Settings:
-        return runtime_settings.settings(app_settings)
+        return resolve_provider_credentials(runtime_settings.settings(app_settings), credentials)
 
     def current_registry() -> ProviderRegistry:
         if registry is not None:
@@ -273,6 +283,7 @@ def create_app(
     app.state.filing_store = filings
     app.state.storage_manager = storage
     app.state.runtime_settings_store = runtime_settings
+    app.state.credential_store = credentials
     app.state.agent_runtime = agent_runtime
     app.state.embedding_cache = embeddings_cache
     app.state.retrieval_index = retrieval
@@ -460,7 +471,9 @@ def create_app(
         registry_for_request = current_registry()
         return _settings_payload(
             settings_for_request,
+            app_settings,
             runtime_settings.get(),
+            credentials,
             registry_for_request,
             storage,
             embeddings_cache,
@@ -480,7 +493,9 @@ def create_app(
         registry_for_request = current_registry()
         return _settings_payload(
             settings_for_request,
+            app_settings,
             runtime_settings.get(),
+            credentials,
             registry_for_request,
             storage,
             embeddings_cache,
@@ -494,12 +509,102 @@ def create_app(
         registry_for_request = current_registry()
         return _settings_payload(
             settings_for_request,
+            app_settings,
             runtime_settings.get(),
+            credentials,
             registry_for_request,
             storage,
             embeddings_cache,
             agent_runtime,
         )
+
+    @app.put("/api/settings/provider-credentials/{provider}")
+    async def save_provider_credential(provider: str, request: Request) -> dict[str, Any]:
+        normalized = _credential_provider(provider)
+        current = credential_status(
+            normalized,
+            environment_settings=app_settings,
+            store=credentials,
+        )
+        if current.source == "environment":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "environment_credential_managed_externally",
+                    "message": "This provider credential is managed by the environment.",
+                },
+            )
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError, UnicodeDecodeError:
+            payload = None
+        api_key = payload.get("api_key") if isinstance(payload, dict) else None
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"api_key"}
+            or not isinstance(api_key, str)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_credential", "message": "A valid API key is required."},
+            )
+        value = api_key.strip()
+        if not value or len(value) > 500:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_credential", "message": "A valid API key is required."},
+            )
+        try:
+            credentials.set(normalized, value)
+        except CredentialStoreError:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "credential_store_unavailable",
+                    "message": "Secure provider credential storage is unavailable.",
+                },
+            ) from None
+        return {
+            "credential": credential_status(
+                normalized,
+                environment_settings=app_settings,
+                store=credentials,
+            ).to_dict()
+        }
+
+    @app.delete("/api/settings/provider-credentials/{provider}")
+    def delete_provider_credential(provider: str) -> dict[str, Any]:
+        normalized = _credential_provider(provider)
+        current = credential_status(
+            normalized,
+            environment_settings=app_settings,
+            store=credentials,
+        )
+        if current.source == "environment":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "environment_credential_managed_externally",
+                    "message": "This provider credential is managed by the environment.",
+                },
+            )
+        try:
+            credentials.delete(normalized)
+        except CredentialStoreError:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "credential_store_unavailable",
+                    "message": "Secure provider credential storage is unavailable.",
+                },
+            ) from None
+        return {
+            "credential": credential_status(
+                normalized,
+                environment_settings=app_settings,
+                store=credentials,
+            ).to_dict()
+        }
 
     @app.get("/api/settings/provider-health")
     async def runtime_provider_health(
@@ -884,7 +989,9 @@ def create_app(
 
 def _settings_payload(
     settings: Settings,
+    environment_settings: Settings,
     overrides: RuntimeSettingsOverrides,
+    credential_store: CredentialStore,
     registry: ProviderRegistry,
     storage: LocalStorageManager,
     embedding_cache: LocalEmbeddingCache,
@@ -904,7 +1011,7 @@ def _settings_payload(
         "providers": _provider_options_payload(settings, registry),
         "research_agent_runtime": _agent_runtime_status_payload(agent_runtime),
         "secrets": {
-            "strategy": "environment_only",
+            "strategy": "environment_or_os_keyring",
             "plaintext_storage": "disabled",
             "openai_api_key_configured": settings.provider.openai_api_key is not None,
             "anthropic_api_key_configured": settings.provider.anthropic_api_key is not None,
@@ -917,9 +1024,19 @@ def _settings_payload(
                 settings.data_sources.brave_search_api_key is not None
             ),
             "tavily_api_key_configured": settings.data_sources.tavily_api_key is not None,
+            "keyring_available": credential_store.available,
+            "keyring_backend": credential_store.backend_name,
+            "providers": {
+                provider: credential_status(
+                    provider,
+                    environment_settings=environment_settings,
+                    store=credential_store,
+                ).to_dict()
+                for provider in SUPPORTED_CREDENTIAL_PROVIDERS
+            },
             "message": (
-                "Secrets are not stored in the local settings override file. Configure API "
-                "keys through environment variables."
+                "Environment credentials take priority. Direct host runs may save provider "
+                "credentials in the operating system keyring; Docker uses environment variables."
             ),
         },
         "management": {
@@ -932,6 +1049,19 @@ def _settings_payload(
         },
         "performance": _performance_status_payload(settings, embedding_cache),
     }
+
+
+def _credential_provider(provider: str) -> str:
+    normalized = provider.strip().lower()
+    if normalized not in SUPPORTED_CREDENTIAL_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unsupported_credential_provider",
+                "message": "Provider does not support stored API credentials.",
+            },
+        )
+    return normalized
 
 
 def _agent_runtime_status_payload(

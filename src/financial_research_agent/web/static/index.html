@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Financial Research Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=48" />
+    <link rel="stylesheet" href="/static/styles.css?v=50" />
   </head>
   <body>
     <main class="app-shell">
@@ -82,7 +82,7 @@
           <header class="settings-header">
             <div>
               <h2>Settings</h2>
-              <p>Local provider, cache, and privacy controls</p>
+              <p>Provider, cache, and privacy controls</p>
             </div>
             <button id="settings-close-button" class="secondary-button" type="button">Close</button>
           </header>
@@ -117,11 +117,11 @@
                     <option value="">Check provider to load models</option>
                   </select>
                 </label>
-                <label>
+                <label data-provider-field="base-url">
                   Base URL
                   <input id="settings-llm-base-url" name="llm_base_url" type="url" />
                 </label>
-                <label>
+                <label data-provider-field="local-runtime">
                   Local runtime
                   <select id="settings-local-runtime" name="llm_local_runtime">
                     <option value="llama.cpp">llama.cpp</option>
@@ -129,10 +129,46 @@
                     <option value="generic-openai">generic-openai</option>
                   </select>
                 </label>
-                <label>
+                <label data-provider-field="timeout">
                   Timeout seconds
                   <input id="settings-timeout" name="llm_timeout_seconds" type="number" min="1" max="300" step="0.5" />
                 </label>
+                <div
+                  id="settings-credential-control"
+                  class="settings-credential-control"
+                  data-provider-field="credential"
+                  hidden
+                >
+                  <label for="settings-provider-api-key">
+                    API key
+                    <input
+                      id="settings-provider-api-key"
+                      type="password"
+                      maxlength="500"
+                      autocomplete="off"
+                      aria-describedby="settings-credential-status"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <p id="settings-credential-status" role="status" aria-live="polite"></p>
+                  <div class="settings-credential-actions">
+                    <button
+                      id="settings-credential-save-button"
+                      class="secondary-button"
+                      type="button"
+                    >
+                      Save API key
+                    </button>
+                    <button
+                      id="settings-credential-remove-button"
+                      class="secondary-button"
+                      type="button"
+                      hidden
+                    >
+                      Remove saved key
+                    </button>
+                  </div>
+                </div>
               </fieldset>
               <fieldset>
                 <legend>Embeddings and retrieval</legend>
@@ -184,12 +220,12 @@
               <button id="settings-health-button" class="secondary-button" type="button">Check provider</button>
               <button id="settings-cache-clear-button" class="secondary-button" type="button">Clear cache</button>
               <button id="settings-reset-button" class="secondary-button" type="button">Reset overrides</button>
-              <button type="submit">Save</button>
+              <button id="settings-save-button" type="submit">Save</button>
             </div>
           </form>
         </div>
       </section>
     </main>
-    <script src="/static/app.js?v=47" type="module"></script>
+    <script src="/static/app.js?v=50" type="module"></script>
   </body>
 </html>

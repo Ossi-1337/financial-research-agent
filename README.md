@@ -111,8 +111,12 @@ Current boundaries:
   greetings and application help use fixed local responses.
 
 Only the web UI is published to the host. Specialist ports stay inside the Compose network.
-Credentials remain environment-only, external documents are treated as untrusted evidence, and
-runtime state is stored under `FRA_HOME`. These controls reduce prompt-injection risk but do not
+Provider credentials use environment variables by default. Direct host runs may save OpenAI,
+Anthropic, Gemini, or LiteLLM keys in the operating system keyring through Settings; environment
+values always win. Docker cannot securely access the host keyring, so Compose continues to use
+`.env` or process environment values. Keys are never stored in runtime settings or SQLite.
+External documents are treated as untrusted evidence, and runtime state is stored under
+`FRA_HOME`. These controls reduce prompt-injection risk but do not
 guarantee that every adversarial prompt can be detected.
 
 See [Architecture](docs/architecture.md) for system boundaries, data ownership, persistence, and

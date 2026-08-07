@@ -229,6 +229,39 @@ h1 {
   background: var(--surface);
 }
 
+.settings-form [data-provider-field][hidden],
+#settings-credential-remove-button[hidden] {
+  display: none;
+}
+
+.settings-credential-control {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: end;
+  padding-top: 2px;
+}
+
+.settings-credential-control > label,
+.settings-credential-control > p {
+  grid-column: 1 / -1;
+}
+
+.settings-credential-control > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.settings-credential-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .settings-form select:disabled {
   color: var(--muted);
   background: var(--surface-muted);
@@ -1159,12 +1192,12 @@ h1 {
 .composer-model-select {
   min-width: 0;
   max-width: min(360px, calc(100% - 48px));
-  height: 38px;
-  padding: 7px 30px 7px 10px;
+  height: 34px;
+  padding: 5px 26px 5px 8px;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 6px;
-  background: var(--surface);
+  background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: 0.78rem;
@@ -1173,7 +1206,17 @@ h1 {
 }
 
 .composer-model-select:disabled {
+  background: transparent;
+}
+
+.composer-model-select:hover:not(:disabled) {
   background: var(--surface-muted);
+  color: var(--text);
+}
+
+.composer-model-select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  outline-offset: 1px;
 }
 
 .composer-action {

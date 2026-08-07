@@ -8,6 +8,11 @@ from financial_research_agent.a2a.specialists import SpecialistExecutionService
 from financial_research_agent.a2a.store import SQLiteA2ATaskStore
 from financial_research_agent.agents import AgentRuntimeResolver
 from financial_research_agent.context_analysis import NewsMacroSectorAgent
+from financial_research_agent.credentials import (
+    CredentialStore,
+    create_system_credential_store,
+    resolve_provider_credentials,
+)
 from financial_research_agent.documents import PDFDocumentExtractor
 from financial_research_agent.filings import create_default_filing_provider
 from financial_research_agent.market_data import create_default_market_data_provider
@@ -40,6 +45,7 @@ def create_default_a2a_runtime(
     settings: Settings,
     *,
     role: AgentRole,
+    credential_store: CredentialStore | None = None,
 ) -> A2AResearchRuntime:
     persistence = create_persistence(settings)
     if persistence.database is None or persistence.background_jobs is None:
@@ -48,9 +54,15 @@ def create_default_a2a_runtime(
     market_provider = create_default_market_data_provider(settings)
     statement_provider = create_default_financial_statement_provider(settings)
     filing_provider = create_default_filing_provider(settings)
-    agent_runtime = AgentRuntimeResolver(
-        settings=lambda: persistence.runtime_settings.settings(settings),
-    )
+    credentials = credential_store or create_system_credential_store()
+
+    def current_settings() -> Settings:
+        return resolve_provider_credentials(
+            persistence.runtime_settings.settings(settings),
+            credentials,
+        )
+
+    agent_runtime = AgentRuntimeResolver(settings=current_settings)
     financial_report_agent = FinancialReportAnalysisAgent(
         statement_store=persistence.financial_statements,
         filing_store=persistence.filings,

@@ -124,9 +124,10 @@ inside page boundaries and preserve page number plus normalized text-region coor
 citations. Fully scanned PDFs return `ocr_required`; OCR, uploads, and arbitrary URL ingestion are
 not part of the runtime.
 
-`FRA_HOME` is the local trust boundary. Credentials remain environment-only. External documents
-are untrusted evidence, never instructions. The application exposes no shell or unrestricted
-filesystem tool.
+`FRA_HOME` is the local trust boundary. Provider credentials resolve from the environment first
+and may use a supported OS keyring on direct host runs; Docker remains environment-only.
+External documents are untrusted evidence, never instructions. The application exposes no shell
+or unrestricted filesystem tool.
 
 ## Protocol And Skill Boundaries
 

@@ -78,10 +78,10 @@ def test_runtime_settings_reject_unknown_and_secret_fields() -> None:
     with pytest.raises(ValueError, match="Unsupported runtime setting"):
         RuntimeSettingsOverrides.from_mapping({"unknown": "value"})
 
-    with pytest.raises(ValueError, match="Secret settings are environment-only"):
+    with pytest.raises(ValueError, match="cannot be stored in runtime overrides"):
         RuntimeSettingsOverrides.from_mapping({"openai_api_key": "secret"})
     for field in ("anthropic_api_key", "gemini_api_key", "litellm_api_key"):
-        with pytest.raises(ValueError, match="Secret settings are environment-only"):
+        with pytest.raises(ValueError, match="cannot be stored in runtime overrides"):
             RuntimeSettingsOverrides.from_mapping({field: "secret"})
 
 

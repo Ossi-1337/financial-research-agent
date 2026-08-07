@@ -38,6 +38,13 @@ def test_mcp_sdk_is_optional_but_available_to_development_checks() -> None:
     assert "mcp>=1.28.1,<2" in optional["dev"]
 
 
+def test_secure_os_keyring_is_a_runtime_dependency() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads(root.joinpath("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "keyring>=25.7,<26" in config["project"]["dependencies"]
+
+
 def test_runtime_docker_stage_contains_only_installed_package() -> None:
     root = Path(__file__).resolve().parents[1]
     dockerfile = root.joinpath("Dockerfile").read_text(encoding="utf-8")

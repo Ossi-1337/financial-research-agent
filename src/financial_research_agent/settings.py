@@ -579,7 +579,7 @@ class SecuritySettings:
             "default_bind_host": "127.0.0.1",
             "tool_policy": "deny_by_default_name_and_permission_allowlist",
             "external_content": "untrusted_data",
-            "secret_storage": "environment_only",
+            "secret_storage": "environment_or_os_keyring",
         }
 
 

@@ -29,6 +29,8 @@ const state = {
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const REPORT_EXPORT_CONTENT_VERSION = 3;
 const LOCAL_PROVIDER = "local-openai";
+const CREDENTIAL_PROVIDERS = new Set(["openai", "anthropic", "gemini", "litellm"]);
+const REQUIRED_CREDENTIAL_PROVIDERS = new Set(["openai", "anthropic", "gemini"]);
 const LOCAL_LOADING_POLL_MS = 2000;
 const LOCAL_UNAVAILABLE_POLL_MS = 5000;
 const STOCK_CHART_LAYOUT = Object.freeze({
@@ -66,6 +68,16 @@ const settingsSecretNote = document.querySelector("#settings-secret-note");
 const settingsHealthButton = document.querySelector("#settings-health-button");
 const settingsCacheClearButton = document.querySelector("#settings-cache-clear-button");
 const settingsResetButton = document.querySelector("#settings-reset-button");
+const settingsSaveButton = document.querySelector("#settings-save-button");
+const settingsCredentialControl = document.querySelector("#settings-credential-control");
+const settingsProviderApiKey = document.querySelector("#settings-provider-api-key");
+const settingsCredentialStatus = document.querySelector("#settings-credential-status");
+const settingsCredentialSaveButton = document.querySelector(
+  "#settings-credential-save-button"
+);
+const settingsCredentialRemoveButton = document.querySelector(
+  "#settings-credential-remove-button"
+);
 
 function setBusy(value) {
   state.busy = value;
@@ -1541,6 +1553,72 @@ function populateSettingsForm(payload) {
   setField("market_data_cache_ttl_days", dataSources.market_data_cache_ttl_days);
   setField("filing_cache_ttl_days", dataSources.filing_cache_ttl_days);
   setField("background_max_concurrent_research_runs", background.max_concurrent_research_runs);
+  renderProviderFields(payload);
+}
+
+function selectedSettingsProvider() {
+  return settingsForm.elements.llm_provider.value;
+}
+
+function providerCredentialStatus(provider, payload = state.settings) {
+  return payload?.secrets?.providers?.[provider] || {
+    provider,
+    configured: false,
+    source: "not_configured",
+    writable: false,
+  };
+}
+
+function setProviderFieldVisible(name, visible) {
+  const container = settingsForm.querySelector(`[data-provider-field="${name}"]`);
+  if (!container) {
+    return;
+  }
+  container.hidden = !visible;
+  for (const field of container.querySelectorAll("input, select")) {
+    field.disabled = !visible;
+  }
+}
+
+function renderProviderFields(payload = state.settings) {
+  const provider = selectedSettingsProvider();
+  const local = provider === LOCAL_PROVIDER;
+  const network = provider !== "offline-test";
+  const credentialProvider = CREDENTIAL_PROVIDERS.has(provider);
+  setProviderFieldVisible("base-url", local);
+  setProviderFieldVisible("local-runtime", local);
+  setProviderFieldVisible("timeout", network);
+  settingsCredentialControl.hidden = !credentialProvider;
+  settingsProviderApiKey.value = "";
+  settingsSaveButton.disabled = false;
+  if (!credentialProvider) {
+    settingsProviderApiKey.disabled = true;
+    settingsCredentialSaveButton.disabled = true;
+    settingsCredentialRemoveButton.hidden = true;
+    return;
+  }
+
+  const credential = providerCredentialStatus(provider, payload);
+  const environmentManaged = credential.source === "environment";
+  const keyringConfigured = credential.source === "keyring";
+  const credentialSourceLabel =
+    credential.source === "not_configured" ? "not configured" : credential.source;
+  settingsProviderApiKey.disabled = environmentManaged || !credential.writable;
+  settingsProviderApiKey.placeholder = environmentManaged
+    ? "Configured by environment"
+    : keyringConfigured
+      ? "Saved in OS keyring"
+      : credential.writable
+        ? "Enter API key"
+        : "Use an environment variable";
+  settingsCredentialStatus.textContent = `Credential: ${credentialSourceLabel}`;
+  settingsCredentialSaveButton.textContent = keyringConfigured
+    ? "Replace API key"
+    : "Save API key";
+  settingsCredentialSaveButton.disabled = environmentManaged || !credential.writable;
+  settingsCredentialRemoveButton.hidden = !keyringConfigured;
+  settingsSaveButton.disabled =
+    REQUIRED_CREDENTIAL_PROVIDERS.has(provider) && !credential.configured;
 }
 
 function setField(name, value) {
@@ -1648,6 +1726,18 @@ async function refreshProviderModels({ syncComposer = true } = {}) {
   if (provider === "offline-test") {
     setModelOptions(["offline-test"], "offline-test", "No models available", { syncComposer });
     settingsProviderStatus.textContent = "offline-test health: ok / deterministic test responses";
+    if (syncComposer) {
+      clearLocalReadinessTimer();
+      state.localReadiness.requestId += 1;
+      setLocalReadiness({ required: false, ready: true, status: "not_required" });
+    }
+    return;
+  }
+
+  const credential = providerCredentialStatus(provider);
+  if (REQUIRED_CREDENTIAL_PROVIDERS.has(provider) && !credential.configured) {
+    setModelOptions([], null, "Add API key to load models", { syncComposer });
+    settingsProviderStatus.textContent = `${provider} health: API key required`;
     if (syncComposer) {
       clearLocalReadinessTimer();
       state.localReadiness.requestId += 1;
@@ -2307,6 +2397,7 @@ settingsResetButton.addEventListener("click", async () => {
 
 settingsForm.elements.llm_provider.addEventListener("change", () => {
   clearSettingsError();
+  renderProviderFields();
   refreshProviderModels({ syncComposer: false }).catch((error) => {
     showSettingsError(error instanceof Error ? error.message : "Could not load provider models.");
   });
@@ -2314,6 +2405,61 @@ settingsForm.elements.llm_provider.addEventListener("change", () => {
 
 settingsForm.elements.llm_model.addEventListener("change", (event) => {
   event.currentTarget.title = event.currentTarget.value;
+});
+
+settingsCredentialSaveButton.addEventListener("click", async () => {
+  clearSettingsError();
+  const provider = selectedSettingsProvider();
+  const apiKey = settingsProviderApiKey.value.trim();
+  if (!apiKey) {
+    showSettingsError("Enter an API key before saving.");
+    return;
+  }
+  settingsCredentialSaveButton.disabled = true;
+  settingsCredentialRemoveButton.disabled = true;
+  try {
+    await requestJson(`/api/settings/provider-credentials/${encodeURIComponent(provider)}`, {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    settingsProviderApiKey.value = "";
+    const payload = await requestJson("/api/settings");
+    state.settings = payload;
+    renderSettingsSummary(payload);
+    renderProviderFields(payload);
+    await refreshProviderModels({ syncComposer: false });
+  } catch (error) {
+    showSettingsError(error instanceof Error ? error.message : "Could not save API key.");
+  } finally {
+    settingsCredentialRemoveButton.disabled = false;
+    const credential = providerCredentialStatus(selectedSettingsProvider());
+    settingsCredentialSaveButton.disabled =
+      credential.source === "environment" || !credential.writable;
+  }
+});
+
+settingsCredentialRemoveButton.addEventListener("click", async () => {
+  clearSettingsError();
+  const provider = selectedSettingsProvider();
+  settingsCredentialSaveButton.disabled = true;
+  settingsCredentialRemoveButton.disabled = true;
+  try {
+    await requestJson(`/api/settings/provider-credentials/${encodeURIComponent(provider)}`, {
+      method: "DELETE",
+    });
+    const payload = await requestJson("/api/settings");
+    state.settings = payload;
+    renderSettingsSummary(payload);
+    renderProviderFields(payload);
+    await refreshProviderModels({ syncComposer: false });
+  } catch (error) {
+    showSettingsError(error instanceof Error ? error.message : "Could not remove API key.");
+  } finally {
+    settingsCredentialRemoveButton.disabled = false;
+    const credential = providerCredentialStatus(selectedSettingsProvider());
+    settingsCredentialSaveButton.disabled =
+      credential.source === "environment" || !credential.writable;
+  }
 });
 
 composerModelSelect.addEventListener("change", async (event) => {
