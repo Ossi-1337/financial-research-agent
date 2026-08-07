@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Financial Research Agent</title>
-    <link rel="stylesheet" href="/static/styles.css?v=50" />
+    <link rel="stylesheet" href="/static/styles.css?v=51" />
   </head>
   <body>
     <main class="app-shell">
@@ -17,6 +17,9 @@
           <ol id="session-list" class="session-list"></ol>
           <div class="session-footer">
             <button id="settings-button" class="secondary-button" type="button">Settings</button>
+          </div>
+          <div id="session-actions-menu" class="session-actions-menu" role="menu" hidden>
+            <button id="delete-session-button" type="button" role="menuitem">Delete</button>
           </div>
         </aside>
 
@@ -226,6 +229,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/app.js?v=50" type="module"></script>
+    <script src="/static/app.js?v=51" type="module"></script>
   </body>
 </html>

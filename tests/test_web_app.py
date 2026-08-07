@@ -92,6 +92,9 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert 'data-provider-field="timeout"' in root_response.text
     assert 'id="settings-button"' in root_response.text
     assert 'id="settings-session-label"' in root_response.text
+    assert 'id="session-actions-menu"' in root_response.text
+    assert 'id="delete-session-button"' in root_response.text
+    assert 'role="menuitem"' in root_response.text
     assert "<dt>Name</dt>" not in root_response.text
     assert 'id="retrieval-mode-control"' not in root_response.text
     assert "Sources required" not in root_response.text
@@ -157,6 +160,8 @@ def test_root_html_and_static_asset_are_served() -> None:
     assert "max-width: min(360px, calc(100% - 48px))" in css_response.text
     assert "grid-template-columns: minmax(0, 1fr)" in css_response.text
     assert ".composer-runtime-status" in css_response.text
+    assert ".session-item:hover .session-menu-button" in css_response.text
+    assert ".session-actions-menu[hidden]" in css_response.text
     assert css_response.text.count("grid-column: 1") >= 2
     assert ".research-work" in css_response.text
     assert ".research-work-item.running" in css_response.text
@@ -195,6 +200,9 @@ def test_frontend_has_one_message_entrypoint_without_slash_routing() -> None:
     assert "throw errorFromStreamEvent(event)" in script.text
     assert 'status === "loading" ? LOCAL_LOADING_POLL_MS : LOCAL_UNAVAILABLE_POLL_MS' in script.text
     assert "/messages/stream" in script.text
+    assert "toggleSessionActionsMenu" in script.text
+    assert "deleteSession(state.sessionMenuId)" in script.text
+    assert "`/api/sessions/${encodeURIComponent(sessionId)}`" in script.text
     assert "routeChatMessage" not in script.text
     assert "/api/chat/route" not in script.text
     assert 'startsWith("/scenario")' not in script.text

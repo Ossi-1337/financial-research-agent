@@ -2,6 +2,7 @@ const state = {
   sessionId: null,
   messages: [],
   sessions: [],
+  sessionMenuId: null,
   busy: false,
   suggestions: [],
   selectedSuggestionIndex: 0,
@@ -55,6 +56,8 @@ const contextPanel = document.querySelector("#context-panel");
 const contextSourceList = document.querySelector("#context-source-list");
 const newSessionButton = document.querySelector("#new-session-button");
 const clearSessionsButton = document.querySelector("#clear-sessions-button");
+const sessionActionsMenu = document.querySelector("#session-actions-menu");
+const deleteSessionButton = document.querySelector("#delete-session-button");
 const settingsButton = document.querySelector("#settings-button");
 const settingsPanel = document.querySelector("#settings-panel");
 const settingsCloseButton = document.querySelector("#settings-close-button");
@@ -85,6 +88,10 @@ function setBusy(value) {
   newSessionButton.disabled = value;
   composerModelSelect.disabled = modelSelectionBlocked();
   clearSessionsButton.disabled = value;
+  for (const button of sessionList.querySelectorAll(".session-menu-button")) {
+    button.disabled = value;
+  }
+  deleteSessionButton.disabled = value;
   sendButton.textContent = value ? "Stop" : "↑";
   sendButton.setAttribute("aria-label", value ? "Stop response" : "Send message");
   sendButton.classList.toggle("busy", value);
@@ -1354,17 +1361,81 @@ function sessionTitle(session) {
 }
 
 function renderSessions() {
+  closeSessionActionsMenu();
   sessionList.innerHTML = "";
   for (const session of state.sessions) {
     const item = document.createElement("li");
+    item.className = "session-item";
+    item.dataset.sessionId = session.id;
     const button = document.createElement("button");
+    const title = sessionTitle(session);
     button.type = "button";
     button.className = session.id === state.sessionId ? "session-button active" : "session-button";
-    button.textContent = sessionTitle(session);
-    button.addEventListener("click", () => openSession(session.id));
-    item.append(button);
+    button.textContent = title;
+    button.title = title;
+    button.addEventListener("click", () => {
+      closeSessionActionsMenu();
+      openSession(session.id);
+    });
+
+    const menuButton = document.createElement("button");
+    menuButton.type = "button";
+    menuButton.className = "session-menu-button";
+    menuButton.textContent = "⋮";
+    menuButton.disabled = state.busy;
+    menuButton.setAttribute("aria-label", `Open actions for ${title}`);
+    menuButton.setAttribute("aria-haspopup", "menu");
+    menuButton.setAttribute("aria-expanded", "false");
+    menuButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleSessionActionsMenu(session.id, menuButton);
+    });
+
+    item.append(button, menuButton);
     sessionList.append(item);
   }
+}
+
+function closeSessionActionsMenu({ restoreFocus = false } = {}) {
+  const sessionId = state.sessionMenuId;
+  state.sessionMenuId = null;
+  sessionActionsMenu.hidden = true;
+  sessionActionsMenu.style.removeProperty("top");
+  sessionActionsMenu.style.removeProperty("left");
+  for (const button of sessionList.querySelectorAll(".session-menu-button")) {
+    button.setAttribute("aria-expanded", "false");
+  }
+  if (restoreFocus && sessionId) {
+    const item = [...sessionList.querySelectorAll(".session-item")].find(
+      (candidate) => candidate.dataset.sessionId === sessionId
+    );
+    item?.querySelector(".session-menu-button")?.focus();
+  }
+}
+
+function toggleSessionActionsMenu(sessionId, trigger) {
+  if (state.busy || state.sessionMenuId === sessionId) {
+    closeSessionActionsMenu({ restoreFocus: state.sessionMenuId === sessionId });
+    return;
+  }
+  closeSessionActionsMenu();
+  state.sessionMenuId = sessionId;
+  trigger.setAttribute("aria-expanded", "true");
+  sessionActionsMenu.hidden = false;
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = sessionActionsMenu.getBoundingClientRect();
+  const below = triggerRect.bottom + 4;
+  const top =
+    below + menuRect.height <= window.innerHeight - 8
+      ? below
+      : Math.max(8, triggerRect.top - menuRect.height - 4);
+  const left = Math.max(
+    8,
+    Math.min(triggerRect.right - menuRect.width, window.innerWidth - menuRect.width - 8)
+  );
+  sessionActionsMenu.style.top = `${top}px`;
+  sessionActionsMenu.style.left = `${left}px`;
+  deleteSessionButton.focus();
 }
 
 function primarySecurity(candidate) {
@@ -2103,6 +2174,36 @@ async function clearSessions() {
   }
 }
 
+async function deleteSession(sessionId) {
+  if (state.busy || !sessionId) {
+    return;
+  }
+  const deletingActiveSession = sessionId === state.sessionId;
+  closeSessionActionsMenu();
+  clearError();
+  setBusy(true);
+  try {
+    await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    await loadSessions();
+    if (deletingActiveSession) {
+      cancelProgressiveReportReveal();
+      state.sessionId = null;
+      state.messages = [];
+      settingsSessionLabel.textContent = "No active session";
+      if (state.sessions.length > 0) {
+        await openSession(state.sessions[0].id, true);
+      } else {
+        await createSession();
+      }
+    }
+  } catch (error) {
+    showError(error instanceof Error ? error.message : "Could not delete the session.");
+  } finally {
+    setBusy(false);
+    input.focus();
+  }
+}
+
 async function sendMessage(content, mentions, assistantId) {
   state.abortController = new AbortController();
   const response = await fetch(`/api/sessions/${state.sessionId}/messages/stream`, {
@@ -2332,6 +2433,32 @@ newSessionButton.addEventListener("click", async () => {
 clearSessionsButton.addEventListener("click", () => {
   clearSessions();
 });
+
+deleteSessionButton.addEventListener("click", () => {
+  deleteSession(state.sessionMenuId);
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (
+    target instanceof Element &&
+    !sessionActionsMenu.hidden &&
+    !sessionActionsMenu.contains(target) &&
+    !target.closest(".session-menu-button")
+  ) {
+    closeSessionActionsMenu();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !sessionActionsMenu.hidden) {
+    event.preventDefault();
+    closeSessionActionsMenu({ restoreFocus: true });
+  }
+});
+
+sessionList.addEventListener("scroll", () => closeSessionActionsMenu(), { passive: true });
+window.addEventListener("resize", () => closeSessionActionsMenu());
 
 settingsButton.addEventListener("click", async () => {
   settingsPanel.hidden = false;
